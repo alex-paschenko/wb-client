@@ -1,7 +1,15 @@
-import { useState, type ReactNode } from 'react';
-import { MarketViewState } from '../../../shared/types/frontend-settings';
+import {
+  useState,
+  type DragEventHandler,
+  type ReactNode,
+} from 'react';
 
-type MarketViewSize = Exclude<MarketViewState, 'closed'>;
+import type {
+  MarketViewState,
+  OpenMarketViewState,
+} from '../../../shared/types/frontend-settings';
+
+type MarketViewSize = OpenMarketViewState;
 
 interface DashboardItemRenderProps {
   size: MarketViewSize;
@@ -14,6 +22,11 @@ interface DashboardItemProps {
   heightClassName?: string;
   controlsVisibility?: 'always' | 'hover';
   onClose?: () => void;
+  onSizeChange?: (size: MarketViewSize) => void;
+  draggable?: boolean;
+  onDragStart?: DragEventHandler<HTMLDivElement>;
+  onDragOver?: DragEventHandler<HTMLDivElement>;
+  onDrop?: DragEventHandler<HTMLDivElement>;
   children: ReactNode | ((props: DashboardItemRenderProps) => ReactNode);
 }
 
@@ -40,14 +53,24 @@ export function DashboardItem({
   heightClassName = 'item-height-md',
   controlsVisibility = 'hover',
   onClose,
+  onSizeChange,
+  draggable = false,
+  onDragStart,
+  onDragOver,
+  onDrop,
   children,
 }: DashboardItemProps) {
-  const [size, setSize] = useState<MarketViewSize>(initialSize);
+  const [size, setLocalSize] = useState<MarketViewSize>(initialSize);
   const [isClosed, setIsClosed] = useState(false);
 
   if (isClosed) {
     return null;
   }
+
+  const setSize = (nextSize: MarketViewSize) => {
+    setLocalSize(nextSize);
+    onSizeChange?.(nextSize);
+  };
 
   const close = () => {
     setIsClosed(true);
@@ -60,24 +83,27 @@ export function DashboardItem({
       : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100';
 
   return (
-    <section
+    <div
       className={[
         'group relative overflow-hidden rounded-2xl border border-panel-border bg-panel shadow-sm',
-        'transition-[width,height,opacity,transform] duration-300 ease-out',
         sizeClassBySize[size],
         heightClassName,
+        draggable ? 'cursor-move' : '',
       ].join(' ')}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
     >
       <div
         className={[
-          'absolute right-2 top-2 z-20 flex gap-1 rounded-xl bg-panel/90 p-1 shadow-sm backdrop-blur',
-          'transition-opacity duration-150',
+          'absolute right-2 top-2 z-10 flex gap-1 transition',
           controlsVisibilityClass,
         ].join(' ')}
       >
         <button
-          className="app-button px-2 py-1"
           type="button"
+          className="app-button px-2 py-1 text-xs"
           onClick={close}
         >
           ×
@@ -88,8 +114,8 @@ export function DashboardItem({
           .map((buttonSize) => (
             <button
               key={buttonSize}
-              className="app-button px-2 py-1"
               type="button"
+              className="app-button px-2 py-1 text-xs"
               onClick={() => setSize(buttonSize)}
             >
               {sizeLabelBySize[buttonSize]}
@@ -97,15 +123,13 @@ export function DashboardItem({
           ))}
       </div>
 
-      <div className="h-full overflow-auto p-4">
-        {typeof children === 'function'
-          ? children({
-              size,
-              setSize,
-              close,
-            })
-          : children}
-      </div>
-    </section>
+      {typeof children === 'function'
+        ? children({
+            size,
+            setSize,
+            close,
+          })
+        : children}
+    </div>
   );
 }

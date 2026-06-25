@@ -121,6 +121,41 @@
   .log-panel-body-text {
     @apply whitespace-pre-wrap text-fg;
   }
+
+    .closed-markets-grid {
+    @apply grid w-full gap-2;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  @media (min-width: 640px) {
+    .closed-markets-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+
+  @media (min-width: 768px) {
+    .closed-markets-grid {
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .closed-markets-grid {
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+    }
+  }
+
+  @media (min-width: 1280px) {
+    .closed-markets-grid {
+      grid-template-columns: repeat(10, minmax(0, 1fr));
+    }
+  }
+
+  @media (min-width: 1536px) {
+    .closed-markets-grid {
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+    }
+  }
 }
 
 @layer utilities {

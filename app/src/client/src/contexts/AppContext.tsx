@@ -8,8 +8,10 @@ import {
 } from 'react';
 
 import { FrontendSettings } from '../../../shared/services/frontend-settings';
-import type {
-  FrontendSettingsValue,
+import {
+  MARKET_VIEW_STATES,
+  type FrontendSettingsValue,
+  type MarketViewState,
 } from '../../../shared/types/frontend-settings';
 import {
   LOG_LEVELS,
@@ -41,6 +43,13 @@ export type AppContextValue = {
   setTheme: (theme: string) => void;
   setLanguage: (language: string) => void;
   setMarkets: (markets: MarketsByName) => void;
+  setMarketViewState: (
+    marketName: string,
+    state: MarketViewState,
+  ) => void;
+  openMarket: (marketName: string) => void;
+  closeMarket: (marketName: string) => void;
+  moveMarket: (marketName: string, targetIndex: number) => void;
   applySettingsFromServer: (settings: FrontendSettings) => void;
   updateSettings: (settings: FrontendSettings) => void;
 
@@ -118,6 +127,36 @@ export const AppProvider = ({
     });
   }, []);
 
+  const setMarketViewState = useCallback((
+    marketName: string,
+    state: MarketViewState,
+  ) => {
+    updateSettingsValue((nextSettings) => {
+      nextSettings.setMarketViewState(marketName, state);
+    });
+  }, [updateSettingsValue]);
+
+  const openMarket = useCallback((marketName: string) => {
+    updateSettingsValue((nextSettings) => {
+      nextSettings.openMarket(marketName, MARKET_VIEW_STATES.quarter);
+    });
+  }, [updateSettingsValue]);
+
+  const closeMarket = useCallback((marketName: string) => {
+    updateSettingsValue((nextSettings) => {
+      nextSettings.closeMarket(marketName);
+    });
+  }, [updateSettingsValue]);
+
+  const moveMarket = useCallback((
+    marketName: string,
+    targetIndex: number,
+  ) => {
+    updateSettingsValue((nextSettings) => {
+      nextSettings.moveMarket(marketName, targetIndex);
+    });
+  }, [updateSettingsValue]);
+
   const addEntry = useCallback((
     level: LogLevel,
     timestamp: number,
@@ -156,6 +195,10 @@ export const AppProvider = ({
     setTheme,
     setLanguage,
     setMarkets,
+    setMarketViewState,
+    openMarket,
+    closeMarket,
+    moveMarket,
     applySettingsFromServer,
     updateSettings,
     logger,
@@ -163,7 +206,13 @@ export const AppProvider = ({
     markets,
     settings,
     logs,
+    setTheme,
+    setLanguage,
     setMarkets,
+    setMarketViewState,
+    openMarket,
+    closeMarket,
+    moveMarket,
     applySettingsFromServer,
     updateSettings,
     logger,

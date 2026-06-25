@@ -1,0 +1,179 @@
+@import "tailwindcss";
+
+:root {
+  --color-bg: #f8fafc;
+  --color-fg: #0f172a;
+  --color-muted: #64748b;
+  --color-panel: #ffffff;
+  --color-panel-border: #e2e8f0;
+  --color-accent: #2563eb;
+  --color-danger: #dc2626;
+  --color-success: #16a34a;
+
+  --color-log-debug: #64748b;
+  --color-log-info: #0f172a;
+  --color-log-warn: #b45309;
+  --color-log-error: #dc2626;
+}
+
+[data-theme="dark"] {
+  --color-bg: #020617;
+  --color-fg: #e5e7eb;
+  --color-muted: #94a3b8;
+  --color-panel: #0f172a;
+  --color-panel-border: #1e293b;
+  --color-accent: #60a5fa;
+  --color-danger: #f87171;
+  --color-success: #4ade80;
+
+  --color-log-debug: #94a3b8;
+  --color-log-info: #e5e7eb;
+  --color-log-warn: #facc15;
+  --color-log-error: #f87171;
+}
+
+@theme {
+  --color-bg: var(--color-bg);
+  --color-fg: var(--color-fg);
+  --color-muted: var(--color-muted);
+  --color-panel: var(--color-panel);
+  --color-panel-border: var(--color-panel-border);
+  --color-accent: var(--color-accent);
+  --color-danger: var(--color-danger);
+  --color-success: var(--color-success);
+
+  --color-log-debug: var(--color-log-debug);
+  --color-log-info: var(--color-log-info);
+  --color-log-warn: var(--color-log-warn);
+  --color-log-error: var(--color-log-error);
+}
+
+@layer components {
+  .app-button {
+    @apply rounded-xl border border-panel-border bg-panel px-3 py-2 text-sm font-medium text-fg shadow-sm transition hover:border-accent hover:text-accent active:scale-95;
+  }
+
+  .app-dropdown-panel {
+    @apply absolute right-0 top-full z-40 mt-2 min-w-36 overflow-hidden rounded-xl border border-panel-border bg-panel shadow-lg;
+  }
+
+  .app-dropdown-item {
+    @apply block w-full px-3 py-2 text-left text-sm text-fg transition hover:bg-bg hover:text-accent;
+  }
+
+  .log-panel {
+    @apply w-full overflow-hidden rounded-xl border border-panel-border bg-panel text-fg shadow-sm;
+  }
+
+  .log-panel-header {
+    @apply flex items-center gap-3 border-b border-panel-border px-3 py-2;
+  }
+
+  .log-panel-title {
+    @apply font-semibold text-fg;
+  }
+
+  .log-panel-controls {
+    @apply ml-auto flex items-center gap-2;
+  }
+
+  .log-panel-button {
+    @apply rounded-xl border border-panel-border bg-panel px-2 py-1 text-xs font-medium text-fg shadow-sm transition hover:border-accent hover:text-accent active:scale-95;
+  }
+
+  .log-panel-scroll-button {
+    @apply animate-pulse rounded-xl border border-panel-border bg-panel px-2 py-1 text-xs font-medium text-accent shadow-sm transition hover:border-accent hover:text-accent active:scale-95;
+  }
+
+  .log-panel-body {
+    @apply overflow-y-auto px-3 py-2 font-mono text-xs;
+  }
+
+  .log-panel-row {
+    @apply grid gap-2 leading-6;
+    grid-template-columns: 150px 90px 1fr;
+  }
+
+  .log-panel-time {
+    @apply whitespace-nowrap text-muted;
+  }
+
+  .log-panel-level {
+    @apply font-bold;
+  }
+
+  .log-panel-level-debug {
+    color: var(--color-log-debug);
+  }
+
+  .log-panel-level-info {
+    color: var(--color-log-info);
+  }
+
+  .log-panel-level-warn {
+    color: var(--color-log-warn);
+  }
+
+  .log-panel-level-error {
+    color: var(--color-log-error);
+  }
+
+  .log-panel-body-text {
+    @apply whitespace-pre-wrap text-fg;
+  }
+}
+
+@layer utilities {
+  .main-gap {
+    --main-gap: 0.75rem;
+    gap: var(--main-gap);
+  }
+
+  .item-width-quarter {
+    width: calc((100% - 3 * var(--main-gap)) / 4);
+  }
+
+  .item-width-half {
+    width: calc((100% - var(--main-gap)) / 2);
+  }
+
+  .item-width-full {
+    width: 100%;
+  }
+
+  .item-height-sm {
+    height: 14rem;
+  }
+
+  .item-height-md {
+    height: 20rem;
+  }
+
+  .item-height-lg {
+    height: 28rem;
+  }
+
+  @media (max-width: 640px) {
+    .item-width-quarter,
+    .item-width-half,
+    .item-width-full {
+      width: 100%;
+    }
+
+    .log-panel-row {
+      grid-template-columns: 120px 80px 1fr;
+    }
+  }
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-fg);
+}

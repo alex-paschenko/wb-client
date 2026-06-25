@@ -1,0 +1,2 @@
+export const DEFAULT_MAKER_FEE_RATIO = 0.001;
+export const DEFAULT_TAKER_FEE_RATIO = 0.001;

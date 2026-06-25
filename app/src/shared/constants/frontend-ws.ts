@@ -1,0 +1,45 @@
+import { SECOND } from './time.js';
+
+export const FRONTEND_WS_PING_INTERVAL_MS = 15 * SECOND;
+export const FRONTEND_WS_PONG_TIMEOUT_MS = 10 * SECOND;
+export const FRONTEND_WS_RECONNECT_DELAY_MS = 3 * SECOND;
+
+export const FRONTEND_WS_BINARY_HEADER_LENGTH_BYTES = 12;
+
+export const FRONTEND_WS_BINARY_HEADER_OFFSETS = {
+  messageType: 0,
+  serverId: 4,
+  clientId: 8,
+} as const;
+
+export const FRONTEND_WS_BINARY_MESSAGE_TYPES = {
+  fullMarketStatistics: 1,
+  marketStatisticsDelta: 2,
+} as const;
+
+export const FRONTEND_WS_CONTROL_MESSAGE_TYPES = {
+  serverHello: 'serverHello',
+  webSocketReady: 'webSocketReady',
+
+  ping: 'ping',
+  pong: 'pong',
+
+  requestSettings: 'requestSettings',
+  settingsLoaded: 'settingsLoaded',
+  settingsChanged: 'settingsChanged',
+  settingsAccepted: 'settingsAccepted',
+
+  marketsUpdated: 'marketsUpdated',
+
+  setSubscription: 'setSubscription',
+  changeSubscription: 'changeSubscription',
+} as const;
+
+export const FRONTEND_WS_SUBSCRIPTION_ENTITIES = {
+  marketStatistics: 'marketStatistics',
+} as const;
+
+export const FRONTEND_WS_SUBSCRIPTION_ACTIONS = {
+  add: 'add',
+  remove: 'remove',
+} as const;

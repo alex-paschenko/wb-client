@@ -1,5 +1,3 @@
-import { TextDecoder, TextEncoder } from 'node:util';
-
 import type {
   MarketStatisticsItem,
 } from '../types/market-statistics-storage.js';
@@ -9,8 +7,8 @@ import {
   writeMarketStatisticsItemToDataView,
 } from './market-statistics-codec.js';
 
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
+const encoder = new globalThis.TextEncoder();
+const decoder = new globalThis.TextDecoder();
 
 export type FullMarketStatisticsPayload = {
   marketName: string;

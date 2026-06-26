@@ -1,38 +1,62 @@
 export type EventMapBase = Record<string, unknown[]>;
 
+type ConditionType = string | symbol;
+
+const zeroCondition = Symbol('Zero Condition');
+const wideDeleting = Symbol('Wide deleting');
+
 export class EventEmitter<EventMap extends EventMapBase> {
   private readonly events: {
-    [EventName in keyof EventMap]?: Set<(
-      ...args: EventMap[EventName]
-    ) => void>;
+    [EventName in keyof EventMap]?:
+      {
+        [condition: (string | symbol)]:
+          Set<(...args: EventMap[EventName]) => void>;
+      }
   } = {};
 
   public on<EventName extends keyof EventMap>(
     name: EventName,
     listener: (...args: EventMap[EventName]) => void,
+    condition: ConditionType = zeroCondition,
   ): () => void {
-    this.events[name] ??= new Set();
+    this.events[name] ??= {};
+    this.events[name][condition] ??= new Set();
 
-    this.events[name].add(listener);
+    this.events[name][condition].add(listener);
 
     return () => {
-      this.off(name, listener);
+      this.off(name, listener, condition);
     };
   }
 
   public off<EventName extends keyof EventMap>(
     name: EventName,
     listener: (...args: EventMap[EventName]) => void,
-  ): void {
-    this.events[name]?.delete(listener);
+    condition: ConditionType = wideDeleting,
+  ): boolean {
+    if (condition === wideDeleting) {
+      return Object.values(this.events[name] ?? {}).some(
+        (listeners) => listeners.delete(listener)
+      );
+    }
+
+    return this.events[name]?.[condition]?.delete(listener) ?? false;
   }
 
   public emit<EventName extends keyof EventMap>(
-    name: EventName,
+    event: EventName | { eventName: EventName, condition: string },
     ...args: EventMap[EventName]
   ): void {
-    for (const listener of this.events[name] ?? []) {
-      listener(...args);
+    if ('object' === typeof event) {
+      for (const listener of this.events[event.eventName]?.[event.condition] ?? []) {
+        listener(...args);
+      }
+    } else {
+      for (const listeners of Object.values(this.events[event] ?? {})) {
+        for (const listener of listeners) {
+          listener(...args);
+        }
+      }
     }
   }
 

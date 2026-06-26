@@ -165,7 +165,7 @@ export class FrontendWsService {
 
   private subscribeMarketStatistics(): void {
     const appContext = this.getCurrentAppContext();
-    const markets = appContext.settings.getOpenMarkets();
+    const markets = appContext.getSettings().getOpenMarkets();
 
     frontendWsClient.sendJson({
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription,

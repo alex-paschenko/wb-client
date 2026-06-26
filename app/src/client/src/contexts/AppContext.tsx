@@ -4,6 +4,7 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 
@@ -40,6 +41,9 @@ export type AppContextValue = {
   settings: FrontendSettings;
   logs: LogEntry[];
 
+  getSettings: () => FrontendSettings;
+  getMarkets: () => MarketsByName;
+
   setTheme: (theme: string) => void;
   setLanguage: (language: string) => void;
   setMarkets: (markets: MarketsByName) => void;
@@ -70,33 +74,52 @@ export const AppProvider = ({
     );
   const [logs, setLogs] = useState<LogEntry[]>([]);
 
+  const marketsRef = useRef<MarketsByName>(markets);
+  const settingsValueRef = useRef<FrontendSettingsValue>(settingsValue);
+
   const settings = useMemo(
     () => FrontendSettings.fromValue(settingsValue),
     [settingsValue],
   );
 
+  const getSettings = useCallback((): FrontendSettings => {
+    return FrontendSettings.fromValue(settingsValueRef.current);
+  }, []);
+
+  const getMarkets = useCallback((): MarketsByName => {
+    return marketsRef.current;
+  }, []);
+
   const applySettingsFromServer = useCallback((
     nextSettings: FrontendSettings,
   ) => {
-    setSettingsValue(nextSettings.toValue());
+    const nextValue = nextSettings.toValue();
+
+    settingsValueRef.current = nextValue;
+    setSettingsValue(nextValue);
   }, []);
 
   const updateSettingsValue = useCallback((
     updater: (settings: FrontendSettings) => void,
   ) => {
-    setSettingsValue((currentSettingsValue) => {
-      const nextSettings = FrontendSettings.fromValue(currentSettingsValue);
+    const nextSettings = FrontendSettings.fromValue(settingsValueRef.current);
 
-      updater(nextSettings);
+    updater(nextSettings);
 
-      appEvents.emit('settingsChanged', nextSettings);
+    const nextValue = nextSettings.toValue();
 
-      return nextSettings.toValue();
-    });
+    settingsValueRef.current = nextValue;
+    setSettingsValue(nextValue);
+
+    appEvents.emit('settingsChanged', nextSettings);
   }, []);
 
   const updateSettings = useCallback((nextSettings: FrontendSettings) => {
-    setSettingsValue(nextSettings.toValue());
+    const nextValue = nextSettings.toValue();
+
+    settingsValueRef.current = nextValue;
+    setSettingsValue(nextValue);
+
     appEvents.emit('settingsChanged', nextSettings);
   }, []);
 
@@ -113,18 +136,22 @@ export const AppProvider = ({
   }, [updateSettingsValue]);
 
   const setMarkets = useCallback((nextMarkets: MarketsByName) => {
+    marketsRef.current = nextMarkets;
     setMarketsState(nextMarkets);
 
-    setSettingsValue((currentSettingsValue) => {
-      const nextSettings = FrontendSettings.fromValue(currentSettingsValue);
-      const hasChanges = nextSettings.ensureMarkets(nextMarkets);
+    const nextSettings = FrontendSettings.fromValue(settingsValueRef.current);
+    const hasChanges = nextSettings.ensureMarkets(nextMarkets);
 
-      if (hasChanges) {
-        appEvents.emit('settingsChanged', nextSettings);
-      }
+    if (!hasChanges) {
+      return;
+    }
 
-      return nextSettings.toValue();
-    });
+    const nextValue = nextSettings.toValue();
+
+    settingsValueRef.current = nextValue;
+    setSettingsValue(nextValue);
+
+    appEvents.emit('settingsChanged', nextSettings);
   }, []);
 
   const setMarketViewState = useCallback((
@@ -192,6 +219,8 @@ export const AppProvider = ({
     markets,
     settings,
     logs,
+    getSettings,
+    getMarkets,
     setTheme,
     setLanguage,
     setMarkets,
@@ -206,6 +235,8 @@ export const AppProvider = ({
     markets,
     settings,
     logs,
+    getSettings,
+    getMarkets,
     setTheme,
     setLanguage,
     setMarkets,

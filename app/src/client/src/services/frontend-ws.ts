@@ -6,9 +6,21 @@ import { appEvents } from '../events/app-events';
 import { FrontendSettings } from '../../../shared/services/frontend-settings';
 import {
   FRONTEND_WS_CONTROL_MESSAGE_TYPES,
+  FRONTEND_WS_SUBSCRIPTION_ENTITIES,
 } from '../../../shared/constants/frontend-ws';
 
 type GetAppContext = () => AppContextValue;
+
+type PrimaryDataReceivedState = {
+  settings: boolean;
+  marketInfo: boolean;
+};
+
+const resetPrimaryDataRequestState: () => PrimaryDataReceivedState =
+  () => ({
+    settings: false,
+    marketInfo: false,
+  });
 
 export class FrontendWsService {
   private getAppContext: GetAppContext | null = null;
@@ -21,6 +33,11 @@ export class FrontendWsService {
 
   private settingsSaveTimeoutId: number | null = null;
   private lastSettingsToSave: FrontendSettings | null = null;
+
+  private dataReceived: PrimaryDataReceivedState =
+    resetPrimaryDataRequestState();
+
+  private needsSecondaryDataRequest = true;
 
   public start(getAppContext: GetAppContext): void {
     if (this.isStarted) {
@@ -42,7 +59,9 @@ export class FrontendWsService {
         );
 
         if (isConnected) {
-          this.requestSettings();
+          this.dataReceived =resetPrimaryDataRequestState();
+          this.needsSecondaryDataRequest = true;
+          this.primaryDataRequest();
         }
       });
 
@@ -61,6 +80,9 @@ export class FrontendWsService {
 
           appContext.applySettingsFromServer(settings);
           appContext.logger.debug('log.messages.settingsLoaded');
+
+          this.markPrimaryDataReceived('settings');
+
           return;
         }
 
@@ -72,6 +94,10 @@ export class FrontendWsService {
         if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.marketsUpdated) {
           appContext.setMarkets(message.markets);
           appContext.logger.debug('log.messages.marketsUpdated');
+
+          this.markPrimaryDataReceived('marketInfo');
+
+          return;
         }
       });
 
@@ -125,6 +151,62 @@ export class FrontendWsService {
         settings: settings.toValue(),
       },
     });
+  }
+
+  private subscribeMarketInfo(): void {
+    frontendWsClient.sendJson({
+      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription,
+      clientId: frontendWsClient.createClientId(),
+      params: {
+        entity: FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketInfo,
+      },
+    });
+  }
+
+  private subscribeMarketStatistics(): void {
+    const appContext = this.getCurrentAppContext();
+    const markets = appContext.settings.getOpenMarkets();
+
+    frontendWsClient.sendJson({
+      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription,
+      clientId: frontendWsClient.createClientId(),
+      params: {
+        entity: FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics,
+        markets,
+      },
+    });
+  }
+
+  private primaryDataRequest(): void {
+    this.subscribeMarketInfo();
+    this.requestSettings();
+  }
+
+  private secondaryDataRequest(): void {
+    this.subscribeMarketStatistics();
+  }
+
+  private trySecondaryDataRequest(): void {
+    if (!this.needsSecondaryDataRequest) {
+      return;
+    }
+
+    const hasAllPrimaryData = Object.values(this.dataReceived)
+      .every(Boolean);
+
+    if (!hasAllPrimaryData) {
+      return;
+    }
+
+    this.needsSecondaryDataRequest = false;
+    this.secondaryDataRequest();
+  }
+
+  private markPrimaryDataReceived(
+    dataName: keyof PrimaryDataReceivedState,
+  ): void {
+    this.dataReceived[dataName] = true;
+    this.trySecondaryDataRequest();
   }
 
   private scheduleSettingsSave(settings: FrontendSettings): void {

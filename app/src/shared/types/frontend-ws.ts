@@ -86,7 +86,15 @@ export type FrontendWsMarketsUpdatedMessage = {
   markets: MarketsByName;
 };
 
-export type FrontendWsSetSubscriptionMessage =
+export type FrontendWsSetMarketInfoSubscriptionMessage =
+  FrontendWsClientRequest<
+    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription,
+    {
+      entity: typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketInfo;
+    }
+  >;
+
+export type FrontendWsSetMarketStatisticsSubscriptionMessage =
   FrontendWsClientRequest<
     typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription,
     {
@@ -94,6 +102,10 @@ export type FrontendWsSetSubscriptionMessage =
       markets: string[];
     }
   >;
+
+export type FrontendWsSetSubscriptionMessage =
+  | FrontendWsSetMarketInfoSubscriptionMessage
+  | FrontendWsSetMarketStatisticsSubscriptionMessage;
 
 export type FrontendWsChangeSubscriptionMessage =
   FrontendWsClientRequest<

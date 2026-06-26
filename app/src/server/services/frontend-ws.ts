@@ -1,4 +1,3 @@
-import { TextEncoder } from 'node:util';
 import { WebSocket } from 'ws';
 
 import { CLIENT_VERSION } from '../../shared/constants/client-version.js';
@@ -18,9 +17,6 @@ import type {
   FrontendWsSetSubscriptionMessage,
   FrontendWsSettingsChangedMessage,
 } from '../../shared/types/frontend-ws.js';
-import type {
-  MarketStatisticsItem,
-} from '../../shared/types/market-statistics-storage.js';
 import {
   SERVER_WS_EVENT_TYPE,
   type ServerWsJsonMessage,
@@ -29,9 +25,9 @@ import {
   encodeFrontendWsBinaryPacket,
 } from '../../shared/utilities/frontend-ws-binary-codec.js';
 import {
-  getMarketStatisticsItemByteLength,
-  writeMarketStatisticsItemToDataView,
-} from '../../shared/utilities/market-statistics-codec.js';
+  encodeFullMarketStatisticsPayload,
+  encodeMarketStatisticsDeltaPayload,
+} from '../../shared/utilities/market-statistics-payload-codec.js';
 import { SERVER_EVENT } from '../constants/events.js';
 import { getWsServer } from '../frontend/index.js';
 import type {
@@ -51,6 +47,10 @@ type FrontendWsClientState = {
   isReady: boolean;
   settings: FrontendSettings;
   nextServerId: number;
+  marketInfoSubscription: {
+    clientId: number;
+    isSubscribed: boolean;
+  };
   marketStatisticsSubscription: MarketStatisticsSubscriptionState;
 };
 
@@ -104,6 +104,10 @@ export class FrontendWsService {
       isReady: false,
       settings: FrontendSettings.createDefault(),
       nextServerId: 1,
+      marketInfoSubscription: {
+        clientId: 0,
+        isSubscribed: false,
+      },
       marketStatisticsSubscription: {
         clientId: 0,
         markets: new Set(),
@@ -189,7 +193,6 @@ export class FrontendWsService {
     }
 
     state.isReady = true;
-    this.sendMarketsUpdated(socket);
     this.sendRollingSnapshot(socket);
   }
 
@@ -258,11 +261,22 @@ export class FrontendWsService {
     message: FrontendWsSetSubscriptionMessage,
   ): void {
     const state = this.clients.get(socket);
+    if (!state) {
+      return;
+    }
 
-    if (
-      !state ||
-      message.params.entity !== FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics
-    ) {
+    if (message.params.entity === FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketInfo) {
+      state.marketInfoSubscription = {
+        clientId: message.clientId,
+        isSubscribed: true,
+      };
+
+      this.sendMarketsUpdated(socket);
+
+      return;
+    }
+
+    if (message.params.entity !== FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics) {
       return;
     }
 
@@ -321,7 +335,7 @@ export class FrontendWsService {
   private handleMarketStatisticsStorageChanged(
     event: MarketStatisticsStorageChangedEvent,
   ): void {
-    const payload = this.encodeMarketStatisticsDeltaPayload(
+    const payload = encodeMarketStatisticsDeltaPayload(
       event.marketName,
       event.delta,
     );
@@ -355,7 +369,7 @@ export class FrontendWsService {
       return;
     }
 
-    const payload = this.encodeFullMarketStatisticsPayload(
+    const payload = encodeFullMarketStatisticsPayload(
       marketName,
       levels,
     );
@@ -416,90 +430,16 @@ export class FrontendWsService {
       markets: marketsService.getActiveMarkets(),
     } satisfies ServerWsJsonMessage;
 
-    this.broadcastJsonToReadyClients(message);
-  }
-
-  private encodeMarketStatisticsDeltaPayload(
-    marketName: string,
-    delta: ArrayBuffer,
-  ): ArrayBuffer {
-    const marketNameBytes = encoder.encode(marketName);
-
-    const byteLength =
-      2 +
-      marketNameBytes.byteLength +
-      delta.byteLength;
-
-    const buffer = new ArrayBuffer(byteLength);
-    const view = new DataView(buffer);
-    const bytes = new Uint8Array(buffer);
-
-    let offset = 0;
-
-    view.setUint16(offset, marketNameBytes.byteLength, true);
-    offset += 2;
-
-    bytes.set(marketNameBytes, offset);
-    offset += marketNameBytes.byteLength;
-
-    bytes.set(new Uint8Array(delta), offset);
-
-    return buffer;
-  }
-
-  private encodeFullMarketStatisticsPayload(
-    marketName: string,
-    levels: MarketStatisticsItem[][],
-  ): ArrayBuffer {
-    const marketNameBytes = encoder.encode(marketName);
-    const payloadByteLength = this.getFullMarketStatisticsPayloadByteLength(
-      levels,
-    );
-
-    const byteLength =
-      2 +
-      marketNameBytes.byteLength +
-      1 +
-      payloadByteLength;
-
-    const buffer = new ArrayBuffer(byteLength);
-    const view = new DataView(buffer);
-    const bytes = new Uint8Array(buffer);
-
-    let offset = 0;
-
-    view.setUint16(offset, marketNameBytes.byteLength, true);
-    offset += 2;
-
-    bytes.set(marketNameBytes, offset);
-    offset += marketNameBytes.byteLength;
-
-    view.setUint8(offset, levels.length);
-    offset += 1;
-
-    for (const [level, items] of levels.entries()) {
-      view.setUint16(offset, items.length, true);
-      offset += 2;
-
-      for (const item of items) {
-        offset = writeMarketStatisticsItemToDataView(
-          view,
-          offset,
-          level,
-          item,
-        );
+    for (const [socket, state] of this.clients) {
+      if (
+        !state.isReady ||
+        !state.marketInfoSubscription.isSubscribed
+      ) {
+        continue;
       }
+
+      getWsServer().sendJson(socket, message);
     }
-
-    return buffer;
-  }
-
-  private getFullMarketStatisticsPayloadByteLength(
-    levels: MarketStatisticsItem[][],
-  ): number {
-    return levels.reduce((sum, items, level) => {
-      return sum + 2 + items.length * getMarketStatisticsItemByteLength(level);
-    }, 0);
   }
 
   private broadcastJsonToReadyClients(message: ServerWsJsonMessage): void {

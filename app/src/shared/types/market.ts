@@ -1,5 +1,8 @@
 
-export type MarketType = 'spot' | 'futures';
+export type MarketType =
+  | 'spot'
+  | 'futures'
+  | 'tradfiFutures';
 
 export interface Market {
   name: string;

@@ -23,7 +23,6 @@ import {
   writeMarketStatisticsItemToFloat64Array,
 } from '../utilities/market-statistics-codec.js';
 
-
 type DeltaOperation =
   | {
       type: typeof MARKET_STATISTICS_DELTA_OPERATION_TYPE.addItem;

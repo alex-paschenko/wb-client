@@ -94,6 +94,14 @@ export type FrontendWsSetMarketInfoSubscriptionMessage =
     }
   >;
 
+export type FrontendWsRequestMarketStatisticsFullSyncMessage =
+  FrontendWsClientRequest<
+    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestMarketStatisticsFullSync,
+    {
+      marketName: string;
+    }
+  >;
+
 export type FrontendWsSetMarketStatisticsSubscriptionMessage =
   FrontendWsClientRequest<
     typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription,
@@ -124,6 +132,7 @@ export type FrontendWsClientControlMessage =
   | FrontendWsPingMessage
   | FrontendWsRequestSettingsMessage
   | FrontendWsSettingsChangedMessage
+  | FrontendWsRequestMarketStatisticsFullSyncMessage
   | FrontendWsSetSubscriptionMessage
   | FrontendWsChangeSubscriptionMessage;
 

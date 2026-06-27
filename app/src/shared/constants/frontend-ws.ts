@@ -31,6 +31,8 @@ export const FRONTEND_WS_CONTROL_MESSAGE_TYPES = {
 
   marketsUpdated: 'marketsUpdated',
 
+  requestMarketStatisticsFullSync: 'requestMarketStatisticsFullSync',
+
   setSubscription: 'setSubscription',
   changeSubscription: 'changeSubscription',
 } as const;

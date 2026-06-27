@@ -14,6 +14,7 @@ import type {
   FrontendWsChangeSubscriptionMessage,
   FrontendWsClientControlMessage,
   FrontendWsPingMessage,
+  FrontendWsRequestMarketStatisticsFullSyncMessage,
   FrontendWsSetSubscriptionMessage,
   FrontendWsSettingsChangedMessage,
 } from '../../shared/types/frontend-ws.js';
@@ -153,6 +154,14 @@ export class FrontendWsService {
       return;
     }
 
+    if (
+      message.type ===
+      FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestMarketStatisticsFullSync
+    ) {
+      this.handleRequestMarketStatisticsFullSync(socket, message);
+      return;
+    }
+
     if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription) {
       this.handleSetSubscription(socket, message);
       return;
@@ -256,6 +265,24 @@ export class FrontendWsService {
     });
   }
 
+  private handleRequestMarketStatisticsFullSync(
+    socket: WebSocket,
+    message: FrontendWsRequestMarketStatisticsFullSyncMessage,
+  ): void {
+    const state = this.clients.get(socket);
+
+    if (!state) {
+      return;
+    }
+
+    this.sendFullMarketStatistics(
+      socket,
+      state,
+      message.clientId,
+      message.params.marketName,
+    );
+  }
+
   private handleSetSubscription(
     socket: WebSocket,
     message: FrontendWsSetSubscriptionMessage,
@@ -284,14 +311,6 @@ export class FrontendWsService {
       clientId: message.clientId,
       markets: new Set(message.params.markets),
     };
-
-    for (const marketName of message.params.markets) {
-      this.sendFullMarketStatistics(
-        socket,
-        state,
-        marketName,
-      );
-    }
   }
 
   private handleChangeSubscription(
@@ -314,12 +333,6 @@ export class FrontendWsService {
     if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.add) {
       for (const marketName of message.params.markets) {
         state.marketStatisticsSubscription.markets.add(marketName);
-
-        this.sendFullMarketStatistics(
-          socket,
-          state,
-          marketName,
-        );
       }
 
       return;
@@ -351,6 +364,7 @@ export class FrontendWsService {
       this.sendMarketStatisticsPacket(
         socket,
         state,
+        state.marketStatisticsSubscription.clientId,
         FRONTEND_WS_BINARY_MESSAGE_TYPES.marketStatisticsDelta,
         payload,
       );
@@ -360,6 +374,7 @@ export class FrontendWsService {
   private sendFullMarketStatistics(
     socket: WebSocket,
     state: FrontendWsClientState,
+    clientId: number,
     marketName: string,
   ): void {
     const levels =
@@ -377,6 +392,7 @@ export class FrontendWsService {
     this.sendMarketStatisticsPacket(
       socket,
       state,
+      clientId,
       FRONTEND_WS_BINARY_MESSAGE_TYPES.fullMarketStatistics,
       payload,
     );
@@ -385,6 +401,7 @@ export class FrontendWsService {
   private sendMarketStatisticsPacket(
     socket: WebSocket,
     state: FrontendWsClientState,
+    clientId: number,
     messageType: number,
     payload: ArrayBuffer,
   ): void {
@@ -392,7 +409,7 @@ export class FrontendWsService {
       {
         messageType,
         serverId: this.getNextServerId(state),
-        clientId: state.marketStatisticsSubscription.clientId,
+        clientId,
       },
       payload,
     );

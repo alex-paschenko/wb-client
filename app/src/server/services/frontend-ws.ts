@@ -58,8 +58,6 @@ type FrontendWsClientState = {
   marketsBetweenFullSyncAndSubscription: Set<string>;
 };
 
-const encoder = new TextEncoder();
-
 export class FrontendWsService {
   private readonly clients = new Map<WebSocket, FrontendWsClientState>();
 
@@ -67,14 +65,13 @@ export class FrontendWsService {
     const wsServer = getWsServer();
 
     wsServer.onConnection((socket) => {
-      this.clients.set(socket, this.createClientState());
+        this.clients.set(socket, this.createClientState());
+        this.sendServerHello(socket);
+      });
 
       wsServer.onDisconnect((socket) => {
         this.handleClientClose(socket);
       });
-
-      this.sendServerHello(socket);
-    });
 
     wsServer.onMessage((socket, data) => {
       this.handleClientMessage(socket, data);

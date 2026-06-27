@@ -135,6 +135,29 @@ export class FrontendWsService {
     };
   }
 
+  private ensureMarketStatisticsSubscription(
+    state: FrontendWsClientState,
+    clientId: number,
+  ): MarketStatisticsSubscriptionState {
+    if (state.marketStatisticsSubscription.clientId === 0) {
+      state.marketStatisticsSubscription = {
+        clientId,
+        markets: new Set(),
+      };
+
+      return state.marketStatisticsSubscription;
+    }
+
+    if (state.marketStatisticsSubscription.clientId !== clientId) {
+      state.marketStatisticsSubscription = {
+        clientId,
+        markets: new Set(),
+      };
+    }
+
+    return state.marketStatisticsSubscription;
+  }
+
   private sendServerHello(socket: WebSocket): void {
     getWsServer().sendJson(socket, {
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.serverHello,
@@ -342,15 +365,21 @@ export class FrontendWsService {
       return;
     }
 
+    const subscription = this.ensureMarketStatisticsSubscription(
+      state,
+      message.clientId,
+    );
+
     if (message.clientId !== state.marketStatisticsSubscription.clientId) {
       return;
     }
 
     if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.add) {
       for (const marketName of message.params.markets) {
-        state.marketStatisticsSubscription.markets.add(marketName);
+        subscription.markets.add(marketName);
 
         if (state.marketsBetweenFullSyncAndSubscription.delete(marketName)) {
+          subscription.markets.delete(marketName);
           this.releaseMarketStatisticsFullSync(marketName);
         }
       }

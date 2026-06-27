@@ -26,6 +26,10 @@ export type FrontendWsServerResponse<
   params: Params;
 };
 
+export type FrontendWsSubscriptionAction =
+  | typeof FRONTEND_WS_SUBSCRIPTION_ACTIONS.add
+  | typeof FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove;
+
 export type FrontendWsServerHelloMessage = {
   type: typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.serverHello;
   latestClientVersion: string;
@@ -134,9 +138,7 @@ export type FrontendWsChangeSubscriptionMessage =
     typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.changeSubscription,
     {
       entity: typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics;
-      action:
-        | typeof FRONTEND_WS_SUBSCRIPTION_ACTIONS.add
-        | typeof FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove;
+      action: FrontendWsSubscriptionAction;
       markets: string[];
     }
   >;

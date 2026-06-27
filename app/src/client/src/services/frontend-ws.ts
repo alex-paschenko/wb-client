@@ -5,9 +5,17 @@ import type {
 import { appEvents } from '../events/app-events';
 import { FrontendSettings } from '../../../shared/services/frontend-settings';
 import {
+  FRONTEND_WS_BINARY_MESSAGE_TYPES,
   FRONTEND_WS_CONTROL_MESSAGE_TYPES,
   FRONTEND_WS_SUBSCRIPTION_ENTITIES,
 } from '../../../shared/constants/frontend-ws';
+import {
+  decodeFrontendWsBinaryPacket,
+} from '../../../shared/utilities/frontend-ws-binary-codec';
+import {
+  decodeFullMarketStatisticsPayload,
+  decodeMarketStatisticsDeltaPayload,
+} from '../../../shared/utilities/market-statistics-payload-codec';
 
 type GetAppContext = () => AppContextValue;
 
@@ -30,6 +38,10 @@ export class FrontendWsService {
   private unsubscribeJsonMessage: (() => void) | null = null;
   private unsubscribeBinaryMessage: (() => void) | null = null;
   private unsubscribeSettingsChanged: (() => void) | null = null;
+  private unsubscribeRequestSettings: (() => void) | null = null;
+  private unsubscribeSubscribeMarketInfo: (() => void) | null = null;
+  private unsubscribeRequestMarketStatisticsFullSync: (() => void) | null = null;
+  private unsubscribeChangeMarketStatisticsSubscription: (() => void) | null = null;
 
   private settingsSaveTimeoutId: number | null = null;
   private lastSettingsToSave: FrontendSettings | null = null;
@@ -102,16 +114,37 @@ export class FrontendWsService {
       });
 
     this.unsubscribeBinaryMessage =
-      frontendWsClient.onBinaryMessage(() => {
-        const appContext = this.getCurrentAppContext();
-
-        appContext.logger.debug('log.messages.wsBinaryReceived');
+      frontendWsClient.onBinaryMessage((data) => {
+        this.handleBinaryMessage(data);
       });
 
     this.unsubscribeSettingsChanged =
       appEvents.on('settingsChanged', (settings) => {
         this.scheduleSettingsSave(settings);
       });
+
+    this.unsubscribeRequestSettings =
+      appEvents.on('requestSettings', () => {
+        this.sendRequestSettings();
+      });
+
+    this.unsubscribeSubscribeMarketInfo =
+      appEvents.on('subscribeMarketInfo', () => {
+        this.sendSubscribeMarketInfo();
+      });
+
+    this.unsubscribeRequestMarketStatisticsFullSync =
+      appEvents.on('requestMarketStatisticsFullSync', (marketName) => {
+        this.sendRequestMarketStatisticsFullSync(marketName);
+      });
+
+    this.unsubscribeChangeMarketStatisticsSubscription =
+      appEvents.on(
+        'changeMarketStatisticsSubscription',
+        (action, markets) => {
+          this.sendChangeMarketStatisticsSubscription(action, markets);
+        },
+      );
 
     frontendWsClient.connect();
   }
@@ -127,6 +160,16 @@ export class FrontendWsService {
     this.unsubscribeBinaryMessage = null;
     this.unsubscribeSettingsChanged = null;
 
+    this.unsubscribeRequestSettings?.();
+    this.unsubscribeSubscribeMarketInfo?.();
+    this.unsubscribeRequestMarketStatisticsFullSync?.();
+    this.unsubscribeChangeMarketStatisticsSubscription?.();
+
+    this.unsubscribeRequestSettings = null;
+    this.unsubscribeSubscribeMarketInfo = null;
+    this.unsubscribeRequestMarketStatisticsFullSync = null;
+    this.unsubscribeChangeMarketStatisticsSubscription = null;
+
     this.clearSettingsSaveTimeout();
 
     frontendWsClient.close();
@@ -135,7 +178,7 @@ export class FrontendWsService {
     this.getAppContext = null;
   }
 
-  public requestSettings(): void {
+  private sendRequestSettings(): void {
     frontendWsClient.sendJson({
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestSettings,
       clientId: frontendWsClient.createClientId(),
@@ -143,7 +186,7 @@ export class FrontendWsService {
     });
   }
 
-  public sendSettingsChanged(settings: FrontendSettings): void {
+  private sendSettingsChanged(settings: FrontendSettings): void {
     frontendWsClient.sendJson({
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.settingsChanged,
       clientId: frontendWsClient.createClientId(),
@@ -153,7 +196,7 @@ export class FrontendWsService {
     });
   }
 
-  private subscribeMarketInfo(): void {
+  private sendSubscribeMarketInfo(): void {
     frontendWsClient.sendJson({
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription,
       clientId: frontendWsClient.createClientId(),
@@ -163,27 +206,74 @@ export class FrontendWsService {
     });
   }
 
-  private subscribeMarketStatistics(): void {
-    const appContext = this.getCurrentAppContext();
-    const markets = appContext.getSettings().getOpenMarkets();
-
+  private sendRequestMarketStatisticsFullSync(marketName: string): void {
     frontendWsClient.sendJson({
-      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription,
+      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestMarketStatisticsFullSync,
+      clientId: frontendWsClient.createClientId(),
+      params: {
+        marketName,
+      },
+    });
+  }
+
+  private sendChangeMarketStatisticsSubscription(
+    action: 'add' | 'remove',
+    markets: string[],
+  ): void {
+    frontendWsClient.sendJson({
+      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.changeSubscription,
       clientId: frontendWsClient.createClientId(),
       params: {
         entity: FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics,
+        action,
         markets,
       },
     });
   }
 
+  private handleBinaryMessage(data: ArrayBuffer): void {
+    const packet = decodeFrontendWsBinaryPacket(data);
+
+    if (
+      packet.header.messageType ===
+      FRONTEND_WS_BINARY_MESSAGE_TYPES.fullMarketStatistics
+    ) {
+      const payload = decodeFullMarketStatisticsPayload(packet.payload);
+
+      appEvents.emit(
+        {
+          eventName: 'marketStatisticsFullSyncReceived',
+          condition: payload.marketName,
+        },
+        payload,
+      );
+
+      return;
+    }
+
+    if (
+      packet.header.messageType ===
+      FRONTEND_WS_BINARY_MESSAGE_TYPES.marketStatisticsDelta
+    ) {
+      const payload = decodeMarketStatisticsDeltaPayload(packet.payload);
+
+      appEvents.emit(
+        {
+          eventName: 'marketStatisticsDeltaReceived',
+          condition: payload.marketName,
+        },
+        payload,
+      );
+    }
+  }
+
   private primaryDataRequest(): void {
-    this.subscribeMarketInfo();
-    this.requestSettings();
+    appEvents.emit('subscribeMarketInfo');
+    appEvents.emit('requestSettings');
   }
 
   private secondaryDataRequest(): void {
-    this.subscribeMarketStatistics();
+    // Request market and settings dependent data
   }
 
   private trySecondaryDataRequest(): void {

@@ -1,9 +1,9 @@
 import { CLIENT_VERSION } from '../../../shared/constants/client-version';
 import {
+  FRONTEND_WS_CLIENT_PING_INTERVAL_MS,
   FRONTEND_WS_CONTROL_MESSAGE_TYPES,
-  FRONTEND_WS_PING_INTERVAL_MS,
-  FRONTEND_WS_PONG_TIMEOUT_MS,
   FRONTEND_WS_RECONNECT_DELAY_MS,
+  FRONTEND_WS_SERVER_PONG_TIMEOUT_MS,
 } from '../../../shared/constants/frontend-ws';
 import type {
   FrontendWsClientControlMessage,
@@ -185,8 +185,14 @@ export class FrontendWsClient {
       return;
     }
 
-    if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.pong) {
-      this.handlePong();
+    if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.serverPong) {
+      this.handleServerPong();
+      return;
+    }
+
+    if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.serverPing) {
+      this.handleServerPing(message.serverTime);
+      return;
     }
 
     for (const handler of this.jsonMessageHandlers) {
@@ -228,10 +234,10 @@ export class FrontendWsClient {
     this.stopPing();
 
     this.pingIntervalId = window.setInterval(() => {
-      this.sendPing();
-    }, FRONTEND_WS_PING_INTERVAL_MS);
+      this.sendClientPing();
+    }, FRONTEND_WS_CLIENT_PING_INTERVAL_MS);
 
-    this.sendPing();
+    this.sendClientPing();
   }
 
   private stopPing(): void {
@@ -243,7 +249,7 @@ export class FrontendWsClient {
     this.clearPongTimeout();
   }
 
-  private sendPing(): void {
+  private sendClientPing(): void {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return;
     }
@@ -251,7 +257,7 @@ export class FrontendWsClient {
     this.clearPongTimeout();
 
     this.sendJson({
-      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.ping,
+      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.clientPing,
       clientId: this.createClientId(),
       params: {
         sentAt: Date.now(),
@@ -260,10 +266,20 @@ export class FrontendWsClient {
 
     this.pongTimeoutId = window.setTimeout(() => {
       this.reconnect();
-    }, FRONTEND_WS_PONG_TIMEOUT_MS);
+    }, FRONTEND_WS_SERVER_PONG_TIMEOUT_MS);
   }
 
-  private handlePong(): void {
+  private handleServerPing(serverTime: number): void {
+    this.sendJson({
+      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.clientPong,
+      clientId: this.createClientId(),
+      params: {
+        serverTime,
+        receivedAt: Date.now(),
+      },
+    });
+  }
+  private handleServerPong(): void {
     this.clearPongTimeout();
   }
 

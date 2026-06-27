@@ -36,19 +36,33 @@ export type FrontendWsWebSocketReadyMessage = {
   type: typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.webSocketReady;
 };
 
-export type FrontendWsPingMessage =
+export type FrontendWsClientPingMessage =
   FrontendWsClientRequest<
-    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.ping,
+    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.clientPing,
     {
       sentAt: number;
     }
   >;
 
-export type FrontendWsPongMessage =
+export type FrontendWsServerPongMessage =
   FrontendWsServerResponse<
-    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.pong,
+    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.serverPong,
     {
       sentAt: number;
+      receivedAt: number;
+    }
+  >;
+
+export type FrontendWsServerPingMessage = {
+  type: typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.serverPing;
+  serverTime: number;
+};
+
+export type FrontendWsClientPongMessage =
+  FrontendWsClientRequest<
+    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.clientPong,
+    {
+      serverTime: number;
       receivedAt: number;
     }
   >;
@@ -129,7 +143,8 @@ export type FrontendWsChangeSubscriptionMessage =
 
 export type FrontendWsClientControlMessage =
   | FrontendWsWebSocketReadyMessage
-  | FrontendWsPingMessage
+  | FrontendWsClientPingMessage
+  | FrontendWsClientPongMessage
   | FrontendWsRequestSettingsMessage
   | FrontendWsSettingsChangedMessage
   | FrontendWsRequestMarketStatisticsFullSyncMessage
@@ -138,7 +153,8 @@ export type FrontendWsClientControlMessage =
 
 export type FrontendWsServerControlMessage =
   | FrontendWsServerHelloMessage
-  | FrontendWsPongMessage
+  | FrontendWsServerPongMessage
+  | FrontendWsServerPingMessage
   | FrontendWsSettingsLoadedMessage
   | FrontendWsSettingsAcceptedMessage
   | FrontendWsMarketsUpdatedMessage;

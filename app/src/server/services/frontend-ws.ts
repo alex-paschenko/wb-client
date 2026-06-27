@@ -13,7 +13,6 @@ import { FrontendSettings } from '../../shared/services/frontend-settings.js';
 import type {
   FrontendWsChangeSubscriptionMessage,
   FrontendWsClientControlMessage,
-  FrontendWsPingMessage,
   FrontendWsRequestMarketStatisticsFullSyncMessage,
   FrontendWsSetSubscriptionMessage,
   FrontendWsSettingsChangedMessage,
@@ -70,7 +69,7 @@ export class FrontendWsService {
     wsServer.onConnection((socket) => {
       this.clients.set(socket, this.createClientState());
 
-      socket.on('close', () => {
+      wsServer.onDisconnect((socket) => {
         this.handleClientClose(socket);
       });
 
@@ -162,11 +161,6 @@ export class FrontendWsService {
       return;
     }
 
-    if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.ping) {
-      this.handlePing(socket, message);
-      return;
-    }
-
     if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestSettings) {
       void this.handleRequestSettings(socket, message.clientId);
       return;
@@ -226,20 +220,6 @@ export class FrontendWsService {
 
     state.isReady = true;
     this.sendRollingSnapshot(socket);
-  }
-
-  private handlePing(
-    socket: WebSocket,
-    message: FrontendWsPingMessage,
-  ): void {
-    getWsServer().sendJson(socket, {
-      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.pong,
-      clientId: message.clientId,
-      params: {
-        sentAt: message.params.sentAt,
-        receivedAt: Date.now(),
-      },
-    });
   }
 
   private async handleRequestSettings(

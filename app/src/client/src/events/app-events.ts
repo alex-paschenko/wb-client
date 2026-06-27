@@ -16,9 +16,6 @@ import {
 type AppEventMap = EventMapBase & {
   settingsChanged: [settings: FrontendSettings];
 
-  requestSettings: [];
-  subscribeMarketInfo: [];
-
   requestMarketStatisticsFullSync: [marketName: string];
 
   changeMarketStatisticsSubscription: [

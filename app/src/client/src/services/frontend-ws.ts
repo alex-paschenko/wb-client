@@ -38,8 +38,6 @@ export class FrontendWsService {
   private unsubscribeJsonMessage: (() => void) | null = null;
   private unsubscribeBinaryMessage: (() => void) | null = null;
   private unsubscribeSettingsChanged: (() => void) | null = null;
-  private unsubscribeRequestSettings: (() => void) | null = null;
-  private unsubscribeSubscribeMarketInfo: (() => void) | null = null;
   private unsubscribeRequestMarketStatisticsFullSync: (() => void) | null = null;
   private unsubscribeChangeMarketStatisticsSubscription: (() => void) | null = null;
 
@@ -123,16 +121,6 @@ export class FrontendWsService {
         this.scheduleSettingsSave(settings);
       });
 
-    this.unsubscribeRequestSettings =
-      appEvents.on('requestSettings', () => {
-        this.sendRequestSettings();
-      });
-
-    this.unsubscribeSubscribeMarketInfo =
-      appEvents.on('subscribeMarketInfo', () => {
-        this.sendSubscribeMarketInfo();
-      });
-
     this.unsubscribeRequestMarketStatisticsFullSync =
       appEvents.on('requestMarketStatisticsFullSync', (marketName) => {
         this.sendRequestMarketStatisticsFullSync(marketName);
@@ -160,13 +148,9 @@ export class FrontendWsService {
     this.unsubscribeBinaryMessage = null;
     this.unsubscribeSettingsChanged = null;
 
-    this.unsubscribeRequestSettings?.();
-    this.unsubscribeSubscribeMarketInfo?.();
     this.unsubscribeRequestMarketStatisticsFullSync?.();
     this.unsubscribeChangeMarketStatisticsSubscription?.();
 
-    this.unsubscribeRequestSettings = null;
-    this.unsubscribeSubscribeMarketInfo = null;
     this.unsubscribeRequestMarketStatisticsFullSync = null;
     this.unsubscribeChangeMarketStatisticsSubscription = null;
 
@@ -268,11 +252,12 @@ export class FrontendWsService {
   }
 
   private primaryDataRequest(): void {
-    appEvents.emit('subscribeMarketInfo');
-    appEvents.emit('requestSettings');
+    this.sendSubscribeMarketInfo();
+    this.sendRequestSettings();
   }
 
   private secondaryDataRequest(): void {
+    console.log('Secondary data request');
     // Request market and settings dependent data
   }
 

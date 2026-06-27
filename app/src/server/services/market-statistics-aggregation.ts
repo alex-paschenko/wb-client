@@ -36,6 +36,21 @@ export class MarketStatisticsAggregationService {
       SERVER_EVENT.marketStatisticsRestored,
       (event) => this.handleMarketStatisticsRestored(event),
     );
+
+    eventBus.on(
+      SERVER_EVENT.marketStatisticsFullSyncReleased,
+      (event) => this.handleFullSyncReleased(event.marketName),
+    );
+  }
+
+  public createFullSyncSnapshot(
+    marketName: string,
+  ): MarketStatisticsItem[][] {
+    this.incrementFreezing(marketName);
+
+    const storage = this.getOrCreateStorage(marketName);
+
+    return storage.getAllItemsByLevel();
   }
 
   public getStorageItemsByMarket(): Record<string, MarketStatisticsItem[][]> {
@@ -46,6 +61,10 @@ export class MarketStatisticsAggregationService {
       ]),
     );
   }
+
+  private readonly freezingByMarket = new Map<string, number>();
+
+  private readonly tickBuffersByMarket = new Map<string, MarketTick[]>();
 
   private tickToSnapshot(
     storage: MarketStatisticsStorageService,
@@ -62,8 +81,25 @@ export class MarketStatisticsAggregationService {
   private handleTickReceived(
     event: MarketTickReceivedEvent,
   ): void {
-    const storage = this.getOrCreateStorage(event.marketName);
-    const snapshot = this.tickToSnapshot(storage, event.tick);
+    const buffer = this.getTickBuffer(event.marketName);
+
+    if (
+      this.isFrozen(event.marketName) ||
+      buffer.length > 0
+    ) {
+      buffer.push(event.tick);
+      return;
+    }
+
+    this.tickProcessor(event.marketName, event.tick);
+  }
+
+  private tickProcessor(
+    marketName: string,
+    tick: MarketTick,
+  ): void {
+    const storage = this.getOrCreateStorage(marketName);
+    const snapshot = this.tickToSnapshot(storage, tick);
 
     storage.addItem(0, snapshot, 'should record delta');
 
@@ -75,18 +111,18 @@ export class MarketStatisticsAggregationService {
 
     if (delta) {
       eventBus.emit(SERVER_EVENT.marketStatisticsStorageChanged, {
-        marketName: event.marketName,
+        marketName,
         delta,
       });
     }
 
     eventBus.emit(SERVER_EVENT.marketStatisticsPersistenceChanged, {
-      marketName: event.marketName,
+      marketName,
       changes: this.toPersistenceChanges(storage, addedItems),
     });
 
     eventBus.emit(SERVER_EVENT.marketStatisticsViewUpdated, {
-      marketName: event.marketName,
+      marketName,
       createItems: (direction) => storage.createItems(direction),
     });
   }
@@ -305,6 +341,58 @@ export class MarketStatisticsAggregationService {
     endedAt: number,
   ): number {
     return Math.round(startedAt + (endedAt - startedAt) / 2);
+  }
+
+  private incrementFreezing(marketName: string): void {
+    this.freezingByMarket.set(
+      marketName,
+      (this.freezingByMarket.get(marketName) ?? 0) + 1,
+    );
+  }
+
+  private handleFullSyncReleased(marketName: string): void {
+    const current = this.freezingByMarket.get(marketName) ?? 0;
+
+    if (current <= 1) {
+      this.freezingByMarket.delete(marketName);
+      this.flushTickBuffer(marketName);
+      return;
+    }
+
+    this.freezingByMarket.set(marketName, current - 1);
+  }
+
+  private flushTickBuffer(marketName: string): void {
+    if (this.isFrozen(marketName)) {
+      return;
+    }
+
+    const buffer = this.getTickBuffer(marketName);
+
+    while (buffer.length > 0 && !this.isFrozen(marketName)) {
+      const tick = buffer.shift();
+
+      if (!tick) {
+        return;
+      }
+
+      this.tickProcessor(marketName, tick);
+    }
+  }
+
+  private isFrozen(marketName: string): boolean {
+    return (this.freezingByMarket.get(marketName) ?? 0) > 0;
+  }
+
+  private getTickBuffer(marketName: string): MarketTick[] {
+    let buffer = this.tickBuffersByMarket.get(marketName);
+
+    if (!buffer) {
+      buffer = [];
+      this.tickBuffersByMarket.set(marketName, buffer);
+    }
+
+    return buffer;
   }
 }
 

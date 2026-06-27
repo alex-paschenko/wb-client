@@ -10,6 +10,8 @@ export const SERVER_EVENT = {
   marketStatisticsPersistenceChanged: 'market statistics persistence changed',
   marketStatisticsApproximated: 'market statistics approximated',
 
+  marketStatisticsFullSyncReleased: 'market statistics full sync released',
+
   strategySignalCreated: 'strategy signal created',
   strategyFailed: 'strategy failed',
 } as const;

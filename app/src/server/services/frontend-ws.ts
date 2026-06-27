@@ -22,6 +22,9 @@ import {
   SERVER_WS_EVENT_TYPE,
   type ServerWsJsonMessage,
 } from '../../shared/types/server-events.js';
+import type {
+  MarketStatisticsItem,
+} from '../../shared/types/market-statistics-storage.js';
 import {
   encodeFrontendWsBinaryPacket,
 } from '../../shared/utilities/frontend-ws-binary-codec.js';
@@ -53,6 +56,7 @@ type FrontendWsClientState = {
     isSubscribed: boolean;
   };
   marketStatisticsSubscription: MarketStatisticsSubscriptionState;
+  marketsBetweenFullSyncAndSubscription: Set<string>;
 };
 
 const encoder = new TextEncoder();
@@ -67,7 +71,7 @@ export class FrontendWsService {
       this.clients.set(socket, this.createClientState());
 
       socket.on('close', () => {
-        this.clients.delete(socket);
+        this.handleClientClose(socket);
       });
 
       this.sendServerHello(socket);
@@ -100,6 +104,24 @@ export class FrontendWsService {
     );
   }
 
+  private handleClientClose(socket: WebSocket): void {
+    const state = this.clients.get(socket);
+
+    if (state) {
+      for (const marketName of state.marketsBetweenFullSyncAndSubscription) {
+        this.releaseMarketStatisticsFullSync(marketName);
+      }
+    }
+
+    this.clients.delete(socket);
+  }
+
+  private releaseMarketStatisticsFullSync(marketName: string): void {
+    eventBus.emit(SERVER_EVENT.marketStatisticsFullSyncReleased, {
+      marketName,
+    });
+  }
+
   private createClientState(): FrontendWsClientState {
     return {
       isReady: false,
@@ -113,6 +135,7 @@ export class FrontendWsService {
         clientId: 0,
         markets: new Set(),
       },
+      marketsBetweenFullSyncAndSubscription: new Set(),
     };
   }
 
@@ -275,11 +298,27 @@ export class FrontendWsService {
       return;
     }
 
+    const shouldFreeze =
+      !state.marketsBetweenFullSyncAndSubscription.has(message.params.marketName);
+
+    if (shouldFreeze) {
+      state.marketsBetweenFullSyncAndSubscription.add(message.params.marketName);
+    }
+
+    const levels = shouldFreeze
+      ? marketStatisticsAggregationService.createFullSyncSnapshot(message.params.marketName)
+      : marketStatisticsAggregationService.getStorageItemsByMarket()[message.params.marketName];
+
+    if (!levels) {
+      return;
+    }
+
     this.sendFullMarketStatistics(
       socket,
       state,
       message.clientId,
       message.params.marketName,
+      levels,
     );
   }
 
@@ -333,6 +372,10 @@ export class FrontendWsService {
     if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.add) {
       for (const marketName of message.params.markets) {
         state.marketStatisticsSubscription.markets.add(marketName);
+
+        if (state.marketsBetweenFullSyncAndSubscription.delete(marketName)) {
+          this.releaseMarketStatisticsFullSync(marketName);
+        }
       }
 
       return;
@@ -376,14 +419,8 @@ export class FrontendWsService {
     state: FrontendWsClientState,
     clientId: number,
     marketName: string,
+    levels: MarketStatisticsItem[][],
   ): void {
-    const levels =
-      marketStatisticsAggregationService.getStorageItemsByMarket()[marketName];
-
-    if (!levels) {
-      return;
-    }
-
     const payload = encodeFullMarketStatisticsPayload(
       marketName,
       levels,

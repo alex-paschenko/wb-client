@@ -280,6 +280,7 @@ export class FrontendWsClient {
     });
   }
   private handleServerPong(): void {
+    console.log(`[${new Date().toLocaleTimeString('ru-RU')}] server pong received`);
     this.clearPongTimeout();
   }
 

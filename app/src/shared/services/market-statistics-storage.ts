@@ -378,6 +378,17 @@ export class MarketStatisticsStorageService {
     ) as MarketCandle;
   }
 
+  public size(level?: number): number {
+    if (typeof level === 'number') {
+      return this.getLevelItemsCount(this.levels[level]);
+    }
+
+    return this.levels.reduce(
+      (sum, level) => sum + this.getLevelItemsCount(level),
+      0,
+    );
+  }
+
   private getLevelItemsCount(level: MarketStatisticsLevel): number {
     return level.chunks.reduce(
       (sum, chunk) => sum + chunk.end - chunk.start,

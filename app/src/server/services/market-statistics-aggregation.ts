@@ -38,9 +38,23 @@ export class MarketStatisticsAggregationService {
     );
 
     eventBus.on(
-      SERVER_EVENT.marketStatisticsFullSyncReleased,
-      (event) => this.handleFullSyncReleased(event.marketName),
+      SERVER_EVENT.freezeOnStatisticsStorageNeedsToBeLowered,
+      (event) => this.handleFreezeOnStatisticsStorageNeedsToBeLowered(event.marketName),
     );
+
+    // TODO Remove it! For testing purpose only!
+    const stor = this.storagesByMarket;
+    setInterval(() => {
+      let marketName = '---'; let numOfPoints = 0;
+      for (const [k, v] of stor.entries()) {
+        const nop = v.size(0);
+        if (nop > numOfPoints) {
+          numOfPoints = nop;
+          marketName = k;
+        }
+      }
+      console.log(`Most active market: ${marketName} (${numOfPoints})`);
+    }, 30000)
   }
 
   public createFullSyncSnapshot(
@@ -350,7 +364,9 @@ export class MarketStatisticsAggregationService {
     );
   }
 
-  private handleFullSyncReleased(marketName: string): void {
+  private handleFreezeOnStatisticsStorageNeedsToBeLowered(
+    marketName: string
+  ): void {
     const current = this.freezingByMarket.get(marketName) ?? 0;
 
     if (current <= 1) {

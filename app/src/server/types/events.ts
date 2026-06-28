@@ -80,7 +80,7 @@ export interface MarketStatisticsApproximatedEvent {
   items: unknown[];
 }
 
-export interface MarketStatisticsFullSyncReleasedEvent {
+export interface FreezeOnStatisticsStorageNeedsToBeLoweredEvent {
   marketName: string;
 }
 
@@ -111,7 +111,7 @@ export interface ServerEventMap {
   [SERVER_EVENT.marketStatisticsPersistenceChanged]: MarketStatisticsPersistenceChangedEvent;
   [SERVER_EVENT.marketStatisticsApproximated]: MarketStatisticsApproximatedEvent;
 
-  [SERVER_EVENT.marketStatisticsFullSyncReleased]: MarketStatisticsFullSyncReleasedEvent;
+  [SERVER_EVENT.freezeOnStatisticsStorageNeedsToBeLowered]: FreezeOnStatisticsStorageNeedsToBeLoweredEvent;
 
   [SERVER_EVENT.strategySignalCreated]: StrategySignalCreatedEvent;
   [SERVER_EVENT.strategyFailed]: StrategyFailedEvent;

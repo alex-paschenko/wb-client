@@ -56,7 +56,7 @@ export const MarketView = ({
 
       storageRef.current = storage;
       setPointsCount(storage.getPointSeriesLength());
-
+console.log(`Full sync for ${marketName}: ${storage.size()} (including ${storage.size(0)} 0-level items)`)
       appEvents.emit(
         'changeMarketStatisticsSubscription',
         FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,

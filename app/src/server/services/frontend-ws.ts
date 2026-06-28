@@ -105,15 +105,15 @@ export class FrontendWsService {
 
     if (state) {
       for (const marketName of state.marketsBetweenFullSyncAndSubscription) {
-        this.releaseMarketStatisticsFullSync(marketName);
+        this.freezeOnStatisticsStorageNeedsToBeLowered(marketName);
       }
     }
 
     this.clients.delete(socket);
   }
 
-  private releaseMarketStatisticsFullSync(marketName: string): void {
-    eventBus.emit(SERVER_EVENT.marketStatisticsFullSyncReleased, {
+  private freezeOnStatisticsStorageNeedsToBeLowered(marketName: string): void {
+    eventBus.emit(SERVER_EVENT.freezeOnStatisticsStorageNeedsToBeLowered, {
       marketName,
     });
   }
@@ -380,7 +380,7 @@ export class FrontendWsService {
 
         if (state.marketsBetweenFullSyncAndSubscription.delete(marketName)) {
           subscription.markets.delete(marketName);
-          this.releaseMarketStatisticsFullSync(marketName);
+          this.freezeOnStatisticsStorageNeedsToBeLowered(marketName);
         }
       }
 

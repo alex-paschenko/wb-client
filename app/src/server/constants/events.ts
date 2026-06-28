@@ -10,7 +10,7 @@ export const SERVER_EVENT = {
   marketStatisticsPersistenceChanged: 'market statistics persistence changed',
   marketStatisticsApproximated: 'market statistics approximated',
 
-  marketStatisticsFullSyncReleased: 'market statistics full sync released',
+  freezeOnStatisticsStorageNeedsToBeLowered: 'freeze on the statistics storage needs to be lowered',
 
   strategySignalCreated: 'strategy signal created',
   strategyFailed: 'strategy failed',

@@ -54,7 +54,7 @@ export class AppWsServer {
       this.clients.add(socket);
       this.lastClientPongAtBySocket.set(socket, Date.now());
 
-      console.log('WS client connected', {
+      console.log(`[${new Date().toLocaleTimeString('ru-RU')}] WS client connected`, {
         clients: this.clients.size,
       });
 
@@ -213,6 +213,7 @@ export class AppWsServer {
     socket: WebSocket,
     _message: FrontendWsClientPongMessage,
   ): void {
+    console.log(`[${new Date().toLocaleTimeString('ru-RU')}] client pong received`)
     this.lastClientPongAtBySocket.set(socket, Date.now());
   }
 
@@ -247,7 +248,7 @@ export class AppWsServer {
     this.lastClientPongAtBySocket.delete(socket);
     this.clients.delete(socket);
 
-    console.log('WS client disconnected', {
+    console.log(`[${new Date().toLocaleTimeString('ru-RU')}] WS client disconnected`, {
       clients: this.clients.size,
     });
   }

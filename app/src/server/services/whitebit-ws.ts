@@ -359,6 +359,10 @@ export class WhitebitWsService {
       statistics,
     ] = message.params;
 
+    if (message.params.length > 2) {
+      console.error('We are lost WS Market tick data', message.params);
+    }
+
     const receivedAt = Date.now();
     const price = Number(statistics.last);
 

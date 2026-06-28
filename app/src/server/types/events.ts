@@ -65,7 +65,7 @@ export interface MarketStatisticsViewUpdated {
 
 export interface MarketStatisticsRestoredMarketData {
   snapshots: MarketSnapshot[];
-  candlesByLevel: MarketCandle[][];
+  candlesByLevel: Record<number, MarketCandle[]>;
 }
 
 export interface MarketStatisticsRestoredEvent {

@@ -58,19 +58,19 @@ export class MarketStatisticsRestoreService {
     now: number,
     itemsByMarket: Record<string, MarketStatisticsRestoredMarketData>,
   ): Promise<void> {
-    const levels = MARKET_STATISTICS_LEVEL_CONFIGS
-      .map((config, index) => ({
-        config,
+    const candleLevels = MARKET_STATISTICS_LEVEL_CONFIGS
+      .map((configEntry, index) => ({
+        ...configEntry,
         level: index,
       }))
-      .filter(({ level }) => level > 0)
-      .map(({ config, level }) => ({
-        level,
-        timeThreshold: now - config.interval - config.duration,
+      .filter(({ sourceType }) => sourceType === 'candle')
+      .map((configEntry) => ({
+        level: configEntry.level,
+        timeThreshold: now - configEntry.interval - configEntry.duration,
       }));
 
     try {
-      const rows = await marketCandlesDao.getFromByLevels(levels);
+      const rows = await marketCandlesDao.getFromByLevels(candleLevels);
 
       for (const row of rows) {
         const market = this.getOrCreateMarketData(
@@ -78,10 +78,8 @@ export class MarketStatisticsRestoreService {
           row.marketName,
         );
 
-        const candleLevelIndex = row.level - 1;
-
-        market.candlesByLevel[candleLevelIndex] ??= [];
-        market.candlesByLevel[candleLevelIndex].push(this.toCandle(row));
+        market.candlesByLevel[row.level] ??= [];
+        market.candlesByLevel[row.level].push(this.toCandle(row));
       }
     } catch (error) {
       console.error('Failed to restore market candles from DB', error);
@@ -94,7 +92,7 @@ export class MarketStatisticsRestoreService {
   ): MarketStatisticsRestoredMarketData {
     itemsByMarket[marketName] ??= {
       snapshots: [],
-      candlesByLevel: [],
+      candlesByLevel: {},
     };
 
     return itemsByMarket[marketName];

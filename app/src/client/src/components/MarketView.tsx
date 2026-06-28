@@ -14,7 +14,7 @@ import type {
 import {
   appEvents,
 } from '../events/app-events';
-import { OpenMarketViewState } from '../../../shared/types/frontend-settings';
+import type { OpenMarketViewState } from '../../../shared/types/frontend-settings';
 import { useAppContext } from '../contexts/AppContext';
 import { DashboardItem } from './DashboardItem';
 

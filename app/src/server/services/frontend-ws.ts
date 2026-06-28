@@ -293,7 +293,7 @@ export class FrontendWsService {
     message: FrontendWsRequestMarketStatisticsFullSyncMessage,
   ): void {
     const state = this.clients.get(socket);
-
+console.log(`Requested full sync for ${message.params.marketName}`)
     if (!state) {
       return;
     }

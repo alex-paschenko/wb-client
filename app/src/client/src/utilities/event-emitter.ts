@@ -5,24 +5,41 @@ type ConditionType = string | symbol;
 const zeroCondition = Symbol('Zero Condition');
 const wideDeleting = Symbol('Wide deleting');
 
+type EventKey<EventName extends string | number | symbol> =
+  | EventName
+  | {
+      eventName: EventName;
+      condition: ConditionType;
+    };
+
 export class EventEmitter<EventMap extends EventMapBase> {
-  private readonly events: {
-    [EventName in keyof EventMap]?:
-      {
-        [condition: (string | symbol)]:
-          Set<(...args: EventMap[EventName]) => void>;
-      }
-  } = {};
+  private readonly events = new Map<
+    keyof EventMap,
+    Map<ConditionType, Set<(...args: EventMap[keyof EventMap]) => void>>
+  >();
 
   public on<EventName extends keyof EventMap>(
     name: EventName,
     listener: (...args: EventMap[EventName]) => void,
     condition: ConditionType = zeroCondition,
   ): () => void {
-    this.events[name] ??= {};
-    this.events[name][condition] ??= new Set();
+    let conditions = this.events.get(name);
 
-    this.events[name][condition].add(listener);
+    if (!conditions) {
+      conditions = new Map();
+      this.events.set(name, conditions);
+    }
+
+    let listeners = conditions.get(condition);
+
+    if (!listeners) {
+      listeners = new Set();
+      conditions.set(condition, listeners);
+    }
+
+    listeners.add(
+      listener as (...args: EventMap[keyof EventMap]) => void,
+    );
 
     return () => {
       this.off(name, listener, condition);
@@ -34,28 +51,55 @@ export class EventEmitter<EventMap extends EventMapBase> {
     listener: (...args: EventMap[EventName]) => void,
     condition: ConditionType = wideDeleting,
   ): boolean {
-    if (condition === wideDeleting) {
-      return Object.values(this.events[name] ?? {}).some(
-        (listeners) => listeners.delete(listener)
-      );
+    const conditions = this.events.get(name);
+
+    if (!conditions) {
+      return false;
     }
 
-    return this.events[name]?.[condition]?.delete(listener) ?? false;
+    const storedListener =
+      listener as (...args: EventMap[keyof EventMap]) => void;
+
+    if (condition !== wideDeleting) {
+      return conditions.get(condition)?.delete(storedListener) ?? false;
+    }
+
+    let hasDeleted = false;
+
+    for (const listeners of conditions.values()) {
+      if (listeners.delete(storedListener)) {
+        hasDeleted = true;
+      }
+    }
+
+    return hasDeleted;
   }
 
   public emit<EventName extends keyof EventMap>(
-    event: EventName | { eventName: EventName, condition: string },
+    event: EventKey<EventName>,
     ...args: EventMap[EventName]
   ): void {
-    if ('object' === typeof event) {
-      for (const listener of this.events[event.eventName]?.[event.condition] ?? []) {
+    if (
+      typeof event === 'object' &&
+      event !== null &&
+      'eventName' in event
+    ) {
+      const listeners = this.events
+        .get(event.eventName)
+        ?.get(event.condition);
+
+      for (const listener of listeners ?? []) {
         listener(...args);
       }
-    } else {
-      for (const listeners of Object.values(this.events[event] ?? {})) {
-        for (const listener of listeners) {
-          listener(...args);
-        }
+
+      return;
+    }
+
+    const conditions = this.events.get(event);
+
+    for (const listeners of conditions?.values() ?? []) {
+      for (const listener of listeners) {
+        listener(...args);
       }
     }
   }
@@ -64,13 +108,10 @@ export class EventEmitter<EventMap extends EventMapBase> {
     name?: EventName,
   ): void {
     if (name === undefined) {
-      for (const eventName of Object.keys(this.events) as EventName[]) {
-        delete this.events[eventName];
-      }
-
+      this.events.clear();
       return;
     }
 
-    delete this.events[name];
+    this.events.delete(name);
   }
 }

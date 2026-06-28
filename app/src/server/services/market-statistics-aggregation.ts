@@ -329,11 +329,14 @@ export class MarketStatisticsAggregationService {
         storage.addItem(0, snapshot, 'suppress record delta');
       }
 
-      for (const [index, candles] of data.candlesByLevel.entries()) {
-        const level = index + 1;
+      for (const [stringLevel, candles] of Object.entries(data.candlesByLevel)) {
 
         for (const candle of candles) {
-          storage.addItem(level, candle, 'suppress record delta');
+          storage.addItem(
+            Number(stringLevel),
+            candle,
+            'suppress record delta',
+          );
         }
       }
 

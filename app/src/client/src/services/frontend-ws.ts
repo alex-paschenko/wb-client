@@ -191,6 +191,7 @@ export class FrontendWsService {
   }
 
   private sendRequestMarketStatisticsFullSync(marketName: string): void {
+console.log(`sendRequestMarketStatisticsFullSync: sended full sync request for ${marketName}`)
     frontendWsClient.sendJson({
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestMarketStatisticsFullSync,
       clientId: frontendWsClient.createClientId(),

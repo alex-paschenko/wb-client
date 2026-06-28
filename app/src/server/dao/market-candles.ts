@@ -102,7 +102,7 @@ export class MarketCandlesDao {
       `,
     });
 
-    return rows.map((row) => row.candle);
+    return rows.map((row) => row.candle) ?? [];
   }
 
   public async refresh(

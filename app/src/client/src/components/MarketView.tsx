@@ -17,6 +17,7 @@ import {
 import type { OpenMarketViewState } from '../../../shared/types/frontend-settings';
 import { useAppContext } from '../contexts/AppContext';
 import { DashboardItem } from './DashboardItem';
+import { MarketChart } from './MarketChart';
 
 interface MarketViewProps {
   marketName: string;
@@ -37,7 +38,7 @@ export const MarketView = ({
 
   const storageRef = useRef<MarketStatisticsStorageService | null>(null);
 
-  const [pointsCount, setPointsCount] = useState(0);
+  const [chartVersion, setChartVersion] = useState(0);
 
   useEffect(() => {
     const handleFullSync = (
@@ -55,8 +56,8 @@ export const MarketView = ({
       }
 
       storageRef.current = storage;
-      setPointsCount(storage.getPointSeriesLength());
-console.log(`Full sync for ${marketName}: ${storage.size()} (including ${storage.size(0)} 0-level items)`)
+      setChartVersion((version) => version + 1);
+
       appEvents.emit(
         'changeMarketStatisticsSubscription',
         FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
@@ -77,7 +78,7 @@ console.log(`Full sync for ${marketName}: ${storage.size()} (including ${storage
       }
 
       storage.applyDelta(payload.delta);
-      setPointsCount(storage.getPointSeriesLength());
+      setChartVersion((version) => version + 1);
     };
 
     const unsubscribeFullSync = appEvents.on(
@@ -144,8 +145,11 @@ console.log(`Full sync for ${marketName}: ${storage.size()} (including ${storage
         </header>
 
         <div className="min-h-0 flex-1">
-          <div className="flex h-full items-center justify-center text-sm text-muted">
-            points: {pointsCount}
+          <div className="relative h-full w-full">
+            <MarketChart
+              storage={storageRef.current}
+              version={chartVersion}
+            />
           </div>
         </div>
       </div>

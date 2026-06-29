@@ -10,9 +10,16 @@ import type {
   FrontendWsServerControlMessage,
   FrontendWsServerHelloMessage,
 } from '../../../shared/types/frontend-ws';
+import type {
+  ServerWsJsonMessage,
+} from '../../../shared/types/server-events';
+
+export type FrontendWsJsonMessage =
+  | FrontendWsServerControlMessage
+  | ServerWsJsonMessage;
 
 type JsonMessageHandler = (
-  message: FrontendWsServerControlMessage,
+  message: FrontendWsJsonMessage,
 ) => void;
 
 type BinaryMessageHandler = (

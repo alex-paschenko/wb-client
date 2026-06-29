@@ -12,6 +12,9 @@ import {
   EventEmitter,
   type EventMapBase,
 } from '../utilities/event-emitter';
+import type {
+  MarketRollingStatistics,
+} from '../../../shared/types/market-statistics-rolling';
 
 type AppEventMap = EventMapBase & {
   settingsChanged: [settings: FrontendSettings];
@@ -21,6 +24,16 @@ type AppEventMap = EventMapBase & {
   changeMarketStatisticsSubscription: [
     action: FrontendWsSubscriptionAction,
     markets: string[],
+  ];
+
+  changeMarketRollingSubscription: [
+    action: FrontendWsSubscriptionAction,
+    markets: string[],
+  ];
+
+  marketRollingUpdated: [
+    marketName: string,
+    rollingStatistics: MarketRollingStatistics,
   ];
 
   marketStatisticsFullSyncReceived: [

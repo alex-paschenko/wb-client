@@ -37,11 +37,16 @@ import type {
   MarketStatisticsStorageChangedEvent,
 } from '../types/events.js';
 import { eventBus } from './event-bus.js';
-import { marketStatisticsAggregationService } from './market-statistics-aggregation.js';
+import {
+  marketStatisticsAggregationService
+} from './market-statistics-aggregation.js';
 import { marketStatisticsRollingService } from './market-statistics-rolling.js';
 import { marketsService } from './markets.js';
+import type {
+  MarketRollingStatisticsByMarket
+} from '../types/market-statistics.js';
 
-type MarketStatisticsSubscriptionState = {
+type MarketSubscriptionState = {
   clientId: number;
   markets: Set<string>;
 };
@@ -54,7 +59,8 @@ type FrontendWsClientState = {
     clientId: number;
     isSubscribed: boolean;
   };
-  marketStatisticsSubscription: MarketStatisticsSubscriptionState;
+  marketStatisticsSubscription: MarketSubscriptionState;
+  marketRollingSubscription: MarketSubscriptionState;
   marketsBetweenFullSyncAndSubscription: Set<string>;
 };
 
@@ -85,10 +91,7 @@ export class FrontendWsService {
     eventBus.on(
       SERVER_EVENT.marketRollingUpdated,
       (event) => {
-        this.broadcastJsonToReadyClients({
-          type: SERVER_WS_EVENT_TYPE.marketRollingUpdated,
-          payload: event,
-        });
+        this.handleMarketRollingUpdated(event.rollingStatisticsByMarket);
       },
     );
 
@@ -131,14 +134,34 @@ export class FrontendWsService {
         clientId: 0,
         markets: new Set(),
       },
+      marketRollingSubscription: {
+        clientId: 0,
+        markets: new Set(),
+      },
       marketsBetweenFullSyncAndSubscription: new Set(),
     };
+  }
+  private ensureMarketSubscription(
+    subscription: MarketSubscriptionState,
+    clientId: number,
+  ): MarketSubscriptionState {
+    if (subscription.clientId === 0) {
+      subscription.clientId = clientId;
+      return subscription;
+    }
+
+    if (subscription.clientId !== clientId) {
+      subscription.clientId = clientId;
+      subscription.markets.clear();
+    }
+
+    return subscription;
   }
 
   private ensureMarketStatisticsSubscription(
     state: FrontendWsClientState,
     clientId: number,
-  ): MarketStatisticsSubscriptionState {
+  ): MarketSubscriptionState {
     if (state.marketStatisticsSubscription.clientId === 0) {
       state.marketStatisticsSubscription = {
         clientId,
@@ -209,6 +232,51 @@ export class FrontendWsService {
     }
   }
 
+private handleMarketRollingUpdated(
+  rollingStatisticsByMarket: MarketRollingStatisticsByMarket,
+): void {
+  for (const [socket, state] of this.clients) {
+    if (!state.isReady) {
+      continue;
+    }
+
+    const subscribedRolling =
+      this.filterSubscribedRollingStatistics(
+        rollingStatisticsByMarket,
+        state.marketRollingSubscription.markets,
+      );
+
+    if (Object.keys(subscribedRolling).length === 0) {
+      continue;
+    }
+
+    getWsServer().sendJson(socket, {
+      type: SERVER_WS_EVENT_TYPE.marketRollingUpdated,
+      payload: {
+        rollingStatisticsByMarket: subscribedRolling,
+      },
+    });
+  }
+}
+
+  private filterSubscribedRollingStatistics(
+    rollingStatisticsByMarket: MarketRollingStatisticsByMarket,
+    markets: Set<string>,
+  ): MarketRollingStatisticsByMarket {
+    const result: MarketRollingStatisticsByMarket = {};
+
+    for (const marketName of markets) {
+      const rollingStatistics =
+        rollingStatisticsByMarket[marketName];
+
+      if (rollingStatistics) {
+        result[marketName] = rollingStatistics;
+      }
+    }
+
+    return result;
+  }
+
   private parseClientControlMessage(
     data: WebSocket.RawData,
   ): FrontendWsClientControlMessage | null {
@@ -239,7 +307,6 @@ export class FrontendWsService {
     }
 
     state.isReady = true;
-    this.sendRollingSnapshot(socket);
   }
 
   private async handleRequestSettings(
@@ -293,7 +360,7 @@ export class FrontendWsService {
     message: FrontendWsRequestMarketStatisticsFullSyncMessage,
   ): void {
     const state = this.clients.get(socket);
-console.log(`Requested full sync for ${message.params.marketName}`)
+
     if (!state) {
       return;
     }
@@ -358,10 +425,16 @@ console.log(`Requested full sync for ${message.params.marketName}`)
   ): void {
     const state = this.clients.get(socket);
 
-    if (
-      !state ||
-      message.params.entity !== FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics
-    ) {
+    if (!state) {
+      return;
+    }
+
+    if (message.params.entity === FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketRolling) {
+      this.handleMarketRollingSubscriptionChanged(state, socket, message);
+      return;
+    }
+
+    if (message.params.entity !== FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics) {
       return;
     }
 
@@ -390,6 +463,37 @@ console.log(`Requested full sync for ${message.params.marketName}`)
     if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove) {
       for (const marketName of message.params.markets) {
         state.marketStatisticsSubscription.markets.delete(marketName);
+      }
+    }
+  }
+
+  private handleMarketRollingSubscriptionChanged(
+    state: FrontendWsClientState,
+    socket: WebSocket,
+    message: FrontendWsChangeSubscriptionMessage,
+  ): void {
+    const subscription = this.ensureMarketSubscription(
+      state.marketRollingSubscription,
+      message.clientId,
+    );
+
+    if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.add) {
+      for (const marketName of message.params.markets) {
+        subscription.markets.add(marketName);
+      }
+
+      this.sendRollingSnapshot(
+        socket,
+        subscription.clientId,
+        message.params.markets,
+      );
+
+      return;
+    }
+
+    if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove) {
+      for (const marketName of message.params.markets) {
+        subscription.markets.delete(marketName);
       }
     }
   }
@@ -468,11 +572,30 @@ console.log(`Requested full sync for ${message.params.marketName}`)
     return serverId;
   }
 
-  private sendRollingSnapshot(socket: WebSocket): void {
+  private sendRollingSnapshot(
+    socket: WebSocket,
+    _clientId: number,
+    marketNames: string[],
+  ): void {
+    const rollingStatisticsByMarket: MarketRollingStatisticsByMarket = {};
+
+    for (const marketName of marketNames) {
+      const rollingStatistics =
+        marketStatisticsRollingService.getByMarketName(marketName);
+
+      if (rollingStatistics) {
+        rollingStatisticsByMarket[marketName] = rollingStatistics;
+      }
+    }
+
+    if (Object.keys(rollingStatisticsByMarket).length === 0) {
+      return;
+    }
+
     getWsServer().sendJson(socket, {
       type: SERVER_WS_EVENT_TYPE.marketRollingUpdated,
       payload: {
-        rollingStatisticsByMarket: marketStatisticsRollingService.getAll(),
+        rollingStatisticsByMarket,
       },
     });
   }
@@ -495,16 +618,6 @@ console.log(`Requested full sync for ${message.params.marketName}`)
         !state.isReady ||
         !state.marketInfoSubscription.isSubscribed
       ) {
-        continue;
-      }
-
-      getWsServer().sendJson(socket, message);
-    }
-  }
-
-  private broadcastJsonToReadyClients(message: ServerWsJsonMessage): void {
-    for (const [socket, state] of this.clients) {
-      if (!state.isReady) {
         continue;
       }
 

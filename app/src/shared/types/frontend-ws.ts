@@ -137,7 +137,9 @@ export type FrontendWsChangeSubscriptionMessage =
   FrontendWsClientRequest<
     typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.changeSubscription,
     {
-      entity: typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics;
+      entity:
+        | typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics
+        | typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketRolling;
       action: FrontendWsSubscriptionAction;
       markets: string[];
     }

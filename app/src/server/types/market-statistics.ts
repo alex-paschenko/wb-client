@@ -112,7 +112,7 @@ export type MarketStatisticsStorage = Record<
 export interface MarketRollingStatistics {
     receivedAt: number;
 
-    last: number;
+
     open: number;
     close: number;
     high: number;

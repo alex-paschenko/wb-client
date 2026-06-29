@@ -17,6 +17,9 @@ import type {
 import {
   appEvents,
 } from '../events/app-events';
+import type {
+  MarketRollingStatistics,
+} from '../../../shared/types/market-statistics-rolling';
 
 export type MarketChartLinePoint = LineData<UTCTimestamp>;
 
@@ -25,6 +28,7 @@ export interface MarketStatisticsControllerState {
   fullSyncVersion: number;
   chartData: MarketChartLinePoint[];
   lastSnapshot: MarketSnapshot | null;
+  rollingStatistics: MarketRollingStatistics | null;
 }
 
 type StateListener = (
@@ -39,10 +43,14 @@ export class MarketStatisticsController {
     fullSyncVersion: 0,
     chartData: [],
     lastSnapshot: null,
+    rollingStatistics: null,
   };
+
+  private rollingStatistics: MarketRollingStatistics | null = null;
 
   private unsubscribeFullSync: (() => void) | null = null;
   private unsubscribeDelta: (() => void) | null = null;
+  private unsubscribeRolling: (() => void) | null = null;
 
   public constructor(
     private readonly marketName: string,
@@ -62,6 +70,20 @@ export class MarketStatisticsController {
       this.marketName,
     );
 
+    this.unsubscribeRolling = appEvents.on(
+      'marketRollingUpdated',
+      (_marketName, rollingStatistics) => {
+        this.handleRollingUpdated(rollingStatistics);
+      },
+      this.marketName,
+    );
+
+    appEvents.emit(
+      'changeMarketRollingSubscription',
+      FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
+      [this.marketName],
+    );
+
     appEvents.emit(
       'requestMarketStatisticsFullSync',
       this.marketName,
@@ -77,6 +99,14 @@ export class MarketStatisticsController {
     this.unsubscribeFullSync = null;
     this.unsubscribeDelta = null;
 
+    this.unsubscribeRolling?.();
+    this.unsubscribeRolling = null;
+
+    appEvents.emit(
+      'changeMarketRollingSubscription',
+      FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove,
+      [this.marketName],
+    );
     appEvents.emit(
       'changeMarketStatisticsSubscription',
       FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove,
@@ -107,6 +137,7 @@ export class MarketStatisticsController {
       fullSyncVersion: this.state.fullSyncVersion + 1,
       chartData: this.createLineData(storage),
       lastSnapshot: storage.getLastItem(0) as MarketSnapshot | null,
+      rollingStatistics: this.rollingStatistics,
     };
 
     this.emitState();
@@ -116,6 +147,17 @@ export class MarketStatisticsController {
       FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
       [this.marketName],
     );
+  }
+
+  private handleRollingUpdated(
+    rollingStatistics: MarketRollingStatistics,
+  ): void {
+    this.state = {
+      ...this.state,
+      rollingStatistics,
+    };
+
+    this.emitState();
   }
 
   private handleDelta(

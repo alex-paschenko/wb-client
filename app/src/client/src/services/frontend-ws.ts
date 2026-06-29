@@ -16,6 +16,12 @@ import {
   decodeFullMarketStatisticsPayload,
   decodeMarketStatisticsDeltaPayload,
 } from '../../../shared/utilities/market-statistics-payload-codec';
+import {
+  SERVER_WS_EVENT_TYPE,
+} from '../../../shared/types/server-events';
+import type {
+  MarketRollingStatisticsByMarket,
+} from '../../../shared/types/market-statistics-rolling';
 
 type GetAppContext = () => AppContextValue;
 
@@ -40,6 +46,7 @@ export class FrontendWsService {
   private unsubscribeSettingsChanged: (() => void) | null = null;
   private unsubscribeRequestMarketStatisticsFullSync: (() => void) | null = null;
   private unsubscribeChangeMarketStatisticsSubscription: (() => void) | null = null;
+  private unsubscribeChangeMarketRollingSubscription: (() => void) | null = null;
 
   private settingsSaveTimeoutId: number | null = null;
   private lastSettingsToSave: FrontendSettings | null = null;
@@ -96,6 +103,14 @@ export class FrontendWsService {
           return;
         }
 
+        if (message.type === SERVER_WS_EVENT_TYPE.marketRollingUpdated) {
+          this.handleMarketRollingUpdated(
+            message.payload.rollingStatisticsByMarket,
+          );
+
+          return;
+        }
+
         if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.settingsAccepted) {
           appContext.logger.debug('log.messages.settingsAccepted');
           return;
@@ -134,6 +149,13 @@ export class FrontendWsService {
         },
       );
 
+    this.unsubscribeChangeMarketRollingSubscription = appEvents.on(
+      'changeMarketRollingSubscription',
+      (action, markets) => {
+        this.sendChangeMarketRollingSubscription(action, markets);
+      },
+    );
+
     frontendWsClient.connect();
   }
 
@@ -153,6 +175,8 @@ export class FrontendWsService {
 
     this.unsubscribeRequestMarketStatisticsFullSync = null;
     this.unsubscribeChangeMarketStatisticsSubscription = null;
+    this.unsubscribeChangeMarketRollingSubscription?.();
+    this.unsubscribeChangeMarketRollingSubscription = null;
 
     this.clearSettingsSaveTimeout();
 
@@ -213,6 +237,38 @@ export class FrontendWsService {
         markets,
       },
     });
+  }
+
+  private sendChangeMarketRollingSubscription(
+    action: 'add' | 'remove',
+    markets: string[],
+  ): void {
+    frontendWsClient.sendJson({
+      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.changeSubscription,
+      clientId: frontendWsClient.createClientId(),
+      params: {
+        entity: FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketRolling,
+        action,
+        markets,
+      },
+    });
+  }
+
+  private handleMarketRollingUpdated(
+    rollingStatisticsByMarket: MarketRollingStatisticsByMarket,
+  ): void {
+    for (const [marketName, rollingStatistics] of Object.entries(
+      rollingStatisticsByMarket,
+    )) {
+      appEvents.emit(
+        {
+          eventName: 'marketRollingUpdated',
+          condition: marketName,
+        },
+        marketName,
+        rollingStatistics,
+      );
+    }
   }
 
   private handleBinaryMessage(data: ArrayBuffer): void {

@@ -1,5 +1,7 @@
-// src/server/services/market-statistics-rolling.ts
-import { MINUTE } from '../../shared/constants/time.js';
+import {
+  MINUTE,
+  SECONDS,
+} from '../../shared/constants/time.js';
 import type {
   MarketRollingStatistics,
   MarketRollingStatisticsByMarket,
@@ -15,16 +17,29 @@ import type {
 import { eventBus } from './event-bus.js';
 
 const SAVE_ROLLING_INTERVAL = 1 * MINUTE;
+const PUBLISH_ROLLING_INTERVAL = 30 * SECONDS;
 
 export class MarketStatisticsRollingService {
   private rollingStatisticsByMarket: MarketRollingStatisticsByMarket = {};
+
   private saveTimer: ReturnType<typeof setInterval> | null = null;
+  private publishTimer: ReturnType<typeof setInterval> | null = null;
+
   private isSaving = false;
+  private isStarted = false;
 
   public async start(): Promise<void> {
+    if (this.isStarted) {
+      console.warn('Market statistics rolling service already started');
+      return;
+    }
+
+    this.isStarted = true;
+
     const rows = await marketStatisticsRollingDao.getLatestRowsByMarket();
 
-    this.rollingStatisticsByMarket = this.toRollingStatisticsByMarket(rows);
+    this.rollingStatisticsByMarket =
+      this.toRollingStatisticsByMarket(rows);
 
     eventBus.on(
       SERVER_EVENT.marketRollingTickReceived,
@@ -34,6 +49,10 @@ export class MarketStatisticsRollingService {
     this.saveTimer = setInterval(() => {
       void this.saveCurrent();
     }, SAVE_ROLLING_INTERVAL);
+
+    this.publishTimer = setInterval(() => {
+      this.publishCurrent();
+    }, PUBLISH_ROLLING_INTERVAL);
   }
 
   public async stop(): Promise<void> {
@@ -42,7 +61,14 @@ export class MarketStatisticsRollingService {
       this.saveTimer = null;
     }
 
+    if (this.publishTimer) {
+      clearInterval(this.publishTimer);
+      this.publishTimer = null;
+    }
+
     await this.saveCurrent();
+
+    this.isStarted = false;
   }
 
   public getAll(): MarketRollingStatisticsByMarket {
@@ -60,6 +86,12 @@ export class MarketStatisticsRollingService {
   ): void {
     this.rollingStatisticsByMarket[event.marketName] =
       event.rollingStatistics;
+  }
+
+  private publishCurrent(): void {
+    if (Object.keys(this.rollingStatisticsByMarket).length === 0) {
+      return;
+    }
 
     eventBus.emit(SERVER_EVENT.marketRollingUpdated, {
       rollingStatisticsByMarket: this.rollingStatisticsByMarket,

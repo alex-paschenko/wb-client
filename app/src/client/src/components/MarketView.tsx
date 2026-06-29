@@ -26,6 +26,7 @@ const createInitialControllerState =
     fullSyncVersion: 0,
     chartData: [],
     lastSnapshot: null,
+    rollingStatistics: null,
   });
 
 export const MarketView = ({
@@ -92,9 +93,32 @@ export const MarketView = ({
       }}
     >
       <div className="flex h-full flex-col">
-        <header className="shrink-0 border-b border-panel-border px-2 py-1 text-left text-xs font-semibold text-accent">
+
+      <header className="flex shrink-0 items-center gap-3 border-b border-panel-border px-2 py-1 text-xs">
+        <span className="font-semibold text-accent">
           {marketName}
-        </header>
+        </span>
+
+        {controllerState.rollingStatistics && (
+          <>
+            <span className="text-muted">
+              O: {controllerState.rollingStatistics.open}
+            </span>
+            <span className="text-muted">
+              H: {controllerState.rollingStatistics.high}
+            </span>
+            <span className="text-muted">
+              L: {controllerState.rollingStatistics.low}
+            </span>
+            <span className="text-muted">
+              C: {controllerState.rollingStatistics.close}
+            </span>
+            <span className="text-muted">
+              V: {controllerState.rollingStatistics.stockVolume}
+            </span>
+          </>
+        )}
+      </header>
 
         <div className="min-h-0 flex-1">
           <div className="relative h-full w-full">

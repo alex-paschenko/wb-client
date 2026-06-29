@@ -47,6 +47,7 @@ export const FRONTEND_WS_CONTROL_MESSAGE_TYPES = {
 export const FRONTEND_WS_SUBSCRIPTION_ENTITIES = {
   marketInfo: 'marketInfo',
   marketStatistics: 'marketStatistics',
+  marketRolling: 'marketRolling',
 } as const;
 
 export const FRONTEND_WS_SUBSCRIPTION_ACTIONS = {

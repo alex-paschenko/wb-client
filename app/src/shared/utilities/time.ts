@@ -5,12 +5,12 @@ export type TimeUnits =
   | 'hours'
   | 'days';
 
-interface CountUnit {
+export interface TimeAsCountUnit {
   count: number;
   unit: TimeUnits;
 };
 
-const convertRules: CountUnit[] = [
+const convertRules: TimeAsCountUnit[] = [
   { count: 1000, unit: 'seconds' },
   { count: 60, unit: 'minutes' },
   { count: 60, unit: 'hours' },
@@ -19,8 +19,8 @@ const convertRules: CountUnit[] = [
 
 export function convertIntervalToTimeWithUnit (
   intervalMs: number,
-): CountUnit {
-  let intervalWithUnit: CountUnit = {
+): TimeAsCountUnit {
+  let intervalWithUnit: TimeAsCountUnit = {
     count: intervalMs,
     unit: 'milliseconds',
   };

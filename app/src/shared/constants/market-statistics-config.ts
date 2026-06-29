@@ -1,6 +1,6 @@
 import {
   convertIntervalToTimeWithUnit,
-  type TimeUnits,
+  type TimeAsCountUnit,
 } from '../utilities/time';
 import { DAYS, HOUR, HOURS, MINUTE, MINUTES, SECONDS } from './time';
 import type {
@@ -38,10 +38,8 @@ export const MARKET_STATISTICS_LEVEL_CONFIGS = [
   },
 ] as const satisfies readonly MarketStatisticsLevelConfig[];
 
-interface MarketStatisticsDurations {
+interface MarketStatisticsDurations extends TimeAsCountUnit {
   interval: number;
-  unit: TimeUnits;
-  count: number;
   level: number;
 };
 

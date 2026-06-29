@@ -55,7 +55,7 @@ const { durations } = MARKET_STATISTICS_LEVEL_CONFIGS.reduce(
   { interval: 0, durations: [] } as { interval: number; durations: number[] },
 );
 
-export const MARKET_STAISTICS_LEVEL_DURATIONS: MarketStatisticsDurations[] =
+export const MARKET_STATISTICS_LEVEL_DURATIONS: MarketStatisticsDurations[] =
   durations.map((duration, level) => ({
     ...convertIntervalToTimeWithUnit(duration),
     interval: duration,

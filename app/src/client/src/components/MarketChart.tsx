@@ -14,11 +14,21 @@ import {
 import type {
   MarketStatisticsStorageService,
 } from '../../../shared/services/market-statistics-storage';
+import type {
+  MarketSnapshot
+} from '../../../shared/types/market-statistics-storage';
 
 interface MarketChartProps {
   storage: MarketStatisticsStorageService | null;
-  version: number;
+  fullSyncVersion: number;
+  lastSnapshot: MarketSnapshot | null;
 }
+
+const toChartTime = (
+  receivedAt: number,
+): UTCTimestamp => {
+  return Math.floor(receivedAt / 1000) as UTCTimestamp;
+};
 
 const createLineData = (
   storage: MarketStatisticsStorageService,
@@ -28,7 +38,7 @@ const createLineData = (
 
   for (let index = 0; index < items.length; index += 1) {
     const snapshot = items.get(index);
-    const time = Math.floor(snapshot.receivedAt / 1000) as UTCTimestamp;
+    const time = toChartTime(snapshot.receivedAt);
 
     dataByTime.set(time, {
       time,
@@ -44,11 +54,36 @@ const createLineData = (
 
 export const MarketChart = ({
   storage,
-  version,
+  fullSyncVersion,
+  lastSnapshot,
 }: MarketChartProps) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+
+  const lastUpdatedTimeRef = useRef<UTCTimestamp | null>(null);
+
+  const updateLineSeries = (
+    series: ISeriesApi<'Line'>,
+    snapshot: MarketSnapshot,
+    lastUpdTimeRef: typeof lastUpdatedTimeRef,
+  ): void => {
+    const time = toChartTime(snapshot.receivedAt);
+
+    if (
+      lastUpdTimeRef.current !== null &&
+      Number(time) < Number(lastUpdTimeRef.current)
+    ) {
+      return;
+    }
+
+    series.update({
+      time,
+      value: snapshot.price,
+    });
+
+    lastUpdTimeRef.current = time;
+  };
 
   useEffect(() => {
     const container = containerRef.current;
@@ -119,8 +154,27 @@ export const MarketChart = ({
     const data = createLineData(storage);
 
     seriesRef.current.setData(data);
+
+    const lastPoint = data.at(-1);
+
+    lastUpdatedTimeRef.current = lastPoint
+      ? Number(lastPoint.time) as UTCTimestamp
+      : null;
+
     chartRef.current?.timeScale().fitContent();
-  }, [storage, version]);
+  }, [storage, fullSyncVersion]);
+
+  useEffect(() => {
+    if (!lastSnapshot || !seriesRef.current) {
+      return;
+    }
+
+    updateLineSeries(
+      seriesRef.current,
+      lastSnapshot,
+      lastUpdatedTimeRef,
+    );
+  }, [lastSnapshot]);
 
   return (
     <div

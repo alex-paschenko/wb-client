@@ -10,6 +10,7 @@ import {
 import { MarketStatisticsStorageService } from '../../../shared/services/market-statistics-storage';
 import type {
   MarketStatisticsItem,
+  MarketSnapshot,
 } from '../../../shared/types/market-statistics-storage';
 import {
   appEvents,
@@ -38,7 +39,9 @@ export const MarketView = ({
 
   const storageRef = useRef<MarketStatisticsStorageService | null>(null);
 
-  const [chartVersion, setChartVersion] = useState(0);
+  const [pointsCount, setPointsCount] = useState(0);
+  const [fullSyncVersion, setFullSyncVersion] = useState(0);
+  const [lastSnapshot, setLastSnapshot] = useState<MarketSnapshot | null>(null);
 
   useEffect(() => {
     const handleFullSync = (
@@ -56,7 +59,10 @@ export const MarketView = ({
       }
 
       storageRef.current = storage;
-      setChartVersion((version) => version + 1);
+
+      setPointsCount(storage.getPointSeriesLength());
+      setFullSyncVersion((version) => version + 1);
+      setLastSnapshot(storage.getLastItem(0) as MarketSnapshot | null);
 
       appEvents.emit(
         'changeMarketStatisticsSubscription',
@@ -78,7 +84,9 @@ export const MarketView = ({
       }
 
       storage.applyDelta(payload.delta);
-      setChartVersion((version) => version + 1);
+
+      setPointsCount(storage.getPointSeriesLength());
+      setLastSnapshot(storage.getLastItem(0) as MarketSnapshot | null);
     };
 
     const unsubscribeFullSync = appEvents.on(
@@ -148,7 +156,8 @@ export const MarketView = ({
           <div className="relative h-full w-full">
             <MarketChart
               storage={storageRef.current}
-              version={chartVersion}
+              fullSyncVersion={fullSyncVersion}
+              lastSnapshot={lastSnapshot}
             />
           </div>
         </div>

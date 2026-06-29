@@ -1,35 +1,18 @@
 import {
   useEffect,
-  useRef,
   useState,
 } from 'react';
-import type {
-  LineData,
-  UTCTimestamp,
-} from 'lightweight-charts';
 
-import {
-  FRONTEND_WS_SUBSCRIPTION_ACTIONS,
-} from '../../../shared/constants/frontend-ws';
-import {
-  MarketStatisticsStorageService
-} from '../../../shared/services/market-statistics-storage';
-import type {
-  MarketSnapshot,
-  MarketStatisticsItem,
-} from '../../../shared/types/market-statistics-storage';
 import type {
   OpenMarketViewState,
 } from '../../../shared/types/frontend-settings';
 import {
-  appEvents,
-} from '../events/app-events';
+  MarketStatisticsController,
+  type MarketStatisticsControllerState,
+} from '../controllers/MarketStatisticsController';
 import { useAppContext } from '../contexts/AppContext';
 import { DashboardItem } from './DashboardItem';
-import {
-  MarketChart,
-  type MarketChartLinePoint,
-} from './MarketChart';
+import { MarketChart } from './MarketChart';
 
 interface MarketViewProps {
   marketName: string;
@@ -37,31 +20,13 @@ interface MarketViewProps {
   index: number;
 }
 
-const toChartTime = (
-  receivedAt: number,
-): UTCTimestamp => {
-  return Math.floor(receivedAt / 1000) as UTCTimestamp;
-};
-
-const createLineData = (
-  storage: MarketStatisticsStorageService,
-): MarketChartLinePoint[] => {
-  const items = storage.createItems('direct');
-  const dataByTime = new Map<UTCTimestamp, LineData<UTCTimestamp>>();
-
-  for (let index = 0; index < items.length; index += 1) {
-    const snapshot = items.get(index);
-    const time = toChartTime(snapshot.receivedAt);
-
-    dataByTime.set(time, {
-      time,
-      value: snapshot.price,
-    });
-  }
-
-  return [...dataByTime.values()]
-    .sort((left, right) => Number(left.time) - Number(right.time));
-};
+const createInitialControllerState =
+  (): MarketStatisticsControllerState => ({
+    pointsCount: 0,
+    fullSyncVersion: 0,
+    chartData: [],
+    lastSnapshot: null,
+  });
 
 export const MarketView = ({
   marketName,
@@ -74,84 +39,23 @@ export const MarketView = ({
     moveMarket,
   } = useAppContext();
 
-  const storageRef = useRef<MarketStatisticsStorageService | null>(null);
-
-  const [pointsCount, setPointsCount] = useState(0);
-  const [fullSyncVersion, setFullSyncVersion] = useState(0);
-  const [chartData, setChartData] = useState<MarketChartLinePoint[]>([]);
-  const [lastSnapshot, setLastSnapshot] =
-    useState<MarketSnapshot | null>(null);
+  const [controllerState, setControllerState] =
+    useState<MarketStatisticsControllerState>(
+      createInitialControllerState,
+    );
 
   useEffect(() => {
-    const handleFullSync = (
-      payload: {
-        marketName: string;
-        levels: MarketStatisticsItem[][];
-      },
-    ) => {
-      const storage = new MarketStatisticsStorageService(marketName);
+    setControllerState(createInitialControllerState());
 
-      for (const [level, items] of payload.levels.entries()) {
-        for (const item of items) {
-          storage.addItem(level, item, 'suppress record delta');
-        }
-      }
-
-      storageRef.current = storage;
-
-      setPointsCount(storage.getPointSeriesLength());
-      setChartData(createLineData(storage));
-      setFullSyncVersion((version) => version + 1);
-      setLastSnapshot(storage.getLastItem(0) as MarketSnapshot | null);
-
-      appEvents.emit(
-        'changeMarketStatisticsSubscription',
-        FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
-        [marketName],
-      );
-    };
-
-    const handleDelta = (
-      payload: {
-        marketName: string;
-        delta: ArrayBuffer;
-      },
-    ) => {
-      const storage = storageRef.current;
-
-      if (!storage) {
-        return;
-      }
-
-      storage.applyDelta(payload.delta);
-
-      setPointsCount(storage.getPointSeriesLength());
-      setLastSnapshot(storage.getLastItem(0) as MarketSnapshot | null);
-    };
-
-    const unsubscribeFullSync = appEvents.on(
-      'marketStatisticsFullSyncReceived',
-      handleFullSync,
+    const controller = new MarketStatisticsController(
       marketName,
+      setControllerState,
     );
 
-    const unsubscribeDelta = appEvents.on(
-      'marketStatisticsDeltaReceived',
-      handleDelta,
-      marketName,
-    );
-
-    appEvents.emit('requestMarketStatisticsFullSync', marketName);
+    controller.start();
 
     return () => {
-      unsubscribeFullSync();
-      unsubscribeDelta();
-
-      appEvents.emit(
-        'changeMarketStatisticsSubscription',
-        FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove,
-        [marketName],
-      );
+      controller.stop();
     };
   }, [marketName]);
 
@@ -195,13 +99,13 @@ export const MarketView = ({
         <div className="min-h-0 flex-1">
           <div className="relative h-full w-full">
             <MarketChart
-              data={chartData}
-              fullSyncVersion={fullSyncVersion}
-              lastSnapshot={lastSnapshot}
+              data={controllerState.chartData}
+              fullSyncVersion={controllerState.fullSyncVersion}
+              lastSnapshot={controllerState.lastSnapshot}
             />
 
             <div className="pointer-events-none absolute left-2 top-2 rounded-md bg-panel/80 px-2 py-1 text-xs text-muted">
-              points: {pointsCount}
+              points: {controllerState.pointsCount}
             </div>
           </div>
         </div>

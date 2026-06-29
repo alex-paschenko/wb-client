@@ -7,15 +7,15 @@ import {
   type IChartApi,
   type ISeriesApi,
   LineSeries,
-  type LineData,
   type UTCTimestamp,
 } from 'lightweight-charts';
 
 import type {
   MarketSnapshot,
 } from '../../../shared/types/market-statistics-storage';
-
-export type MarketChartLinePoint = LineData<UTCTimestamp>;
+import type {
+  MarketChartLinePoint,
+} from '../controllers/MarketStatisticsController';
 
 interface MarketChartProps {
   data: MarketChartLinePoint[];
@@ -29,28 +29,6 @@ const toChartTime = (
   return Math.floor(receivedAt / 1000) as UTCTimestamp;
 };
 
-const updateLineSeries = (
-  series: ISeriesApi<'Line'>,
-  snapshot: MarketSnapshot,
-  lastUpdatedTimeRef: ReturnType<typeof useRef<UTCTimestamp | null>>,
-): void => {
-  const time = toChartTime(snapshot.receivedAt);
-
-  if (
-    lastUpdatedTimeRef.current !== null &&
-    Number(time) < Number(lastUpdatedTimeRef.current)
-  ) {
-    return;
-  }
-
-  series.update({
-    time,
-    value: snapshot.price,
-  });
-
-  lastUpdatedTimeRef.current = time;
-};
-
 export const MarketChart = ({
   data,
   fullSyncVersion,
@@ -60,6 +38,28 @@ export const MarketChart = ({
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const lastUpdatedTimeRef = useRef<UTCTimestamp | null>(null);
+
+  const updateLineSeries = (
+    series: ISeriesApi<'Line'>,
+    snapshot: MarketSnapshot,
+    lastUpdTimeRef: typeof lastUpdatedTimeRef,
+  ): void => {
+    const time = toChartTime(snapshot.receivedAt);
+
+    if (
+      lastUpdTimeRef.current !== null &&
+      Number(time) < Number(lastUpdTimeRef.current)
+    ) {
+      return;
+    }
+
+    series.update({
+      time,
+      value: snapshot.price,
+    });
+
+    lastUpdTimeRef.current = time;
+  };
 
   useEffect(() => {
     const container = containerRef.current;

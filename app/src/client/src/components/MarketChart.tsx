@@ -12,14 +12,13 @@ import {
 } from 'lightweight-charts';
 
 import type {
-  MarketStatisticsStorageService,
-} from '../../../shared/services/market-statistics-storage';
-import type {
-  MarketSnapshot
+  MarketSnapshot,
 } from '../../../shared/types/market-statistics-storage';
 
+export type MarketChartLinePoint = LineData<UTCTimestamp>;
+
 interface MarketChartProps {
-  storage: MarketStatisticsStorageService | null;
+  data: MarketChartLinePoint[];
   fullSyncVersion: number;
   lastSnapshot: MarketSnapshot | null;
 }
@@ -30,60 +29,37 @@ const toChartTime = (
   return Math.floor(receivedAt / 1000) as UTCTimestamp;
 };
 
-const createLineData = (
-  storage: MarketStatisticsStorageService,
-): LineData[] => {
-  const items = storage.createItems('direct');
-  const dataByTime = new Map<UTCTimestamp, LineData>();
+const updateLineSeries = (
+  series: ISeriesApi<'Line'>,
+  snapshot: MarketSnapshot,
+  lastUpdatedTimeRef: ReturnType<typeof useRef<UTCTimestamp | null>>,
+): void => {
+  const time = toChartTime(snapshot.receivedAt);
 
-  for (let index = 0; index < items.length; index += 1) {
-    const snapshot = items.get(index);
-    const time = toChartTime(snapshot.receivedAt);
-
-    dataByTime.set(time, {
-      time,
-      value: snapshot.price,
-    });
+  if (
+    lastUpdatedTimeRef.current !== null &&
+    Number(time) < Number(lastUpdatedTimeRef.current)
+  ) {
+    return;
   }
 
-  return [...dataByTime.values()]
-    .sort((left, right) => {
-      return Number(left.time) - Number(right.time);
-    });
+  series.update({
+    time,
+    value: snapshot.price,
+  });
+
+  lastUpdatedTimeRef.current = time;
 };
 
 export const MarketChart = ({
-  storage,
+  data,
   fullSyncVersion,
   lastSnapshot,
 }: MarketChartProps) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Line'> | null>(null);
-
   const lastUpdatedTimeRef = useRef<UTCTimestamp | null>(null);
-
-  const updateLineSeries = (
-    series: ISeriesApi<'Line'>,
-    snapshot: MarketSnapshot,
-    lastUpdTimeRef: typeof lastUpdatedTimeRef,
-  ): void => {
-    const time = toChartTime(snapshot.receivedAt);
-
-    if (
-      lastUpdTimeRef.current !== null &&
-      Number(time) < Number(lastUpdTimeRef.current)
-    ) {
-      return;
-    }
-
-    series.update({
-      time,
-      value: snapshot.price,
-    });
-
-    lastUpdTimeRef.current = time;
-  };
 
   useEffect(() => {
     const container = containerRef.current;
@@ -143,15 +119,14 @@ export const MarketChart = ({
 
       chartRef.current = null;
       seriesRef.current = null;
+      lastUpdatedTimeRef.current = null;
     };
   }, []);
 
   useEffect(() => {
-    if (!storage || !seriesRef.current) {
+    if (!seriesRef.current) {
       return;
     }
-
-    const data = createLineData(storage);
 
     seriesRef.current.setData(data);
 
@@ -162,7 +137,7 @@ export const MarketChart = ({
       : null;
 
     chartRef.current?.timeScale().fitContent();
-  }, [storage, fullSyncVersion]);
+  }, [data, fullSyncVersion]);
 
   useEffect(() => {
     if (!lastSnapshot || !seriesRef.current) {

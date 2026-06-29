@@ -3,28 +3,65 @@ import {
   useRef,
   useState,
 } from 'react';
+import type {
+  LineData,
+  UTCTimestamp,
+} from 'lightweight-charts';
 
 import {
   FRONTEND_WS_SUBSCRIPTION_ACTIONS,
 } from '../../../shared/constants/frontend-ws';
-import { MarketStatisticsStorageService } from '../../../shared/services/market-statistics-storage';
+import {
+  MarketStatisticsStorageService
+} from '../../../shared/services/market-statistics-storage';
 import type {
-  MarketStatisticsItem,
   MarketSnapshot,
+  MarketStatisticsItem,
 } from '../../../shared/types/market-statistics-storage';
+import type {
+  OpenMarketViewState,
+} from '../../../shared/types/frontend-settings';
 import {
   appEvents,
 } from '../events/app-events';
-import type { OpenMarketViewState } from '../../../shared/types/frontend-settings';
 import { useAppContext } from '../contexts/AppContext';
 import { DashboardItem } from './DashboardItem';
-import { MarketChart } from './MarketChart';
+import {
+  MarketChart,
+  type MarketChartLinePoint,
+} from './MarketChart';
 
 interface MarketViewProps {
   marketName: string;
   size: OpenMarketViewState;
   index: number;
 }
+
+const toChartTime = (
+  receivedAt: number,
+): UTCTimestamp => {
+  return Math.floor(receivedAt / 1000) as UTCTimestamp;
+};
+
+const createLineData = (
+  storage: MarketStatisticsStorageService,
+): MarketChartLinePoint[] => {
+  const items = storage.createItems('direct');
+  const dataByTime = new Map<UTCTimestamp, LineData<UTCTimestamp>>();
+
+  for (let index = 0; index < items.length; index += 1) {
+    const snapshot = items.get(index);
+    const time = toChartTime(snapshot.receivedAt);
+
+    dataByTime.set(time, {
+      time,
+      value: snapshot.price,
+    });
+  }
+
+  return [...dataByTime.values()]
+    .sort((left, right) => Number(left.time) - Number(right.time));
+};
 
 export const MarketView = ({
   marketName,
@@ -41,7 +78,9 @@ export const MarketView = ({
 
   const [pointsCount, setPointsCount] = useState(0);
   const [fullSyncVersion, setFullSyncVersion] = useState(0);
-  const [lastSnapshot, setLastSnapshot] = useState<MarketSnapshot | null>(null);
+  const [chartData, setChartData] = useState<MarketChartLinePoint[]>([]);
+  const [lastSnapshot, setLastSnapshot] =
+    useState<MarketSnapshot | null>(null);
 
   useEffect(() => {
     const handleFullSync = (
@@ -61,6 +100,7 @@ export const MarketView = ({
       storageRef.current = storage;
 
       setPointsCount(storage.getPointSeriesLength());
+      setChartData(createLineData(storage));
       setFullSyncVersion((version) => version + 1);
       setLastSnapshot(storage.getLastItem(0) as MarketSnapshot | null);
 
@@ -155,10 +195,14 @@ export const MarketView = ({
         <div className="min-h-0 flex-1">
           <div className="relative h-full w-full">
             <MarketChart
-              storage={storageRef.current}
+              data={chartData}
               fullSyncVersion={fullSyncVersion}
               lastSnapshot={lastSnapshot}
             />
+
+            <div className="pointer-events-none absolute left-2 top-2 rounded-md bg-panel/80 px-2 py-1 text-xs text-muted">
+              points: {pointsCount}
+            </div>
           </div>
         </div>
       </div>

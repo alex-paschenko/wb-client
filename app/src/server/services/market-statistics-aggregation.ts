@@ -1,7 +1,7 @@
 import { SERVER_EVENT } from '../constants/events.js';
 import {
   MARKET_STATISTICS_LEVEL_CONFIGS
-} from '../../shared/constants/market-statistics-storage.js';
+} from '../../shared/constants/market-statistics-config.js';
 import { eventBus } from './event-bus.js';
 
 import type {

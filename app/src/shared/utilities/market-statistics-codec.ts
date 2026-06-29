@@ -1,6 +1,6 @@
 import {
   MARKET_STATISTICS_LEVEL_CONFIGS,
-} from '../constants/market-statistics-storage.js';
+} from '../constants/market-statistics-config.js';
 import type {
   MarketCandle,
   MarketSnapshot,

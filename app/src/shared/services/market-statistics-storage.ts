@@ -1,6 +1,8 @@
 import {
+  MARKET_STATISTICS_LEVEL_CONFIGS
+} from '../constants/market-statistics-config.js';
+import {
   MARKET_STATISTICS_DELTA_OPERATION_TYPE,
-  MARKET_STATISTICS_LEVEL_CONFIGS,
 } from '../constants/market-statistics-storage.js';
 
 import type {

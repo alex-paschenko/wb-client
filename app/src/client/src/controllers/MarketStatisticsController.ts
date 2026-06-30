@@ -1,4 +1,5 @@
 import type {
+  CandlestickData,
   LineData,
   UTCTimestamp,
 } from 'lightweight-charts';
@@ -6,10 +7,17 @@ import type {
 import {
   FRONTEND_WS_SUBSCRIPTION_ACTIONS,
 } from '../../../shared/constants/frontend-ws';
+import {
+  MARKET_STATISTICS_LEVEL_DURATIONS,
+} from '../../../shared/constants/market-statistics-config';
 import { MarketStatisticsStorageService } from '../../../shared/services/market-statistics-storage';
 import type {
+  MarketCandle,
   MarketSnapshot,
 } from '../../../shared/types/market-statistics-storage';
+import type {
+  MarketRollingStatistics,
+} from '../../../shared/types/market-statistics-rolling';
 import type {
   FullMarketStatisticsPayload,
   MarketStatisticsDeltaPayload,
@@ -17,17 +25,26 @@ import type {
 import {
   appEvents,
 } from '../events/app-events';
-import type {
-  MarketRollingStatistics,
-} from '../../../shared/types/market-statistics-rolling';
 
 export type MarketChartLinePoint = LineData<UTCTimestamp>;
 
+export type MarketChartCandlePoint = CandlestickData<UTCTimestamp>;
+
+export type MarketChartCandleSeries = {
+  level: number;
+  data: MarketChartCandlePoint[];
+};
+
+export type MarketStatisticsChartMode = {
+  level: number;
+  interval: number;
+};
+
 export interface MarketStatisticsControllerState {
   pointsCount: number;
-  fullSyncVersion: number;
-  chartData: MarketChartLinePoint[];
-  lastSnapshot: MarketSnapshot | null;
+  chartVersion: number;
+  snapshotData: MarketChartLinePoint[];
+  candleSeries: MarketChartCandleSeries[];
   rollingStatistics: MarketRollingStatistics | null;
 }
 
@@ -35,27 +52,36 @@ type StateListener = (
   state: MarketStatisticsControllerState,
 ) => void;
 
+const defaultChartMode: MarketStatisticsChartMode = {
+  level: MARKET_STATISTICS_LEVEL_DURATIONS[0].level,
+  interval: MARKET_STATISTICS_LEVEL_DURATIONS[0].interval,
+};
+
 export class MarketStatisticsController {
   private storage: MarketStatisticsStorageService | null = null;
 
+  private chartMode: MarketStatisticsChartMode = defaultChartMode;
+
   private state: MarketStatisticsControllerState = {
     pointsCount: 0,
-    fullSyncVersion: 0,
-    chartData: [],
-    lastSnapshot: null,
+    chartVersion: 0,
+    snapshotData: [],
+    candleSeries: [],
     rollingStatistics: null,
   };
-
-  private rollingStatistics: MarketRollingStatistics | null = null;
 
   private unsubscribeFullSync: (() => void) | null = null;
   private unsubscribeDelta: (() => void) | null = null;
   private unsubscribeRolling: (() => void) | null = null;
+  private windowTimer: ReturnType<typeof setInterval> | null = null;
 
   public constructor(
     private readonly marketName: string,
     private readonly onStateChanged: StateListener,
-  ) {}
+    chartMode: MarketStatisticsChartMode = defaultChartMode,
+  ) {
+    this.chartMode = chartMode;
+  }
 
   public start(): void {
     this.unsubscribeFullSync = appEvents.on(
@@ -78,6 +104,10 @@ export class MarketStatisticsController {
       this.marketName,
     );
 
+    this.windowTimer = setInterval(() => {
+      this.refreshChartData();
+    }, 30_000);
+
     appEvents.emit(
       'changeMarketRollingSubscription',
       FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
@@ -95,23 +125,33 @@ export class MarketStatisticsController {
   public stop(): void {
     this.unsubscribeFullSync?.();
     this.unsubscribeDelta?.();
+    this.unsubscribeRolling?.();
 
     this.unsubscribeFullSync = null;
     this.unsubscribeDelta = null;
-
-    this.unsubscribeRolling?.();
     this.unsubscribeRolling = null;
+
+    if (this.windowTimer) {
+      clearInterval(this.windowTimer);
+      this.windowTimer = null;
+    }
 
     appEvents.emit(
       'changeMarketRollingSubscription',
       FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove,
       [this.marketName],
     );
+
     appEvents.emit(
       'changeMarketStatisticsSubscription',
       FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove,
       [this.marketName],
     );
+  }
+
+  public setChartMode(chartMode: MarketStatisticsChartMode): void {
+    this.chartMode = chartMode;
+    this.refreshChartData();
   }
 
   private handleFullSync(
@@ -131,22 +171,24 @@ export class MarketStatisticsController {
     }
 
     this.storage = storage;
-
-    this.state = {
-      pointsCount: storage.getPointSeriesLength(),
-      fullSyncVersion: this.state.fullSyncVersion + 1,
-      chartData: this.createLineData(storage),
-      lastSnapshot: storage.getLastItem(0) as MarketSnapshot | null,
-      rollingStatistics: this.rollingStatistics,
-    };
-
-    this.emitState();
+    this.refreshChartData();
 
     appEvents.emit(
       'changeMarketStatisticsSubscription',
       FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
       [this.marketName],
     );
+  }
+
+  private handleDelta(
+    payload: MarketStatisticsDeltaPayload,
+  ): void {
+    if (!this.storage) {
+      return;
+    }
+
+    this.storage.applyDelta(payload.delta);
+    this.refreshChartData();
   }
 
   private handleRollingUpdated(
@@ -160,36 +202,63 @@ export class MarketStatisticsController {
     this.emitState();
   }
 
-  private handleDelta(
-    payload: MarketStatisticsDeltaPayload,
-  ): void {
+  private refreshChartData(): void {
     if (!this.storage) {
       return;
     }
 
-    this.storage.applyDelta(payload.delta);
+    const chartData = this.createChartData(this.storage);
 
     this.state = {
       ...this.state,
       pointsCount: this.storage.getPointSeriesLength(),
-      lastSnapshot: this.storage.getLastItem(0) as MarketSnapshot | null,
+      chartVersion: this.state.chartVersion + 1,
+      snapshotData: chartData.snapshotData,
+      candleSeries: chartData.candleSeries,
     };
 
     this.emitState();
   }
 
-  private emitState(): void {
-    this.onStateChanged(this.state);
+  private createChartData(
+    storage: MarketStatisticsStorageService,
+  ): {
+    snapshotData: MarketChartLinePoint[];
+    candleSeries: MarketChartCandleSeries[];
+  } {
+    const itemsByLevel = storage.getAllItemsByLevel();
+    const to = Date.now();
+    const from = to - this.chartMode.interval;
+
+    return {
+      snapshotData: this.createSnapshotData(
+        itemsByLevel[0] as MarketSnapshot[],
+        from,
+        to,
+      ),
+      candleSeries: this.createCandleSeries(
+        itemsByLevel,
+        from,
+        to,
+      ),
+    };
   }
 
-  private createLineData(
-    storage: MarketStatisticsStorageService,
+  private createSnapshotData(
+    snapshots: MarketSnapshot[],
+    from: number,
+    to: number,
   ): MarketChartLinePoint[] {
-    const items = storage.createItems('direct');
     const dataByTime = new Map<UTCTimestamp, MarketChartLinePoint>();
 
-    for (let index = 0; index < items.length; index += 1) {
-      const snapshot = items.get(index);
+    for (const snapshot of snapshots) {
+      if (
+        snapshot.receivedAt < from ||
+        snapshot.receivedAt > to
+      ) {
+        continue;
+      }
+
       const time = this.toChartTime(snapshot.receivedAt);
 
       dataByTime.set(time, {
@@ -200,6 +269,59 @@ export class MarketStatisticsController {
 
     return [...dataByTime.values()]
       .sort((left, right) => Number(left.time) - Number(right.time));
+  }
+
+  private createCandleSeries(
+    itemsByLevel: unknown[][],
+    from: number,
+    to: number,
+  ): MarketChartCandleSeries[] {
+    const series: MarketChartCandleSeries[] = [];
+
+    for (let level = 1; level <= this.chartMode.level; level += 1) {
+      const candles = (itemsByLevel[level] ?? []) as MarketCandle[];
+
+      series.push({
+        level,
+        data: this.createCandleData(candles, from, to),
+      });
+    }
+
+    return series;
+  }
+
+  private createCandleData(
+    candles: MarketCandle[],
+    from: number,
+    to: number,
+  ): MarketChartCandlePoint[] {
+    const dataByTime = new Map<UTCTimestamp, MarketChartCandlePoint>();
+
+    for (const candle of candles) {
+      if (
+        candle.endedAt < from ||
+        candle.startedAt > to
+      ) {
+        continue;
+      }
+
+      const time = this.toChartTime(candle.startedAt);
+
+      dataByTime.set(time, {
+        time,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      });
+    }
+
+    return [...dataByTime.values()]
+      .sort((left, right) => Number(left.time) - Number(right.time));
+  }
+
+  private emitState(): void {
+    this.onStateChanged(this.state);
   }
 
   private toChartTime(

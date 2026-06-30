@@ -213,7 +213,6 @@ export class AppWsServer {
     socket: WebSocket,
     _message: FrontendWsClientPongMessage,
   ): void {
-    console.log(`[${new Date().toLocaleTimeString('ru-RU')}] client pong received`)
     this.lastClientPongAtBySocket.set(socket, Date.now());
   }
 

@@ -3,63 +3,34 @@ import {
   useRef,
 } from 'react';
 import {
+  CandlestickSeries,
   createChart,
   type IChartApi,
   type ISeriesApi,
   LineSeries,
-  type UTCTimestamp,
 } from 'lightweight-charts';
 
 import type {
-  MarketSnapshot,
-} from '../../../shared/types/market-statistics-storage';
-import type {
+  MarketChartCandleSeries,
   MarketChartLinePoint,
 } from '../controllers/MarketStatisticsController';
 
 interface MarketChartProps {
-  data: MarketChartLinePoint[];
-  fullSyncVersion: number;
-  lastSnapshot: MarketSnapshot | null;
+  snapshotData: MarketChartLinePoint[];
+  candleSeries: MarketChartCandleSeries[];
+  chartVersion: number;
 }
 
-const toChartTime = (
-  receivedAt: number,
-): UTCTimestamp => {
-  return Math.floor(receivedAt / 1000) as UTCTimestamp;
-};
-
 export const MarketChart = ({
-  data,
-  fullSyncVersion,
-  lastSnapshot,
+  snapshotData,
+  candleSeries,
+  chartVersion,
 }: MarketChartProps) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const seriesRef = useRef<ISeriesApi<'Line'> | null>(null);
-  const lastUpdatedTimeRef = useRef<UTCTimestamp | null>(null);
-
-  const updateLineSeries = (
-    series: ISeriesApi<'Line'>,
-    snapshot: MarketSnapshot,
-    lastUpdTimeRef: typeof lastUpdatedTimeRef,
-  ): void => {
-    const time = toChartTime(snapshot.receivedAt);
-
-    if (
-      lastUpdTimeRef.current !== null &&
-      Number(time) < Number(lastUpdTimeRef.current)
-    ) {
-      return;
-    }
-
-    series.update({
-      time,
-      value: snapshot.price,
-    });
-
-    lastUpdTimeRef.current = time;
-  };
+  const snapshotSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const candleSeriesByLevelRef =
+    useRef<Map<number, ISeriesApi<'Candlestick'>>>(new Map());
 
   useEffect(() => {
     const container = containerRef.current;
@@ -97,12 +68,11 @@ export const MarketChart = ({
       },
     });
 
-    const series = chart.addSeries(LineSeries, {
+    snapshotSeriesRef.current = chart.addSeries(LineSeries, {
       lineWidth: 2,
     });
 
     chartRef.current = chart;
-    seriesRef.current = series;
 
     const resizeObserver = new ResizeObserver(() => {
       chart.applyOptions({
@@ -118,38 +88,49 @@ export const MarketChart = ({
       chart.remove();
 
       chartRef.current = null;
-      seriesRef.current = null;
-      lastUpdatedTimeRef.current = null;
+      snapshotSeriesRef.current = null;
+      candleSeriesByLevelRef.current.clear();
     };
   }, []);
 
   useEffect(() => {
-    if (!seriesRef.current) {
+    const chart = chartRef.current;
+    const snapshotSeries = snapshotSeriesRef.current;
+
+    if (!chart || !snapshotSeries) {
       return;
     }
 
-    seriesRef.current.setData(data);
+    snapshotSeries.setData(snapshotData);
 
-    const lastPoint = data.at(-1);
-
-    lastUpdatedTimeRef.current = lastPoint
-      ? Number(lastPoint.time) as UTCTimestamp
-      : null;
-
-    chartRef.current?.timeScale().fitContent();
-  }, [data, fullSyncVersion]);
-
-  useEffect(() => {
-    if (!lastSnapshot || !seriesRef.current) {
-      return;
-    }
-
-    updateLineSeries(
-      seriesRef.current,
-      lastSnapshot,
-      lastUpdatedTimeRef,
+    const activeLevels = new Set(
+      candleSeries.map((series) => series.level),
     );
-  }, [lastSnapshot]);
+
+    for (const [level, series] of candleSeriesByLevelRef.current) {
+      if (!activeLevels.has(level)) {
+        chart.removeSeries(series);
+        candleSeriesByLevelRef.current.delete(level);
+      }
+    }
+
+    for (const item of candleSeries) {
+      let series = candleSeriesByLevelRef.current.get(item.level);
+
+      if (!series) {
+        series = chart.addSeries(CandlestickSeries);
+        candleSeriesByLevelRef.current.set(item.level, series);
+      }
+
+      series.setData(item.data);
+    }
+
+    chart.timeScale().fitContent();
+  }, [
+    snapshotData,
+    candleSeries,
+    chartVersion,
+  ]);
 
   return (
     <div

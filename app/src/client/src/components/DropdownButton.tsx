@@ -1,17 +1,17 @@
 import { useState } from 'react';
 
-interface DropdownItem<TValue extends string> {
+interface DropdownItem<TValue extends string | number> {
   value: TValue;
   label: string;
 }
 
-interface DropdownButtonProps<TValue extends string> {
+interface DropdownButtonProps<TValue extends string | number> {
   label: string;
   items: DropdownItem<TValue>[];
   onSelect: (value: TValue) => void;
 }
 
-export function DropdownButton<TValue extends string>({
+export function DropdownButton<TValue extends string | number>({
   label,
   items,
   onSelect,

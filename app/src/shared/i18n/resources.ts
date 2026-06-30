@@ -58,6 +58,35 @@ export const i18nResources = {
         invalidSettingsPayload: 'Некорректные настройки',
         internalServerError: 'Внутренняя ошибка сервера',
       },
+
+      time: {
+        units: {
+          milliseconds_one: '{{count}} миллисекунда',
+          milliseconds_few: '{{count}} миллисекунды',
+          milliseconds_many: '{{count}} миллисекунд',
+          milliseconds_other: '{{count}} миллисекунды',
+
+          seconds_one: '{{count}} секунда',
+          seconds_few: '{{count}} секунды',
+          seconds_many: '{{count}} секунд',
+          seconds_other: '{{count}} секунды',
+
+          minutes_one: '{{count}} минута',
+          minutes_few: '{{count}} минуты',
+          minutes_many: '{{count}} минут',
+          minutes_other: '{{count}} минуты',
+
+          hours_one: '{{count}} час',
+          hours_few: '{{count}} часа',
+          hours_many: '{{count}} часов',
+          hours_other: '{{count}} часа',
+
+          days_one: '{{count}} день',
+          days_few: '{{count}} дня',
+          days_many: '{{count}} дней',
+          days_other: '{{count}} дня',
+        },
+      },
     },
   },
 
@@ -117,6 +146,21 @@ export const i18nResources = {
         invalidTheme: 'Invalid theme',
         invalidSettingsPayload: 'Invalid settings payload',
         internalServerError: 'Internal server error',
+      },
+
+      time: {
+        units: {
+          milliseconds_one: '{{count}} millisecond',
+          milliseconds_other: '{{count}} milliseconds',
+          seconds_one: '{{count}} second',
+          seconds_other: '{{count}} seconds',
+          minutes_one: '{{count}} minute',
+          minutes_other: '{{count}} minutes',
+          hours_one: '{{count}} hour',
+          hours_other: '{{count}} hours',
+          days_one: '{{count}} day',
+          days_other: '{{count}} days',
+        },
       },
     },
   },

@@ -3,6 +3,7 @@ import { useState } from 'react';
 interface DropdownItem<TValue extends string | number> {
   value: TValue;
   label: string;
+  key?: string;
 }
 
 interface DropdownButtonProps<TValue extends string | number> {
@@ -38,7 +39,7 @@ export function DropdownButton<TValue extends string | number>({
       >
         {items.map((item) => (
           <button
-            key={item.value}
+            key={item.key ?? item.value}
             className="app-dropdown-item"
             type="button"
             onClick={() => {

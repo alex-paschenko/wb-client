@@ -2,7 +2,7 @@ import {
   convertIntervalToTimeWithUnit,
   type TimeAsCountUnit,
 } from '../utilities/time';
-import { DAYS, HOUR, HOURS, MINUTE, MINUTES, SECONDS } from './time';
+import { DAY, DAYS, HOUR, HOURS, MINUTE, MINUTES, SECONDS } from './time';
 import type {
   MarketStatisticsLevelConfig
 } from '../types/market-statistics-storage.js';
@@ -40,22 +40,38 @@ export const MARKET_STATISTICS_LEVEL_CONFIGS = [
 
 interface MarketStatisticsDurations extends TimeAsCountUnit {
   interval: number;
-  level: number;
 };
 
-const { durations } = MARKET_STATISTICS_LEVEL_CONFIGS.reduce(
-  (acc, configItem) => {
-    const newInterval = acc.interval + configItem.interval;
-    acc.interval = newInterval;
-    acc.durations.push(newInterval);
-    return acc;
-  },
-  { interval: 0, durations: [] } as { interval: number; durations: number[] },
-);
+const intervals = [
+  5 * MINUTES,
+  15 * MINUTES,
+  1 * HOUR,
+  3 * HOURS,
+  12 * HOURS,
+  1 * DAY,
+  3 * DAYS,
+  7 * DAYS,
+];
+
+function intervalToLevel (interval: number): number {
+  let level = 0;
+  let summIntervals = 0;
+
+  for (level = 0; level++; level <= MARKET_STATISTICS_LEVEL_CONFIGS.length - 1) {
+    summIntervals += MARKET_STATISTICS_LEVEL_CONFIGS[level].interval;
+    if (summIntervals >= interval) {
+      return level;
+    }
+  }
+
+  return level;
+}
 
 export const MARKET_STATISTICS_LEVEL_DURATIONS: MarketStatisticsDurations[] =
-  durations.map((duration, level) => ({
-    ...convertIntervalToTimeWithUnit(duration),
-    interval: duration,
-    level,
-  }));
+  intervals.map((interval) => {
+    return {
+      ...convertIntervalToTimeWithUnit(interval),
+      interval,
+    }
+  }
+);

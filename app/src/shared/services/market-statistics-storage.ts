@@ -270,6 +270,10 @@ export class MarketStatisticsStorageService {
     return this.levels[level] ?? null;
   }
 
+  getNumOfLevels():number {
+    return this.levels.length;
+  };
+
   getStartedAt(level: number): number | null {
     return this.levels[level]?.startedAt ?? null;
   }
@@ -304,6 +308,7 @@ export class MarketStatisticsStorageService {
   readItemsBefore(
     level: number,
     cutoff: number,
+    direction: MarketStatisticsItemsDirection = 'direct',
   ): MarketStatisticsItem[] {
     const levelStorage = this.levels[level];
     const config = MARKET_STATISTICS_LEVEL_CONFIGS[level];
@@ -327,14 +332,53 @@ export class MarketStatisticsStorageService {
           : (item as MarketCandle).endedAt;
 
         if (itemEndedAt >= cutoff) {
-          return result;
+          return direction === 'direct' ? result : result.reverse();
         }
 
         result.push(item);
       }
     }
 
-    return result;
+    return direction === 'direct' ? result : result.reverse();
+  }
+
+  readItemsAfter(
+    level: number,
+    cutoff: number,
+    direction: MarketStatisticsItemsDirection = 'direct',
+  ): MarketStatisticsItem[] {
+    const levelStorage = this.levels[level];
+    const config = MARKET_STATISTICS_LEVEL_CONFIGS[level];
+
+    if (!levelStorage || !config) {
+      return [];
+    }
+
+    const result: MarketStatisticsItem[] = [];
+
+    for (let chunkIndex = levelStorage.chunks.length - 1; chunkIndex >= 0; chunkIndex--) {
+      const chunk = levelStorage.chunks[chunkIndex];
+
+      for (let itemIndex = chunk.end - 1; itemIndex >= chunk.start; itemIndex--) {
+        const item = readMarketStatisticsItemFromFloat64Array(
+          chunk.data,
+          itemIndex,
+          level,
+        );
+
+        const itemStartedAt = config.sourceType === 'snapshot'
+          ? (item as MarketSnapshot).receivedAt
+          : (item as MarketCandle).startedAt;
+
+        if (itemStartedAt < cutoff) {
+          return direction === 'direct' ? result.reverse() : result;
+        }
+
+        result.push(item);
+      }
+    }
+
+    return direction === 'direct' ? result.reverse() : result;
   }
 
   public createItems(
@@ -347,16 +391,8 @@ export class MarketStatisticsStorageService {
     );
   }
 
-  public getPointSeriesLength(): number {
-    return this.levels.reduce(
-      (sum, level) => sum + this.getLevelItemsCount(level),
-      0,
-    );
-  }
-
   public getSnapshotByPointIndex(index: number): MarketSnapshot {
     const resolved = this.resolvePointIndex(index);
-    const config = MARKET_STATISTICS_LEVEL_CONFIGS[resolved.level];
 
     return readMarketStatisticsItemFromFloat64Array(
       resolved.chunk.data,
@@ -532,7 +568,7 @@ class MarketStatisticsItemsView implements MarketStatisticsItems {
   ) {}
 
   public get length(): number {
-    return this.storage.getPointSeriesLength();
+    return this.storage.size();
   }
 
   public get(index: number): MarketSnapshot {

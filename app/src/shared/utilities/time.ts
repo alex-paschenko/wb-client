@@ -1,3 +1,7 @@
+import {
+  MARKET_STATISTICS_LEVEL_CONFIGS
+} from '../constants/market-statistics-config';
+
 export type TimeUnits =
   | 'milliseconds'
   | 'seconds'
@@ -39,3 +43,15 @@ export function convertIntervalToTimeWithUnit (
 
   return intervalWithUnit;
 };
+
+const intervalToLevel = (interval: number): number =>
+  MARKET_STATISTICS_LEVEL_CONFIGS.reduce(
+    (acc, configEntry, index) => {
+      if (acc.summInterval < interval) {
+        acc.level = index;
+        acc.summInterval += configEntry.interval;
+      }
+      return acc;
+    },
+    { level: 0, summInterval: 0 },
+  ).level;

@@ -14,14 +14,15 @@ import {
 import type {
   OpenMarketViewState,
 } from '../../../shared/types/frontend-settings';
-import { DropdownButton } from './DropdownButton';
 import {
+  createInitialMarketStatisticsControllerState,
   MarketStatisticsController,
   type MarketStatisticsChartMode,
   type MarketStatisticsControllerState,
 } from '../controllers/MarketStatisticsController';
 import { useAppContext } from '../contexts/AppContext';
 import { DashboardItem } from './DashboardItem';
+import { DropdownButton } from './DropdownButton';
 import { MarketChart } from './MarketChart';
 
 interface MarketViewProps {
@@ -33,26 +34,12 @@ interface MarketViewProps {
 const defaultDuration = MARKET_STATISTICS_LEVEL_DURATIONS[0];
 
 const createChartMode = (
-  level: number,
+  interval: number,
 ): MarketStatisticsChartMode => {
-  const duration =
-    MARKET_STATISTICS_LEVEL_DURATIONS.find((item) => item.level === level) ??
-    defaultDuration;
-
   return {
-    level: duration.level,
-    interval: duration.interval,
+    interval,
   };
 };
-
-const createInitialControllerState =
-  (): MarketStatisticsControllerState => ({
-    pointsCount: 0,
-    chartVersion: 0,
-    snapshotData: [],
-    candleSeries: [],
-    rollingStatistics: null,
-  });
 
 export const MarketView = ({
   marketName,
@@ -70,23 +57,25 @@ export const MarketView = ({
   const controllerRef =
     useRef<MarketStatisticsController | null>(null);
 
-  const [selectedLevel, setSelectedLevel] =
-    useState(defaultDuration.level);
+  const [selectedInterval, setSelectedInterval] =
+    useState(defaultDuration.interval);
 
   const [controllerState, setControllerState] =
     useState<MarketStatisticsControllerState>(
-      createInitialControllerState,
+      () => createInitialMarketStatisticsControllerState(
+        selectedInterval,
+      ),
     );
 
   const selectedDuration = useMemo(() => {
     return MARKET_STATISTICS_LEVEL_DURATIONS.find(
-      (item) => item.level === selectedLevel,
+      (item) => item.interval === selectedInterval,
     ) ?? defaultDuration;
-  }, [selectedLevel]);
+  }, [selectedInterval]);
 
   const durationItems = useMemo(() => {
     return MARKET_STATISTICS_LEVEL_DURATIONS.map((duration) => ({
-      value: duration.level,
+      value: duration.interval,
       label: t(`time.units.${duration.unit}`, {
         count: duration.count,
       }),
@@ -94,12 +83,16 @@ export const MarketView = ({
   }, [t]);
 
   useEffect(() => {
-    setControllerState(createInitialControllerState());
+    setControllerState(
+      createInitialMarketStatisticsControllerState(
+        selectedInterval,
+      ),
+    );
 
     const controller = new MarketStatisticsController(
       marketName,
       setControllerState,
-      createChartMode(selectedLevel),
+      createChartMode(selectedInterval),
     );
 
     controllerRef.current = controller;
@@ -113,9 +106,9 @@ export const MarketView = ({
 
   useEffect(() => {
     controllerRef.current?.setChartMode(
-      createChartMode(selectedLevel),
+      createChartMode(selectedInterval),
     );
-  }, [selectedLevel]);
+  }, [selectedInterval]);
 
   return (
     <DashboardItem
@@ -181,7 +174,7 @@ export const MarketView = ({
                 count: selectedDuration.count,
               })}
               items={durationItems}
-              onSelect={(level) => setSelectedLevel(level)}
+              onSelect={(interval) => setSelectedInterval(interval)}
             />
           </div>
         </header>
@@ -192,6 +185,7 @@ export const MarketView = ({
               snapshotData={controllerState.snapshotData}
               candleSeries={controllerState.candleSeries}
               chartVersion={controllerState.chartVersion}
+              visibleRange={controllerState.visibleRange}
             />
 
             <div className="pointer-events-none absolute left-2 top-2 rounded-md bg-panel/80 px-2 py-1 text-xs text-muted">

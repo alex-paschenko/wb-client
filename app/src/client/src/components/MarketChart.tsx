@@ -13,18 +13,21 @@ import {
 import type {
   MarketChartCandleSeries,
   MarketChartLinePoint,
+  MarketChartVisibleRange,
 } from '../controllers/MarketStatisticsController';
 
 interface MarketChartProps {
   snapshotData: MarketChartLinePoint[];
   candleSeries: MarketChartCandleSeries[];
   chartVersion: number;
+  visibleRange: MarketChartVisibleRange;
 }
 
 export const MarketChart = ({
   snapshotData,
   candleSeries,
   chartVersion,
+  visibleRange,
 }: MarketChartProps) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -65,6 +68,8 @@ export const MarketChart = ({
         borderVisible: false,
         timeVisible: true,
         secondsVisible: true,
+        minBarSpacing: 0.02,
+        barSpacing: 0.2,
       },
     });
 
@@ -125,11 +130,12 @@ export const MarketChart = ({
       series.setData(item.data);
     }
 
-    chart.timeScale().fitContent();
+    chart.timeScale().setVisibleRange(visibleRange);
   }, [
     snapshotData,
     candleSeries,
     chartVersion,
+    visibleRange,
   ]);
 
   return (

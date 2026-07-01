@@ -16,6 +16,9 @@ import { marketStatisticsPersistenceBufferService } from './services/market-stat
 import { marketStatisticsRollingService } from './services/market-statistics-rolling.js';
 import { marketStatisticsRestoreService } from './services/market-statistics-restore.js';
 import { frontendWsService } from './services/frontend-ws.js';
+import {
+  marketStatisticsDbPromotionService,
+} from './services/market-statistics-db-promotion.js';
 
 const port = Number(process.env.PORT ?? 3000);
 const app = createApp();
@@ -68,6 +71,8 @@ const shutdown = async (signal: string): Promise<void> => {
 
 const start = async (): Promise<void> => {
   await waitForDatabase();
+
+  await marketStatisticsDbPromotionService.run();
 
   marketStatisticsAggregationService.start();
   marketStatisticsPersistenceBufferService.start();

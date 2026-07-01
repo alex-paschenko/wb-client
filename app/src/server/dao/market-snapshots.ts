@@ -83,6 +83,17 @@ export class MarketSnapshotsDao {
     return rows.map((row) => row.snapshot);
   }
 
+  public async getBefore(
+    timeThreshold: number,
+  ): Promise<MarketSnapshotRow[]> {
+    const rows = await this.marketSnapshotsSelect(this.q, {
+      where: this.q`ms.received_at < ${timeThreshold}`,
+      orderBy: this.q`ms.market_name asc, ms.received_at asc`,
+    });
+
+    return rows.map((row) => row.snapshot);
+  }
+
   private async insertMany(
     snapshots: MarketSnapshotRow[],
     query: Query = this.q,

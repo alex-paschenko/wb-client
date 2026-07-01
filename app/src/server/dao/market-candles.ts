@@ -105,6 +105,25 @@ export class MarketCandlesDao {
     return rows.map((row) => row.candle) ?? [];
   }
 
+  public async getBeforeByLevel(
+    level: number,
+    timeThreshold: number,
+  ): Promise<MarketCandleRow[]> {
+    const rows = await this.marketCandlesSelect(this.q, {
+      where: this.q`
+        mc.level = ${level}
+        and mc.ended_at < ${timeThreshold}
+      `,
+      orderBy: this.q`
+        mc.market_name asc,
+        mc.started_at asc,
+        mc.ended_at asc
+      `,
+    });
+
+    return rows.map((row) => row.candle);
+  }
+
   public async refresh(
     input: RefreshMarketCandlesInput,
     query: Query = this.q,

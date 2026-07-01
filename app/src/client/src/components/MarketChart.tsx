@@ -130,7 +130,13 @@ export const MarketChart = ({
       series.setData(item.data);
     }
 
-    chart.timeScale().setVisibleRange(visibleRange);
+    const hasData =
+      snapshotData.length > 0 ||
+      candleSeries.some((series) => series.data.length > 0);
+
+    if (hasData) {
+      chart.timeScale().setVisibleRange(visibleRange);
+    }
   }, [
     snapshotData,
     candleSeries,

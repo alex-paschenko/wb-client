@@ -167,16 +167,6 @@ export const MarketView = ({
               </span>
             </>
           )}
-
-          <div className="ml-auto">
-            <DropdownButton
-              label={t(`time.units.${selectedDuration.unit}`, {
-                count: selectedDuration.count,
-              })}
-              items={durationItems}
-              onSelect={(interval) => setSelectedInterval(interval)}
-            />
-          </div>
         </header>
 
         <div className="min-h-0 flex-1">
@@ -188,8 +178,18 @@ export const MarketView = ({
               visibleRange={controllerState.visibleRange}
             />
 
-            <div className="pointer-events-none absolute left-2 top-2 rounded-md bg-panel/80 px-2 py-1 text-xs text-muted">
-              points: {controllerState.pointsCount}
+            <div className="absolute left-2 top-2 z-30 flex items-center gap-2 rounded-md bg-panel/45 px-2 py-1 text-xs text-muted opacity-45 transition hover:bg-panel/90 hover:opacity-100">
+              <span>
+                points: {controllerState.pointsCount}
+              </span>
+              <DropdownButton
+                label={t(`time.units.${selectedDuration.unit}`, {
+                  count: selectedDuration.count,
+                })}
+                items={durationItems}
+                onSelect={(interval) => setSelectedInterval(interval)}
+                panelMaxHeightClassName="max-h-40"
+              />
             </div>
           </div>
         </div>

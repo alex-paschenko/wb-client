@@ -1,8 +1,5 @@
 import {
-  useEffect,
   useMemo,
-  useRef,
-  useState,
 } from 'react';
 
 import {
@@ -18,14 +15,16 @@ import type {
 } from '../../../shared/types/frontend-settings';
 
 import {
-  createInitialMarketStatisticsControllerState,
   MarketStatisticsController,
-  type MarketStatisticsControllerState,
 } from '../controllers/MarketStatisticsController';
 
 import {
   useAppContext,
 } from '../contexts/AppContext';
+
+import {
+  useController,
+} from '../hooks/useController';
 
 import {
   DashboardItem,
@@ -60,15 +59,16 @@ export const MarketView = ({
     moveMarket,
   } = useAppContext();
 
-  const controllerRef =
-    useRef<MarketStatisticsController | null>(null);
-
-  const [controllerState, setControllerState] =
-    useState<MarketStatisticsControllerState>(
-      () => createInitialMarketStatisticsControllerState(
-        defaultDuration.interval,
-      ),
+  const controller = useMemo(() => {
+    return new MarketStatisticsController(
+      marketName,
+      {
+        interval: defaultDuration.interval,
+      },
     );
+  }, [marketName]);
+
+  const controllerState = useController(controller);
 
   const selectedDuration = useMemo(() => {
     return MARKET_STATISTICS_LEVEL_DURATIONS.find(
@@ -84,30 +84,6 @@ export const MarketView = ({
       }),
     }));
   }, [t]);
-
-  useEffect(() => {
-    setControllerState(
-      createInitialMarketStatisticsControllerState(
-        defaultDuration.interval,
-      ),
-    );
-
-    const controller = new MarketStatisticsController(
-      marketName,
-      setControllerState,
-      {
-        interval: defaultDuration.interval,
-      },
-    );
-
-    controllerRef.current = controller;
-    controller.start();
-
-    return () => {
-      controller.stop();
-      controllerRef.current = null;
-    };
-  }, [marketName]);
 
   return (
     <DashboardItem
@@ -192,7 +168,7 @@ export const MarketView = ({
                 })}
                 items={durationItems}
                 onSelect={(interval) => {
-                  controllerRef.current?.setInterval(interval);
+                  controller.setInterval(interval);
                 }}
                 panelMaxHeightClassName="max-h-40"
               />

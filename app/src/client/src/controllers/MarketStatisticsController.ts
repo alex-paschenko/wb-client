@@ -19,7 +19,6 @@ import {
 import type {
   MarketCandle,
   MarketSnapshot,
-  MarketStatisticsItem,
 } from '../../../shared/types/market-statistics-storage';
 
 import type {
@@ -34,6 +33,10 @@ import type {
 import {
   appEvents,
 } from '../events/app-events';
+
+import {
+  BaseController,
+} from './BaseController';
 
 export type MarketChartLinePoint = LineData;
 export type MarketChartCandlePoint = CandlestickData;
@@ -61,10 +64,6 @@ export interface MarketStatisticsControllerState {
   visibleRange: MarketChartVisibleRange;
   rollingStatistics: MarketRollingStatistics | null;
 }
-
-type StateListener = (
-  state: MarketStatisticsControllerState,
-) => void;
 
 const defaultInterval =
   MARKET_STATISTICS_LEVEL_DURATIONS[0].interval;
@@ -96,12 +95,10 @@ export const createInitialMarketStatisticsControllerState = (
   rollingStatistics: null,
 });
 
-export class MarketStatisticsController {
+export class MarketStatisticsController
+  extends BaseController<MarketStatisticsControllerState> {
   private storage: MarketStatisticsStorageService | null = null;
   private chartMode: MarketStatisticsChartMode = defaultChartMode;
-
-  private state: MarketStatisticsControllerState =
-    createInitialMarketStatisticsControllerState();
 
   private unsubscribeFullSync: (() => void) | null = null;
   private unsubscribeDelta: (() => void) | null = null;
@@ -111,17 +108,18 @@ export class MarketStatisticsController {
 
   public constructor(
     private readonly marketName: string,
-    private readonly onStateChanged: StateListener,
     chartMode: MarketStatisticsChartMode = defaultChartMode,
   ) {
-    this.chartMode = chartMode;
-
-    this.state = createInitialMarketStatisticsControllerState(
-      chartMode.interval,
+    super(
+      createInitialMarketStatisticsControllerState(
+        chartMode.interval,
+      ),
     );
+
+    this.chartMode = chartMode;
   }
 
-  public start(): void {
+  public override start(): void {
     this.unsubscribeFullSync = appEvents.on(
       'marketStatisticsFullSyncReceived',
       (payload) => this.handleFullSync(payload),
@@ -157,10 +155,10 @@ export class MarketStatisticsController {
       this.marketName,
     );
 
-    this.emitState();
+    this.notify();
   }
 
-  public stop(): void {
+  public override stop(): void {
     this.unsubscribeFullSync?.();
     this.unsubscribeDelta?.();
     this.unsubscribeRolling?.();
@@ -190,12 +188,6 @@ export class MarketStatisticsController {
   public setInterval(interval: number): void {
     this.chartMode = {
       interval,
-    };
-
-    this.state = {
-      ...this.state,
-      selectedInterval: interval,
-      visibleRange: createVisibleRange(interval),
     };
 
     this.refreshChartData();
@@ -241,41 +233,36 @@ export class MarketStatisticsController {
   private handleRollingUpdated(
     rollingStatistics: MarketRollingStatistics,
   ): void {
-    this.state = {
-      ...this.state,
+    this.patchState({
       rollingStatistics,
-    };
-
-    this.emitState();
+    });
   }
 
   private refreshChartData(): void {
     const visibleRange = createVisibleRange(this.chartMode.interval);
+    const currentState = this.getState();
 
     if (!this.storage) {
-      this.state = {
-        ...this.state,
+      this.setState({
+        ...currentState,
         selectedInterval: this.chartMode.interval,
         visibleRange,
-      };
+      });
 
-      this.emitState();
       return;
     }
 
     const chartData = this.createChartData(this.storage);
 
-    this.state = {
-      ...this.state,
+    this.setState({
+      ...currentState,
       pointsCount: this.storage.size(),
-      chartVersion: this.state.chartVersion + 1,
+      chartVersion: currentState.chartVersion + 1,
       selectedInterval: this.chartMode.interval,
       snapshotData: chartData.snapshotData,
       candleSeries: chartData.candleSeries,
       visibleRange,
-    };
-
-    this.emitState();
+    });
   }
 
   private createChartData(
@@ -356,10 +343,6 @@ export class MarketStatisticsController {
 
     return [...dataByTime.values()]
       .sort((left, right) => Number(left.time) - Number(right.time));
-  }
-
-  private emitState(): void {
-    this.onStateChanged(this.state);
   }
 
   private toChartTime(

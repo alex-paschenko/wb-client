@@ -15,16 +15,16 @@ import type {
 } from '../../../shared/types/frontend-settings';
 
 import {
-  MarketStatisticsController,
-} from '../controllers/MarketStatisticsController';
-
-import {
   useAppContext,
 } from '../contexts/AppContext';
 
 import {
   useController,
 } from '../hooks/useController';
+
+import {
+  useMarketStatisticsController,
+} from '../hooks/useMarketStatisticsController';
 
 import {
   DashboardItem,
@@ -59,15 +59,7 @@ export const MarketView = ({
     moveMarket,
   } = useAppContext();
 
-  const controller = useMemo(() => {
-    return new MarketStatisticsController(
-      marketName,
-      {
-        interval: defaultDuration.interval,
-      },
-    );
-  }, [marketName]);
-
+  const controller = useMarketStatisticsController(marketName);
   const controllerState = useController(controller);
 
   const selectedDuration = useMemo(() => {

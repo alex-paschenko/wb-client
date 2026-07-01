@@ -1,9 +1,3 @@
-import type {
-  CandlestickData,
-  LineData,
-  UTCTimestamp,
-} from 'lightweight-charts';
-
 import {
   FRONTEND_WS_SUBSCRIPTION_ACTIONS,
 } from '../../../shared/constants/frontend-ws';
@@ -11,15 +5,6 @@ import {
 import {
   MARKET_STATISTICS_LEVEL_DURATIONS,
 } from '../../../shared/constants/market-statistics-config';
-
-import {
-  MarketStatisticsStorageService,
-} from '../../../shared/services/market-statistics-storage';
-
-import type {
-  MarketCandle,
-  MarketSnapshot,
-} from '../../../shared/types/market-statistics-storage';
 
 import type {
   MarketRollingStatistics,
@@ -38,32 +23,20 @@ import {
   BaseController,
 } from './BaseController';
 
-export type MarketChartLinePoint = LineData;
-export type MarketChartCandlePoint = CandlestickData;
+import {
+  createInitialMarketStatisticsViewState,
+  MarketStatisticsView,
+  type MarketStatisticsViewState,
+} from './MarketStatisticsView';
 
-export type MarketChartCandleSeries = {
-  level: number;
-  data: MarketChartCandlePoint[];
-};
-
-export type MarketChartVisibleRange = {
-  from: UTCTimestamp;
-  to: UTCTimestamp;
-};
+export interface MarketStatisticsControllerState
+  extends MarketStatisticsViewState {
+  rollingStatistics: MarketRollingStatistics | null;
+}
 
 export type MarketStatisticsChartMode = {
   interval: number;
 };
-
-export interface MarketStatisticsControllerState {
-  pointsCount: number;
-  chartVersion: number;
-  selectedInterval: number;
-  snapshotData: MarketChartLinePoint[];
-  candleSeries: MarketChartCandleSeries[];
-  visibleRange: MarketChartVisibleRange;
-  rollingStatistics: MarketRollingStatistics | null;
-}
 
 const defaultInterval =
   MARKET_STATISTICS_LEVEL_DURATIONS[0].interval;
@@ -72,33 +45,16 @@ const defaultChartMode: MarketStatisticsChartMode = {
   interval: defaultInterval,
 };
 
-const createVisibleRange = (
-  interval: number,
-): MarketChartVisibleRange => {
-  const now = Date.now();
-
-  return {
-    from: Math.floor((now - interval) / 1000) as UTCTimestamp,
-    to: Math.floor(now / 1000) as UTCTimestamp,
-  };
-};
-
 export const createInitialMarketStatisticsControllerState = (
   interval: number = defaultInterval,
 ): MarketStatisticsControllerState => ({
-  pointsCount: 0,
-  chartVersion: 0,
-  selectedInterval: interval,
-  snapshotData: [],
-  candleSeries: [],
-  visibleRange: createVisibleRange(interval),
+  ...createInitialMarketStatisticsViewState(interval),
   rollingStatistics: null,
 });
 
 export class MarketStatisticsController
   extends BaseController<MarketStatisticsControllerState> {
-  private storage: MarketStatisticsStorageService | null = null;
-  private chartMode: MarketStatisticsChartMode = defaultChartMode;
+  private readonly view: MarketStatisticsView;
 
   private unsubscribeFullSync: (() => void) | null = null;
   private unsubscribeDelta: (() => void) | null = null;
@@ -116,7 +72,10 @@ export class MarketStatisticsController
       ),
     );
 
-    this.chartMode = chartMode;
+    this.view = new MarketStatisticsView(
+      marketName,
+      chartMode.interval,
+    );
   }
 
   public override start(): void {
@@ -186,31 +145,17 @@ export class MarketStatisticsController
   }
 
   public setInterval(interval: number): void {
-    this.chartMode = {
-      interval,
-    };
-
-    this.refreshChartData();
+    this.patchViewState(
+      this.view.setInterval(interval),
+    );
   }
 
   private handleFullSync(
     payload: FullMarketStatisticsPayload,
   ): void {
-    const storage = new MarketStatisticsStorageService(this.marketName);
-
-    for (const [level, items] of payload.levels.entries()) {
-      for (const item of items) {
-        storage.addItem(
-          level,
-          item,
-          'suppress record delta',
-        );
-      }
-    }
-
-    this.storage = storage;
-
-    this.refreshChartData();
+    this.patchViewState(
+      this.view.applyFullSync(payload),
+    );
 
     appEvents.emit(
       'changeMarketStatisticsSubscription',
@@ -222,12 +167,9 @@ export class MarketStatisticsController
   private handleDelta(
     payload: MarketStatisticsDeltaPayload,
   ): void {
-    if (!this.storage) {
-      return;
-    }
-
-    this.storage.applyDelta(payload.delta);
-    this.refreshChartData();
+    this.patchViewState(
+      this.view.applyDelta(payload),
+    );
   }
 
   private handleRollingUpdated(
@@ -239,115 +181,14 @@ export class MarketStatisticsController
   }
 
   private refreshChartData(): void {
-    const visibleRange = createVisibleRange(this.chartMode.interval);
-    const currentState = this.getState();
-
-    if (!this.storage) {
-      this.setState({
-        ...currentState,
-        selectedInterval: this.chartMode.interval,
-        visibleRange,
-      });
-
-      return;
-    }
-
-    const chartData = this.createChartData(this.storage);
-
-    this.setState({
-      ...currentState,
-      pointsCount: this.storage.size(),
-      chartVersion: currentState.chartVersion + 1,
-      selectedInterval: this.chartMode.interval,
-      snapshotData: chartData.snapshotData,
-      candleSeries: chartData.candleSeries,
-      visibleRange,
-    });
+    this.patchViewState(
+      this.view.refresh(),
+    );
   }
 
-  private createChartData(
-    storage: MarketStatisticsStorageService,
-  ): {
-    snapshotData: MarketChartLinePoint[];
-    candleSeries: MarketChartCandleSeries[];
-  } {
-    const cutoff = Date.now() - this.chartMode.interval;
-
-    const snapshotData: MarketChartLinePoint[] = [];
-    const candleSeries: MarketChartCandleSeries[] = [];
-
-    for (
-      let level = 0;
-      level < storage.getNumOfLevels();
-      level += 1
-    ) {
-      const items = storage.readItemsAfter(level, cutoff);
-      const levelSize = storage.size(level);
-
-      if (level === 0) {
-        snapshotData.push(
-          ...this.createSnapshotData(items as MarketSnapshot[]),
-        );
-      } else if (items.length > 0) {
-        candleSeries.push({
-          level,
-          data: this.createCandleData(items as MarketCandle[]),
-        });
-      }
-
-      if (items.length < levelSize) {
-        break;
-      }
-    }
-
-    return {
-      snapshotData,
-      candleSeries,
-    };
-  }
-
-  private createSnapshotData(
-    snapshots: MarketSnapshot[],
-  ): MarketChartLinePoint[] {
-    const dataByTime = new Map<UTCTimestamp, MarketChartLinePoint>();
-
-    for (const snapshot of snapshots) {
-      const time = this.toChartTime(snapshot.receivedAt);
-
-      dataByTime.set(time, {
-        time,
-        value: snapshot.price,
-      });
-    }
-
-    return [...dataByTime.values()]
-      .sort((left, right) => Number(left.time) - Number(right.time));
-  }
-
-  private createCandleData(
-    candles: MarketCandle[],
-  ): MarketChartCandlePoint[] {
-    const dataByTime = new Map<UTCTimestamp, MarketChartCandlePoint>();
-
-    for (const candle of candles) {
-      const time = this.toChartTime(candle.startedAt);
-
-      dataByTime.set(time, {
-        time,
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-      });
-    }
-
-    return [...dataByTime.values()]
-      .sort((left, right) => Number(left.time) - Number(right.time));
-  }
-
-  private toChartTime(
-    receivedAt: number,
-  ): UTCTimestamp {
-    return Math.floor(receivedAt / 1000) as UTCTimestamp;
+  private patchViewState(
+    viewState: MarketStatisticsViewState,
+  ): void {
+    this.patchState(viewState);
   }
 }

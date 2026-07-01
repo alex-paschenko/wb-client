@@ -14,7 +14,7 @@ import type {
   MarketChartCandleSeries,
   MarketChartLinePoint,
   MarketChartVisibleRange,
-} from '../controllers/MarketStatisticsController';
+} from '../controllers/MarketStatisticsView';
 
 interface MarketChartProps {
   snapshotData: MarketChartLinePoint[];

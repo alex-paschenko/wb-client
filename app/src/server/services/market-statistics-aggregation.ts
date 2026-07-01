@@ -85,7 +85,7 @@ export class MarketStatisticsAggregationService {
     newTick: MarketTick,
   ): MarketSnapshot {
     const previousTick = storage.getLastItem(0);
-if (previousTick?.receivedAt === newTick.receivedAt) { console.error('Duplicate ticks! newTick: ', newTick, ',previousTick: ', previousTick)}
+
     return {
       ...newTick,
       speed: this.calculateSpeed(previousTick, newTick),
@@ -114,6 +114,12 @@ if (previousTick?.receivedAt === newTick.receivedAt) { console.error('Duplicate 
   ): void {
     const storage = this.getOrCreateStorage(marketName);
     const snapshot = this.tickToSnapshot(storage, tick);
+
+    const previousTick = storage.getLastItem(0);
+    if (previousTick?.receivedAt === snapshot.receivedAt) {
+      console.warn('Duplicate tick received', snapshot);
+      return;
+    }
 
     storage.addItem(0, snapshot, 'should record delta');
 

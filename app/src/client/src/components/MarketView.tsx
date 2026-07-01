@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
 } from 'react';
+
 import {
   useTranslation,
 } from 'react-i18next';
@@ -11,19 +12,32 @@ import {
 import {
   MARKET_STATISTICS_LEVEL_DURATIONS,
 } from '../../../shared/constants/market-statistics-config';
+
 import type {
   OpenMarketViewState,
 } from '../../../shared/types/frontend-settings';
+
 import {
   createInitialMarketStatisticsControllerState,
   MarketStatisticsController,
-  type MarketStatisticsChartMode,
   type MarketStatisticsControllerState,
 } from '../controllers/MarketStatisticsController';
-import { useAppContext } from '../contexts/AppContext';
-import { DashboardItem } from './DashboardItem';
-import { DropdownButton } from './DropdownButton';
-import { MarketChart } from './MarketChart';
+
+import {
+  useAppContext,
+} from '../contexts/AppContext';
+
+import {
+  DashboardItem,
+} from './DashboardItem';
+
+import {
+  DropdownButton,
+} from './DropdownButton';
+
+import {
+  MarketChart,
+} from './MarketChart';
 
 interface MarketViewProps {
   marketName: string;
@@ -32,14 +46,6 @@ interface MarketViewProps {
 }
 
 const defaultDuration = MARKET_STATISTICS_LEVEL_DURATIONS[0];
-
-const createChartMode = (
-  interval: number,
-): MarketStatisticsChartMode => {
-  return {
-    interval,
-  };
-};
 
 export const MarketView = ({
   marketName,
@@ -57,21 +63,18 @@ export const MarketView = ({
   const controllerRef =
     useRef<MarketStatisticsController | null>(null);
 
-  const [selectedInterval, setSelectedInterval] =
-    useState(defaultDuration.interval);
-
   const [controllerState, setControllerState] =
     useState<MarketStatisticsControllerState>(
       () => createInitialMarketStatisticsControllerState(
-        selectedInterval,
+        defaultDuration.interval,
       ),
     );
 
   const selectedDuration = useMemo(() => {
     return MARKET_STATISTICS_LEVEL_DURATIONS.find(
-      (item) => item.interval === selectedInterval,
+      (item) => item.interval === controllerState.selectedInterval,
     ) ?? defaultDuration;
-  }, [selectedInterval]);
+  }, [controllerState.selectedInterval]);
 
   const durationItems = useMemo(() => {
     return MARKET_STATISTICS_LEVEL_DURATIONS.map((duration) => ({
@@ -85,14 +88,16 @@ export const MarketView = ({
   useEffect(() => {
     setControllerState(
       createInitialMarketStatisticsControllerState(
-        selectedInterval,
+        defaultDuration.interval,
       ),
     );
 
     const controller = new MarketStatisticsController(
       marketName,
       setControllerState,
-      createChartMode(selectedInterval),
+      {
+        interval: defaultDuration.interval,
+      },
     );
 
     controllerRef.current = controller;
@@ -103,12 +108,6 @@ export const MarketView = ({
       controllerRef.current = null;
     };
   }, [marketName]);
-
-  useEffect(() => {
-    controllerRef.current?.setChartMode(
-      createChartMode(selectedInterval),
-    );
-  }, [selectedInterval]);
 
   return (
     <DashboardItem
@@ -153,15 +152,19 @@ export const MarketView = ({
               <span className="text-muted">
                 O: {controllerState.rollingStatistics.open}
               </span>
+
               <span className="text-muted">
                 H: {controllerState.rollingStatistics.high}
               </span>
+
               <span className="text-muted">
                 L: {controllerState.rollingStatistics.low}
               </span>
+
               <span className="text-muted">
                 C: {controllerState.rollingStatistics.close}
               </span>
+
               <span className="text-muted">
                 V: {controllerState.rollingStatistics.stockVolume}
               </span>
@@ -182,12 +185,15 @@ export const MarketView = ({
               <span>
                 points: {controllerState.pointsCount}
               </span>
+
               <DropdownButton
                 label={t(`time.units.${selectedDuration.unit}`, {
                   count: selectedDuration.count,
                 })}
                 items={durationItems}
-                onSelect={(interval) => setSelectedInterval(interval)}
+                onSelect={(interval) => {
+                  controllerRef.current?.setInterval(interval);
+                }}
                 panelMaxHeightClassName="max-h-40"
               />
             </div>

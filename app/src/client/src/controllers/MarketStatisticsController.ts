@@ -7,29 +7,36 @@ import type {
 import {
   FRONTEND_WS_SUBSCRIPTION_ACTIONS,
 } from '../../../shared/constants/frontend-ws';
+
 import {
   MARKET_STATISTICS_LEVEL_DURATIONS,
 } from '../../../shared/constants/market-statistics-config';
-import { MarketStatisticsStorageService } from '../../../shared/services/market-statistics-storage';
+
+import {
+  MarketStatisticsStorageService,
+} from '../../../shared/services/market-statistics-storage';
+
 import type {
   MarketCandle,
   MarketSnapshot,
   MarketStatisticsItem,
 } from '../../../shared/types/market-statistics-storage';
+
 import type {
   MarketRollingStatistics,
 } from '../../../shared/types/market-statistics-rolling';
+
 import type {
   FullMarketStatisticsPayload,
   MarketStatisticsDeltaPayload,
 } from '../../../shared/utilities/market-statistics-payload-codec';
+
 import {
   appEvents,
 } from '../events/app-events';
 
-export type MarketChartLinePoint = LineData<UTCTimestamp>;
-
-export type MarketChartCandlePoint = CandlestickData<UTCTimestamp>;
+export type MarketChartLinePoint = LineData;
+export type MarketChartCandlePoint = CandlestickData;
 
 export type MarketChartCandleSeries = {
   level: number;
@@ -48,6 +55,7 @@ export type MarketStatisticsChartMode = {
 export interface MarketStatisticsControllerState {
   pointsCount: number;
   chartVersion: number;
+  selectedInterval: number;
   snapshotData: MarketChartLinePoint[];
   candleSeries: MarketChartCandleSeries[];
   visibleRange: MarketChartVisibleRange;
@@ -76,21 +84,20 @@ const createVisibleRange = (
   };
 };
 
-export const createInitialMarketStatisticsControllerState =
-  (
-    interval: number = defaultInterval,
-  ): MarketStatisticsControllerState => ({
-    pointsCount: 0,
-    chartVersion: 0,
-    snapshotData: [],
-    candleSeries: [],
-    visibleRange: createVisibleRange(interval),
-    rollingStatistics: null,
-  });
+export const createInitialMarketStatisticsControllerState = (
+  interval: number = defaultInterval,
+): MarketStatisticsControllerState => ({
+  pointsCount: 0,
+  chartVersion: 0,
+  selectedInterval: interval,
+  snapshotData: [],
+  candleSeries: [],
+  visibleRange: createVisibleRange(interval),
+  rollingStatistics: null,
+});
 
 export class MarketStatisticsController {
   private storage: MarketStatisticsStorageService | null = null;
-
   private chartMode: MarketStatisticsChartMode = defaultChartMode;
 
   private state: MarketStatisticsControllerState =
@@ -99,6 +106,7 @@ export class MarketStatisticsController {
   private unsubscribeFullSync: (() => void) | null = null;
   private unsubscribeDelta: (() => void) | null = null;
   private unsubscribeRolling: (() => void) | null = null;
+
   private windowTimer: ReturnType<typeof setInterval> | null = null;
 
   public constructor(
@@ -107,6 +115,7 @@ export class MarketStatisticsController {
     chartMode: MarketStatisticsChartMode = defaultChartMode,
   ) {
     this.chartMode = chartMode;
+
     this.state = createInitialMarketStatisticsControllerState(
       chartMode.interval,
     );
@@ -178,16 +187,24 @@ export class MarketStatisticsController {
     );
   }
 
-  public setChartMode(chartMode: MarketStatisticsChartMode): void {
-    this.chartMode = chartMode;
+  public setInterval(interval: number): void {
+    this.chartMode = {
+      interval,
+    };
+
+    this.state = {
+      ...this.state,
+      selectedInterval: interval,
+      visibleRange: createVisibleRange(interval),
+    };
+
     this.refreshChartData();
   }
 
   private handleFullSync(
     payload: FullMarketStatisticsPayload,
   ): void {
-    const storage =
-      new MarketStatisticsStorageService(this.marketName);
+    const storage = new MarketStatisticsStorageService(this.marketName);
 
     for (const [level, items] of payload.levels.entries()) {
       for (const item of items) {
@@ -200,6 +217,7 @@ export class MarketStatisticsController {
     }
 
     this.storage = storage;
+
     this.refreshChartData();
 
     appEvents.emit(
@@ -237,6 +255,7 @@ export class MarketStatisticsController {
     if (!this.storage) {
       this.state = {
         ...this.state,
+        selectedInterval: this.chartMode.interval,
         visibleRange,
       };
 
@@ -250,6 +269,7 @@ export class MarketStatisticsController {
       ...this.state,
       pointsCount: this.storage.size(),
       chartVersion: this.state.chartVersion + 1,
+      selectedInterval: this.chartMode.interval,
       snapshotData: chartData.snapshotData,
       candleSeries: chartData.candleSeries,
       visibleRange,
@@ -265,6 +285,7 @@ export class MarketStatisticsController {
     candleSeries: MarketChartCandleSeries[];
   } {
     const cutoff = Date.now() - this.chartMode.interval;
+
     const snapshotData: MarketChartLinePoint[] = [];
     const candleSeries: MarketChartCandleSeries[] = [];
 

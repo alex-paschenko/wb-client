@@ -21,6 +21,8 @@ import {
 import {
   q,
 } from '../db/client.js';
+import { calculateCandlePrice, calculateSpeed } from '../utilities/price.js';
+import { getMiddleTimestamp } from '../utilities/time.js';
 
 type SourceItem = MarketSnapshotRow | MarketCandleRow;
 
@@ -224,15 +226,15 @@ export class MarketStatisticsDbPromotionService {
 
     const startedAt = first.receivedAt;
     const endedAt = last.receivedAt;
-    const receivedAt = this.getMiddleTimestamp(startedAt, endedAt);
+    const receivedAt = getMiddleTimestamp(startedAt, endedAt);
 
     const open = first.price;
     const close = last.price;
 
     return {
       receivedAt,
-      price: this.calculateCandlePrice(open, close, high, low),
-      speed: this.calculateSpeed(
+      price: calculateCandlePrice(open, close, high, low),
+      speed: calculateSpeed(
         first.receivedAt,
         first.price,
         last.receivedAt,
@@ -263,15 +265,15 @@ export class MarketStatisticsDbPromotionService {
 
     const startedAt = first.startedAt;
     const endedAt = last.endedAt;
-    const receivedAt = this.getMiddleTimestamp(startedAt, endedAt);
+    const receivedAt = getMiddleTimestamp(startedAt, endedAt);
 
     const open = first.open;
     const close = last.close;
 
     return {
       receivedAt,
-      price: this.calculateCandlePrice(open, close, high, low),
-      speed: this.calculateSpeed(
+      price: calculateCandlePrice(open, close, high, low),
+      speed: calculateSpeed(
         first.receivedAt,
         first.price,
         last.receivedAt,
@@ -314,37 +316,6 @@ export class MarketStatisticsDbPromotionService {
     return 'startedAt' in item
       ? item.startedAt
       : item.receivedAt;
-  }
-
-  private calculateCandlePrice(
-    open: number,
-    close: number,
-    high: number,
-    low: number,
-  ): number {
-    return (open + close + high + low) / 4;
-  }
-
-  private calculateSpeed(
-    startedAt: number,
-    startPrice: number,
-    endedAt: number,
-    endPrice: number,
-  ): number {
-    const seconds = (endedAt - startedAt) / 1000;
-
-    if (seconds <= 0) {
-      return 0;
-    }
-
-    return (endPrice - startPrice) / seconds;
-  }
-
-  private getMiddleTimestamp(
-    startedAt: number,
-    endedAt: number,
-  ): number {
-    return Math.round(startedAt + (endedAt - startedAt) / 2);
   }
 }
 

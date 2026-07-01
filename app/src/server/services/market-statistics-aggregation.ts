@@ -19,6 +19,8 @@ import type {
 } from '../types/events.js';
 import { SECOND } from '../../shared/constants/time.js';
 import { MarketTick } from '../types/market-statistics.js';
+import { getMiddleTimestamp } from '../utilities/time.js';
+import { calculateCandlePrice, calculateSpeed } from '../utilities/price.js';
 
 export class MarketStatisticsAggregationService {
   private readonly storagesByMarket = new Map<
@@ -88,7 +90,12 @@ export class MarketStatisticsAggregationService {
 
     return {
       ...newTick,
-      speed: this.calculateSpeed(previousTick, newTick),
+      speed: calculateSpeed(
+        previousTick?.receivedAt,
+        previousTick?.price,
+        newTick.receivedAt,
+        newTick.price,
+      ),
     };
   }
 
@@ -200,24 +207,6 @@ export class MarketStatisticsAggregationService {
     }
   }
 
-  private calculateSpeed(
-    previous: MarketTick | null,
-    current: MarketTick,
-  ): number {
-    if (!previous) {
-      return 0;
-    }
-
-    const seconds =
-      (current.receivedAt - previous.receivedAt) / SECOND;
-
-    if (seconds <= 0) {
-      return 0;
-    }
-
-    return (current.price - previous.price) / seconds;
-  }
-
   private toPersistenceChanges(
     storage: MarketStatisticsStorageService,
     addedItems: MarketStatisticsItem[],
@@ -254,15 +243,20 @@ export class MarketStatisticsAggregationService {
 
     const startedAt = first.receivedAt;
     const endedAt = last.receivedAt;
-    const receivedAt = this.getMiddleTimestamp(startedAt, endedAt);
+    const receivedAt = getMiddleTimestamp(startedAt, endedAt);
 
     const open = first.price;
     const close = last.price;
 
     return {
       receivedAt,
-      price: this.calculateCandlePrice(open, close, high, low),
-      speed: this.calculateSpeed(first, last),
+      price: calculateCandlePrice(open, close, high, low),
+      speed: calculateSpeed(
+        first.receivedAt,
+        first.price,
+        last.receivedAt,
+        last.price
+      ),
 
       startedAt,
       endedAt,
@@ -290,15 +284,20 @@ export class MarketStatisticsAggregationService {
 
     const startedAt = first.startedAt;
     const endedAt = last.endedAt;
-    const receivedAt = this.getMiddleTimestamp(startedAt, endedAt);
+    const receivedAt = getMiddleTimestamp(startedAt, endedAt);
 
     const open = first.open;
     const close = last.close;
 
     return {
       receivedAt,
-      price: this.calculateCandlePrice(open, close, high, low),
-      speed: this.calculateSpeed(first, last),
+      price: calculateCandlePrice(open, close, high, low),
+      speed: calculateSpeed(
+        first.startedAt,
+        first.price,
+        last.endedAt,
+        last.price
+      ),
 
       startedAt,
       endedAt,
@@ -348,22 +347,6 @@ export class MarketStatisticsAggregationService {
 
       storage.commitDelta();
     }
-  }
-
-  private calculateCandlePrice(
-    open: number,
-    close: number,
-    high: number,
-    low: number,
-  ): number {
-    return (open + close + high + low) / 4;
-  }
-
-  private getMiddleTimestamp(
-    startedAt: number,
-    endedAt: number,
-  ): number {
-    return Math.round(startedAt + (endedAt - startedAt) / 2);
   }
 
   private incrementFreezing(marketName: string): void {

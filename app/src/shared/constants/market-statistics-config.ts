@@ -13,7 +13,7 @@ export const MARKET_STATISTICS_LEVEL_CONFIGS = [
 
     duration: 1 * SECONDS,
     interval: 1 * HOUR,
-    chunkCapacity: 256,
+    chunkCapacity: 512,
   },
   {
     sourceType: 'candle',
@@ -34,6 +34,13 @@ export const MARKET_STATISTICS_LEVEL_CONFIGS = [
 
     duration: 1 * HOUR,
     interval: 6 * DAYS,
+    chunkCapacity: 32,
+  },
+    {
+    sourceType: 'candle',
+
+    duration: 2 * HOUR,
+    interval: 7 * DAYS,
     chunkCapacity: 32,
   },
 ] as const satisfies readonly MarketStatisticsLevelConfig[];

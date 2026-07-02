@@ -1,27 +1,46 @@
+// app/src/server/services/market-statistics-restore.ts
+
 import {
-  MARKET_STATISTICS_LEVEL_CONFIGS
+  MARKET_STATISTICS_LEVEL_CONFIGS,
 } from '../../shared/constants/market-statistics-config.js';
+
 import type {
   MarketCandle,
   MarketSnapshot,
 } from '../../shared/types/market-statistics-storage.js';
+
 import { SERVER_EVENT } from '../constants/events.js';
-import { marketCandlesDao } from '../dao/market-candles.js';
-import type {
-  MarketCandleRow,
+
+import {
+  marketCandlesDao,
+  type MarketCandleRow,
 } from '../dao/market-candles.js';
-import { marketSnapshotsDao } from '../dao/market-snapshots.js';
-import type {
-  MarketSnapshotRow,
+
+import {
+  marketSnapshotsDao,
+  type MarketSnapshotRow,
 } from '../dao/market-snapshots.js';
+
 import type {
   MarketStatisticsRestoredMarketData,
 } from '../types/events.js';
+
 import { eventBus } from './event-bus.js';
 
 export class MarketStatisticsRestoreService {
+  private timeTreshold: number[] = [];
+
   public async start(): Promise<void> {
     const now = Date.now();
+
+    this.timeTreshold = MARKET_STATISTICS_LEVEL_CONFIGS.reduce(
+      (acc, configEntry) => {
+        acc.interval += configEntry.interval;
+        acc.result.push(now - acc.interval);
+        return acc;
+      },
+      { interval: 0, result: [] as number[] },
+    ).result;
 
     const itemsByMarket: Record<string, MarketStatisticsRestoredMarketData> = {};
 
@@ -37,8 +56,7 @@ export class MarketStatisticsRestoreService {
     now: number,
     itemsByMarket: Record<string, MarketStatisticsRestoredMarketData>,
   ): Promise<void> {
-    const snapshotConfig = MARKET_STATISTICS_LEVEL_CONFIGS[0];
-    const timeThreshold = now - snapshotConfig.interval - snapshotConfig.duration;
+    const timeThreshold = this.timeTreshold[0];
 
     try {
       const rows = await marketSnapshotsDao.getFrom(timeThreshold);
@@ -61,14 +79,15 @@ export class MarketStatisticsRestoreService {
     itemsByMarket: Record<string, MarketStatisticsRestoredMarketData>,
   ): Promise<void> {
     const candleLevels = MARKET_STATISTICS_LEVEL_CONFIGS
-      .map((configEntry, index) => ({
-        ...configEntry,
-        level: index,
+      .map((configEntry, level) => ({
+        sourceType: configEntry.sourceType,
+        level,
+        timeThreshold: this.timeTreshold[level],
       }))
       .filter(({ sourceType }) => sourceType === 'candle')
-      .map((configEntry) => ({
-        level: configEntry.level,
-        timeThreshold: now - configEntry.interval - configEntry.duration,
+      .map(({ level, timeThreshold }) => ({
+        level,
+        timeThreshold,
       }));
 
     try {
@@ -114,7 +133,7 @@ export class MarketStatisticsRestoreService {
     row: MarketCandleRow,
   ): MarketCandle {
     return {
-      receivedAt:row.receivedAt,
+      receivedAt: row.receivedAt,
       price: row.price,
       speed: row.speed,
       startedAt: row.startedAt,

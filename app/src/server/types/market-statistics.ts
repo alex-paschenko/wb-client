@@ -1,13 +1,4 @@
-export const MARKET_STATISTICS_LEVEL_KEYS = [
-    'snapshot',
-    'candleLvl1',
-    'candleLvl2',
-    'candleLvl3',
-] as const;
-
-export type MarketStatisticsLevelKey =
-    typeof MARKET_STATISTICS_LEVEL_KEYS[number];
-
+// app/src/server/types/market-statistics.ts
 export interface MarketTick {
   receivedAt: number,
   price: number,
@@ -38,47 +29,6 @@ export const MARKET_CANDLE_FIELD_INDEX = {
 
 export const MARKET_CANDLE_FIELDS_PER_ITEM =
     MARKET_CANDLE_FIELDS.length;
-
-export interface MarketCandle {
-    startedAt: number;
-    endedAt: number;
-    timestampMs: number;
-
-    open: number;
-    close: number;
-    high: number;
-    low: number;
-}
-
-export interface MarketStatisticsChunk {
-    data: Float64Array;
-
-    // Valid items are stored in [start, end).
-    start: number;
-    end: number;
-}
-
-export interface MarketStatisticsLevel {
-    chunks: MarketStatisticsChunk[];
-
-    startedAt: number | null;
-    endedAt: number | null;
-}
-
-export type MarketStatisticsLevels = Record<
-    MarketStatisticsLevelKey,
-    MarketStatisticsLevel
->;
-
-export interface MarketStatisticsStorageItem {
-    marketName: string;
-    levels: MarketStatisticsLevels;
-}
-
-export type MarketStatisticsStorage = Record<
-    string,
-    MarketStatisticsStorageItem
->;
 
 export interface MarketRollingStatistics {
     receivedAt: number;

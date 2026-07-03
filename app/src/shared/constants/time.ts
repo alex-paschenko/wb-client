@@ -9,3 +9,6 @@ export const HOURS = HOUR;
 
 export const DAY = 24 * HOURS;
 export const DAYS = DAY;
+
+export const WEEK = 7 * DAYS;
+export const WEEKS = WEEK;

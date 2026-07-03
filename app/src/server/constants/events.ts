@@ -1,3 +1,4 @@
+// app/src/server/constants/events.ts
 export const SERVER_EVENT = {
   marketsInfoUpdated: 'markets info updated',
 

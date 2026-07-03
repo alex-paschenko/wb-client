@@ -22,7 +22,7 @@ import {
   type ServerWsJsonMessage,
 } from '../../shared/types/server-events.js';
 import type {
-  MarketStatisticsItem,
+  MarketCandle,
 } from '../../shared/types/market-statistics-storage.js';
 import {
   encodeFrontendWsBinaryPacket,
@@ -529,7 +529,7 @@ private handleMarketRollingUpdated(
     state: FrontendWsClientState,
     clientId: number,
     marketName: string,
-    levels: MarketStatisticsItem[][],
+    levels: MarketCandle[][],
   ): void {
     const payload = encodeFullMarketStatisticsPayload(
       marketName,

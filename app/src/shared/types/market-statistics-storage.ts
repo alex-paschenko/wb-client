@@ -1,21 +1,13 @@
-export type MarketStatisticsSourceType =
-  | 'snapshot'
-  | 'candle';
-
 export interface MarketStatisticsLevelConfig {
-  sourceType: MarketStatisticsSourceType;
   duration: number;
   interval: number;
   chunkCapacity: number;
 }
 
-export interface MarketSnapshot {
+export interface MarketCandle {
   receivedAt: number;
   price: number;
   speed: number;
-}
-
-export interface MarketCandle extends MarketSnapshot {
   startedAt: number;
   endedAt: number;
 
@@ -25,23 +17,17 @@ export interface MarketCandle extends MarketSnapshot {
   low: number;
 }
 
-export type MarketStatisticsItem =
-  | MarketSnapshot
-  | MarketCandle;
-
 export type MarketStatisticsDeltaRecordMode =
   | 'should record delta'
   | 'suppress record delta';
 
-export type MarketStatisticsItemsDirection =
+export type MarketCandlesDirection =
   | 'direct'
   | 'reverse';
 
-export interface MarketStatisticsItems {
+export interface MarketCandles {
   readonly marketName: string;
   readonly length: number;
-
-  get(index: number): MarketSnapshot;
   candle(index: number): MarketCandle | null;
 }
 

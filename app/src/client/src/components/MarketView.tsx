@@ -1,3 +1,4 @@
+// app/src/client/src/components/MarketView.tsx
 import {
   useMemo,
 } from 'react';
@@ -143,7 +144,6 @@ export const MarketView = ({
         <div className="min-h-0 flex-1">
           <div className="relative h-full w-full">
             <MarketChart
-              snapshotData={controllerState.snapshotData}
               candleSeries={controllerState.candleSeries}
               chartVersion={controllerState.chartVersion}
               visibleRange={controllerState.visibleRange}

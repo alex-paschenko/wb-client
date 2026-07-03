@@ -1,3 +1,4 @@
+// app/src/client/src/controllers/MarketStatisticsController.ts
 import {
   FRONTEND_WS_SUBSCRIPTION_ACTIONS,
 } from '../../../shared/constants/frontend-ws';

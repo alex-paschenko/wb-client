@@ -2,45 +2,44 @@ import {
   convertIntervalToTimeWithUnit,
   type TimeAsCountUnit,
 } from '../utilities/time';
-import { DAY, DAYS, HOUR, HOURS, MINUTE, MINUTES, SECONDS } from './time';
+import {
+  DAY,
+  DAYS,
+  HOUR,
+  HOURS,
+  MINUTE,
+  MINUTES,
+  SECONDS,
+  WEEK
+} from './time';
 import type {
   MarketStatisticsLevelConfig
 } from '../types/market-statistics-storage.js';
 
 export const MARKET_STATISTICS_LEVEL_CONFIGS = [
   {
-    sourceType: 'snapshot',
-
     duration: 1 * SECONDS,
-    interval: 1 * HOUR,
-    chunkCapacity: 512,
+    interval: 10 * MINUTES,
+    chunkCapacity: 128,
   },
   {
-    sourceType: 'candle',
-
-    duration: 1 * MINUTE,
-    interval: 5 * HOURS,
+    duration: 10 * SECONDS,
+    interval: 1 * HOUR + 20 * MINUTES,
     chunkCapacity: 64,
   },
   {
-    sourceType: 'candle',
-
+    duration: 1 * MINUTE,
+    interval: 5 * HOURS + 30 * MINUTES,
+    chunkCapacity: 64,
+  },
+  {
     duration: 10 * MINUTES,
     interval: 18 * HOURS,
     chunkCapacity: 32,
   },
   {
-    sourceType: 'candle',
-
     duration: 1 * HOUR,
-    interval: 6 * DAYS,
-    chunkCapacity: 32,
-  },
-    {
-    sourceType: 'candle',
-
-    duration: 2 * HOUR,
-    interval: 7 * DAYS,
+    interval: 1 * WEEK + 6 * DAYS,
     chunkCapacity: 32,
   },
 ] as const satisfies readonly MarketStatisticsLevelConfig[];

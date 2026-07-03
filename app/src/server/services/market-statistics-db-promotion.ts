@@ -5,26 +5,16 @@ import {
 
 import type {
   MarketCandle,
-  MarketSnapshot,
 } from '../../shared/types/market-statistics-storage.js';
 
 import {
   marketCandlesDao,
   type MarketCandleRow,
 } from '../dao/market-candles.js';
-
-import {
-  marketSnapshotsDao,
-  type MarketSnapshotRow,
-} from '../dao/market-snapshots.js';
-
-import {
-  q,
-} from '../db/client.js';
 import { calculateCandlePrice, calculateSpeed } from '../utilities/price.js';
 import { getMiddleTimestamp } from '../utilities/time.js';
 
-type SourceItem = MarketSnapshotRow | MarketCandleRow;
+const BATCH_SIZE = 3000;
 
 export class MarketStatisticsDbPromotionService {
   public async run(): Promise<void> {
@@ -45,14 +35,12 @@ export class MarketStatisticsDbPromotionService {
       const targetDuration =
         MARKET_STATISTICS_LEVEL_CONFIGS[targetLevel].duration;
 
-      const promotedCount = level === 0
-        ? await this.promoteSnapshots(cutoff, targetLevel, targetDuration)
-        : await this.promoteCandles(
-          level,
-          cutoff,
-          targetLevel,
-          targetDuration,
-        );
+      const promotedCount = await this.promoteCandles(
+        level,
+        cutoff,
+        targetLevel,
+        targetDuration,
+      );
 
       console.log('Market statistics DB promotion level done', {
         sourceLevel: level,
@@ -65,68 +53,35 @@ export class MarketStatisticsDbPromotionService {
     console.log('Market statistics DB promotion finished');
   }
 
-  private async promoteSnapshots(
-    cutoff: number,
-    targetLevel: number,
-    targetDuration: number,
-  ): Promise<number> {
-    const snapshots = await marketSnapshotsDao.getBefore(cutoff);
-
-    if (snapshots.length === 0) {
-      return 0;
-    }
-
-    const candles = this.aggregateByMarket(
-      snapshots,
-      targetLevel,
-      targetDuration,
-      (items) => this.aggregateSnapshots(items as MarketSnapshotRow[]),
-    );
-
-    await q.begin(async (transaction) => {
-      await marketCandlesDao.refresh(
-        {
-          toAdd: candles,
-          toRemove: [],
-        },
-        transaction,
-      );
-
-      await marketSnapshotsDao.refresh(
-        {
-          toAdd: [],
-          toRemove: this.createSnapshotRemovals(snapshots, cutoff),
-        },
-        transaction,
-      );
-    });
-
-    return snapshots.length;
-  }
-
   private async promoteCandles(
     sourceLevel: number,
     cutoff: number,
     targetLevel: number,
     targetDuration: number,
   ): Promise<number> {
-    const candles = await marketCandlesDao.getBeforeByLevel(
-      sourceLevel,
-      cutoff,
-    );
+    let candles: MarketCandleRow[];
+    let count = 0;
 
-    if (candles.length === 0) {
-      return 0;
-    }
+    do {
+      candles = await marketCandlesDao.getBeforeByLevel(
+        sourceLevel,
+        cutoff,
+        BATCH_SIZE,
+        count,
+      );
 
-    const targetCandles = this.aggregateByMarket(
-      candles,
-      targetLevel,
-      targetDuration,
-      (items) => this.aggregateCandles(items as MarketCandleRow[]),
-    );
+      count += candles.length;
+      if (candles.length === 0) {
+        break;
+      }
 
-    await q.begin(async (transaction) => {
+      const targetCandles = this.aggregateByMarket(
+        candles,
+        targetLevel,
+        targetDuration,
+        (items) => this.aggregateCandles(items as MarketCandleRow[]),
+      );
+
       await marketCandlesDao.refresh(
         {
           toAdd: targetCandles,
@@ -136,14 +91,13 @@ export class MarketStatisticsDbPromotionService {
             cutoff,
           ),
         },
-        transaction,
       );
-    });
+    } while (candles.length > 0);
 
-    return candles.length;
+    return count;
   }
 
-  private aggregateByMarket<TItem extends SourceItem>(
+  private aggregateByMarket<TItem extends MarketCandleRow>(
     items: TItem[],
     targetLevel: number,
     targetDuration: number,
@@ -157,7 +111,7 @@ export class MarketStatisticsDbPromotionService {
       let bucketStartedAt: number | null = null;
 
       for (const item of marketItems) {
-        const itemStartedAt = this.getItemStartedAt(item);
+        const itemStartedAt = item.startedAt;
 
         if (bucketStartedAt === null) {
           bucketStartedAt = itemStartedAt;
@@ -192,7 +146,7 @@ export class MarketStatisticsDbPromotionService {
     return result;
   }
 
-  private groupByMarket<TItem extends SourceItem>(
+  private groupByMarket<TItem extends MarketCandleRow>(
     items: TItem[],
   ): Map<string, TItem[]> {
     const result = new Map<string, TItem[]>();
@@ -208,45 +162,6 @@ export class MarketStatisticsDbPromotionService {
     }
 
     return result;
-  }
-
-  private aggregateSnapshots(
-    snapshots: MarketSnapshotRow[],
-  ): MarketCandle {
-    const first = snapshots[0];
-    const last = snapshots[snapshots.length - 1];
-
-    let high = first.price;
-    let low = first.price;
-
-    for (const snapshot of snapshots) {
-      high = Math.max(high, snapshot.price);
-      low = Math.min(low, snapshot.price);
-    }
-
-    const startedAt = first.receivedAt;
-    const endedAt = last.receivedAt;
-    const receivedAt = getMiddleTimestamp(startedAt, endedAt);
-
-    const open = first.price;
-    const close = last.price;
-
-    return {
-      receivedAt,
-      price: calculateCandlePrice(open, close, high, low),
-      speed: calculateSpeed(
-        first.receivedAt,
-        first.price,
-        last.receivedAt,
-        last.price,
-      ),
-      startedAt,
-      endedAt,
-      open,
-      close,
-      high,
-      low,
-    };
   }
 
   private aggregateCandles(
@@ -288,17 +203,6 @@ export class MarketStatisticsDbPromotionService {
     };
   }
 
-  private createSnapshotRemovals(
-    snapshots: MarketSnapshotRow[],
-    cutoff: number,
-  ) {
-    return [...new Set(snapshots.map((snapshot) => snapshot.marketName))]
-      .map((marketName) => ({
-        marketName,
-        timeThreshold: cutoff,
-      }));
-  }
-
   private createCandleRemovals(
     candles: MarketCandleRow[],
     sourceLevel: number,
@@ -310,12 +214,6 @@ export class MarketStatisticsDbPromotionService {
         level: sourceLevel,
         timeThreshold: cutoff,
       }));
-  }
-
-  private getItemStartedAt(item: SourceItem): number {
-    return 'startedAt' in item
-      ? item.startedAt
-      : item.receivedAt;
   }
 }
 

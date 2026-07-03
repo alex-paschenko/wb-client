@@ -1,10 +1,10 @@
 import type {
-  MarketStatisticsItem,
+  MarketCandle,
 } from '../types/market-statistics-storage.js';
 import {
-  getMarketStatisticsItemByteLength,
-  readMarketStatisticsItemFromDataView,
-  writeMarketStatisticsItemToDataView,
+  getMarketCandleByteLength,
+  readMarketCandleFromDataView,
+  writeMarketCandleToDataView,
 } from './market-statistics-codec.js';
 
 const encoder = new globalThis.TextEncoder();
@@ -12,7 +12,7 @@ const decoder = new globalThis.TextDecoder();
 
 export type FullMarketStatisticsPayload = {
   marketName: string;
-  levels: MarketStatisticsItem[][];
+  levels: MarketCandle[][];
 };
 
 export type MarketStatisticsDeltaPayload = {
@@ -72,7 +72,7 @@ export const decodeMarketStatisticsDeltaPayload = (
 
 export const encodeFullMarketStatisticsPayload = (
   marketName: string,
-  levels: MarketStatisticsItem[][],
+  levels: MarketCandle[][],
 ): ArrayBuffer => {
   const marketNameBytes = encoder.encode(marketName);
   const payloadByteLength = getFullMarketStatisticsPayloadByteLength(levels);
@@ -103,7 +103,7 @@ export const encodeFullMarketStatisticsPayload = (
     offset += 2;
 
     for (const item of items) {
-      offset = writeMarketStatisticsItemToDataView(
+      offset = writeMarketCandleToDataView(
         view,
         offset,
         level,
@@ -134,16 +134,16 @@ export const decodeFullMarketStatisticsPayload = (
   const levelsLength = view.getUint8(offset);
   offset += 1;
 
-  const levels: MarketStatisticsItem[][] = [];
+  const levels: MarketCandle[][] = [];
 
   for (let level = 0; level < levelsLength; level += 1) {
     const itemsLength = view.getUint16(offset, true);
     offset += 2;
 
-    const items: MarketStatisticsItem[] = [];
+    const items: MarketCandle[] = [];
 
     for (let itemIndex = 0; itemIndex < itemsLength; itemIndex += 1) {
-      const result = readMarketStatisticsItemFromDataView(
+      const result = readMarketCandleFromDataView(
         view,
         offset,
         level,
@@ -163,9 +163,9 @@ export const decodeFullMarketStatisticsPayload = (
 };
 
 const getFullMarketStatisticsPayloadByteLength = (
-  levels: MarketStatisticsItem[][],
+  levels: MarketCandle[][],
 ): number => {
   return levels.reduce((sum, items, level) => {
-    return sum + 2 + items.length * getMarketStatisticsItemByteLength(level);
+    return sum + 2 + items.length * getMarketCandleByteLength(level);
   }, 0);
 };

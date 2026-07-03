@@ -6,8 +6,6 @@ import { eventBus } from './event-bus.js';
 
 import type {
   MarketCandle,
-  MarketSnapshot,
-  MarketStatisticsItem,
 } from '../../shared/types/market-statistics-storage.js';
 import {
   MarketStatisticsStorageService
@@ -47,7 +45,9 @@ export class MarketStatisticsAggregationService {
     // TODO Remove it! For testing purpose only!
     const stor = this.storagesByMarket;
     setInterval(() => {
-      let marketName = '---'; let numOfPoints = 0;
+      let marketName = '---';
+      let numOfPoints = 0;
+
       for (const [k, v] of stor.entries()) {
         const nop = v.size(0);
         if (nop > numOfPoints) {
@@ -61,7 +61,7 @@ export class MarketStatisticsAggregationService {
 
   public createFullSyncSnapshot(
     marketName: string,
-  ): MarketStatisticsItem[][] {
+  ): MarketCandle[][] {
     this.incrementFreezing(marketName);
 
     const storage = this.getOrCreateStorage(marketName);
@@ -69,7 +69,7 @@ export class MarketStatisticsAggregationService {
     return storage.getAllItemsByLevel();
   }
 
-  public getStorageItemsByMarket(): Record<string, MarketStatisticsItem[][]> {
+  public getStorageItemsByMarket(): Record<string, MarketCandle[][]> {
     return Object.fromEntries(
       [...this.storagesByMarket.entries()].map(([marketName, storage]) => [
         marketName,
@@ -82,20 +82,28 @@ export class MarketStatisticsAggregationService {
 
   private readonly tickBuffersByMarket = new Map<string, MarketTick[]>();
 
-  private tickToSnapshot(
+  private tickToCandle(
     storage: MarketStatisticsStorageService,
     newTick: MarketTick,
-  ): MarketSnapshot {
+  ): MarketCandle {
     const previousTick = storage.getLastItem(0);
+    const { receivedAt, price } = newTick;
 
     return {
       ...newTick,
       speed: calculateSpeed(
         previousTick?.receivedAt,
         previousTick?.price,
-        newTick.receivedAt,
-        newTick.price,
+        receivedAt,
+        price,
       ),
+      receivedAt: receivedAt,
+      startedAt: receivedAt,
+      endedAt: receivedAt,
+      open: price,
+      close: price,
+      high: price,
+      low: price,
     };
   }
 
@@ -120,17 +128,17 @@ export class MarketStatisticsAggregationService {
     tick: MarketTick,
   ): void {
     const storage = this.getOrCreateStorage(marketName);
-    const snapshot = this.tickToSnapshot(storage, tick);
+    const candle = this.tickToCandle(storage, tick);
 
     const previousTick = storage.getLastItem(0);
-    if (previousTick?.receivedAt === snapshot.receivedAt) {
-      console.warn('Duplicate tick received', snapshot);
+    if (previousTick?.receivedAt === candle.receivedAt) {
+      console.warn('Duplicate tick received', candle);
       return;
     }
 
-    storage.addItem(0, snapshot, 'should record delta');
+    storage.addItem(0, candle, 'should record delta');
 
-    const addedItems: MarketStatisticsItem[] = [snapshot];
+    const addedItems: MarketCandle[] = [candle];
 
     this.aggregate(storage, addedItems);
 
@@ -156,7 +164,7 @@ export class MarketStatisticsAggregationService {
 
   private aggregate(
     storage: MarketStatisticsStorageService,
-    addedItems: MarketStatisticsItem[],
+    addedItems: MarketCandle[],
   ): void {
     for (
       let level = 0;
@@ -187,9 +195,7 @@ export class MarketStatisticsAggregationService {
         return;
       }
 
-      const candle = currentConfig.sourceType === 'snapshot'
-        ? this.aggregateSnapshots(items as MarketSnapshot[])
-        : this.aggregateCandles(items as MarketCandle[]);
+      const candle = this.aggregateCandles(items as MarketCandle[]);
 
       storage.removeNItems(
         level,
@@ -209,7 +215,7 @@ export class MarketStatisticsAggregationService {
 
   private toPersistenceChanges(
     storage: MarketStatisticsStorageService,
-    addedItems: MarketStatisticsItem[],
+    addedItems: MarketCandle[],
   ): MarketStatisticsPersistenceChange[] {
     return addedItems.map((item, level) => {
       const deleteBefore = storage.getStartedAt(level);
@@ -225,47 +231,6 @@ export class MarketStatisticsAggregationService {
         deleteBefore,
       };
     });
-  }
-
-  private aggregateSnapshots(
-    snapshots: MarketSnapshot[],
-  ): MarketCandle {
-    const first = snapshots[0];
-    const last = snapshots[snapshots.length - 1];
-
-    let high = first.price;
-    let low = first.price;
-
-    for (const snapshot of snapshots) {
-      high = Math.max(high, snapshot.price);
-      low = Math.min(low, snapshot.price);
-    }
-
-    const startedAt = first.receivedAt;
-    const endedAt = last.receivedAt;
-    const receivedAt = getMiddleTimestamp(startedAt, endedAt);
-
-    const open = first.price;
-    const close = last.price;
-
-    return {
-      receivedAt,
-      price: calculateCandlePrice(open, close, high, low),
-      speed: calculateSpeed(
-        first.receivedAt,
-        first.price,
-        last.receivedAt,
-        last.price
-      ),
-
-      startedAt,
-      endedAt,
-
-      open,
-      close,
-      high,
-      low,
-    };
   }
 
   private aggregateCandles(
@@ -330,15 +295,10 @@ export class MarketStatisticsAggregationService {
     for (const [marketName, data] of Object.entries(event.itemsByMarket)) {
       const storage = this.getOrCreateStorage(marketName);
 
-      for (const snapshot of data.snapshots) {
-        storage.addItem(0, snapshot, 'suppress record delta');
-      }
-
-      for (const [stringLevel, candles] of Object.entries(data.candlesByLevel)) {
-
+      for (const [level, candles] of data.entries()) {
         for (const candle of candles) {
           storage.addItem(
-            Number(stringLevel),
+            level,
             candle,
             'suppress record delta',
           );

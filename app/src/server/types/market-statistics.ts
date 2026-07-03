@@ -1,5 +1,3 @@
-import { MarketSnapshot } from "../../shared/types/market-statistics-storage";
-
 export const MARKET_STATISTICS_LEVEL_KEYS = [
     'snapshot',
     'candleLvl1',
@@ -10,46 +8,19 @@ export const MARKET_STATISTICS_LEVEL_KEYS = [
 export type MarketStatisticsLevelKey =
     typeof MARKET_STATISTICS_LEVEL_KEYS[number];
 
-export type MarketStatisticsSourceType =
-    | 'snapshot'
-    | 'candle';
-
-export interface MarketStatisticsLevelConfig {
-    level: number;
-    key: MarketStatisticsLevelKey;
-    sourceType: MarketStatisticsSourceType;
-
-    duration: number;
-    interval: number;
-    chunkCapacity: number;
-}
-
-export const MARKET_SNAPSHOT_FIELDS = [
-    'receivedAt',
-    'price',
-] as const;
-
-export type MarketSnapshotField =
-    typeof MARKET_SNAPSHOT_FIELDS[number];
-
-export const MARKET_SNAPSHOT_FIELD_INDEX = {
-    receivedAt: 0,
-    price: 1,
-} as const satisfies Record<MarketSnapshotField, number>;
-
-export const MARKET_SNAPSHOT_FIELDS_PER_ITEM =
-    MARKET_SNAPSHOT_FIELDS.length;
-
-export type MarketTick = Omit<MarketSnapshot, 'speed'>;
+export interface MarketTick {
+  receivedAt: number,
+  price: number,
+};
 
 export const MARKET_CANDLE_FIELDS = [
-    'startedAt',
-    'endedAt',
-    'timestampMs',
-    'open',
-    'close',
-    'high',
-    'low',
+  'startedAt',
+  'endedAt',
+  'timestampMs',
+  'open',
+  'close',
+  'high',
+  'low',
 ] as const;
 
 export type MarketCandleField =

@@ -1,17 +1,12 @@
 import { SECOND } from '../../shared/constants/time.js';
 import type {
   MarketCandle,
-  MarketSnapshot,
 } from '../../shared/types/market-statistics-storage.js';
-import { marketStatisticsDao } from '../dao/market-statistics.js';
-import type {
-  MarketCandleRemoveRow,
-  MarketCandleRow,
+import {
+  marketCandlesDao,
+  type MarketCandleRemoveRow,
+  type MarketCandleRow,
 } from '../dao/market-candles.js';
-import type {
-  MarketSnapshotRemoveRow,
-  MarketSnapshotRow,
-} from '../dao/market-snapshots.js';
 import { SERVER_EVENT } from '../constants/events.js';
 import type {
   MarketStatisticsPersistenceChangedEvent,
@@ -21,10 +16,7 @@ import { eventBus } from './event-bus.js';
 const FLUSH_INTERVAL = 5 * SECOND;
 
 export class MarketStatisticsPersistenceBufferService {
-  private snapshotsToAdd: MarketSnapshotRow[] = [];
   private candlesToAdd: MarketCandleRow[] = [];
-
-  private readonly snapshotRemoveBounds = new Map<string, number>();
   private readonly candleRemoveBounds = new Map<string, number>();
 
   private flushTimer: ReturnType<typeof setInterval> | null = null;
@@ -53,24 +45,7 @@ export class MarketStatisticsPersistenceBufferService {
   private handlePersistenceChanged(
     event: MarketStatisticsPersistenceChangedEvent,
   ): void {
-    const [
-      snapshotChange,
-      ...candleChanges
-    ] = event.changes;
-
-    if (!snapshotChange) {
-      return;
-    }
-
-    this.snapshotsToAdd.push({
-      marketName: event.marketName,
-      ...(snapshotChange.item as MarketSnapshot),
-    });
-
-    this.updateSnapshotRemoveBound(
-      event.marketName,
-      snapshotChange.deleteBefore,
-    );
+    const candleChanges = event.changes;
 
     for (const [index, change] of candleChanges.entries()) {
       const level = index + 1;
@@ -86,17 +61,6 @@ export class MarketStatisticsPersistenceBufferService {
         level,
         change.deleteBefore,
       );
-    }
-  }
-
-  private updateSnapshotRemoveBound(
-    marketName: string,
-    deleteBefore: number,
-  ): void {
-    const current = this.snapshotRemoveBounds.get(marketName);
-
-    if (current === undefined || deleteBefore > current) {
-      this.snapshotRemoveBounds.set(marketName, deleteBefore);
     }
   }
 
@@ -120,26 +84,16 @@ export class MarketStatisticsPersistenceBufferService {
 
     this.isFlushing = true;
 
-    const snapshotsToAdd = this.snapshotsToAdd;
     const candlesToAdd = this.candlesToAdd;
-    const snapshotRemoveRows = this.toSnapshotRemoveRows();
     const candleRemoveRows = this.toCandleRemoveRows();
 
     try {
-      await marketStatisticsDao.refresh({
-        snapshots: {
-          toAdd: snapshotsToAdd,
-          toRemove: snapshotRemoveRows,
-        },
-        candles: {
-          toAdd: candlesToAdd,
-          toRemove: candleRemoveRows,
-        },
+    await marketCandlesDao.refresh({
+        toAdd: candlesToAdd,
+        toRemove: candleRemoveRows,
       });
 
-      this.snapshotsToAdd = [];
       this.candlesToAdd = [];
-      this.snapshotRemoveBounds.clear();
       this.candleRemoveBounds.clear();
     } catch (error) {
       console.error('Failed to flush market statistics persistence buffer', error);
@@ -150,19 +104,8 @@ export class MarketStatisticsPersistenceBufferService {
 
   private hasPendingChanges(): boolean {
     return (
-      this.snapshotsToAdd.length > 0 ||
       this.candlesToAdd.length > 0 ||
-      this.snapshotRemoveBounds.size > 0 ||
       this.candleRemoveBounds.size > 0
-    );
-  }
-
-  private toSnapshotRemoveRows(): MarketSnapshotRemoveRow[] {
-    return [...this.snapshotRemoveBounds.entries()].map(
-      ([marketName, timeThreshold]) => ({
-        marketName,
-        timeThreshold,
-      }),
     );
   }
 

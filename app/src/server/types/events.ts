@@ -1,8 +1,7 @@
 import type {
   MarketCandle,
-  MarketSnapshot,
-  MarketStatisticsItems,
-  MarketStatisticsItemsDirection,
+  MarketCandles,
+  MarketCandlesDirection,
 } from '../../shared/types/market-statistics-storage.js';
 import type {
   MarketRollingStatistics,
@@ -29,19 +28,12 @@ export interface MarketRollingUpdatedEvent {
 }
 
 export interface MarketStatisticsPersistenceChange {
-  item: MarketSnapshot | MarketCandle;
+  item: MarketCandle;
   deleteBefore: number;
 }
 
 export interface MarketStatisticsPersistenceChangedEvent {
   marketName: string;
-
-  /**
-   * Index is level.
-   * changes[0] is always snapshot.
-   * changes[1+] are candles.
-   * No gaps.
-   */
   changes: MarketStatisticsPersistenceChange[];
 }
 
@@ -58,18 +50,16 @@ export interface MarketStatisticsStorageChangedEvent {
 export interface MarketStatisticsViewUpdated {
   marketName: string;
   createItems:
-    (direction: MarketStatisticsItemsDirection) =>
-      MarketStatisticsItems
+    (direction: MarketCandlesDirection) =>
+      MarketCandles
 
 }
 
-export interface MarketStatisticsRestoredMarketData {
-  snapshots: MarketSnapshot[];
-  candlesByLevel: Record<number, MarketCandle[]>;
-}
+export type MarketStatisticsRestoredMarketData =
+  Record<string, MarketCandle[][]>;
 
 export interface MarketStatisticsRestoredEvent {
-  itemsByMarket: Record<string, MarketStatisticsRestoredMarketData>;
+  itemsByMarket: MarketStatisticsRestoredMarketData;
 }
 
 export interface MarketStatisticsApproximatedEvent {

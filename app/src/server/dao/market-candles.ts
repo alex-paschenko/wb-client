@@ -108,6 +108,8 @@ export class MarketCandlesDao {
   public async getBeforeByLevel(
     level: number,
     timeThreshold: number,
+    limit: number,
+    offset: number,
   ): Promise<MarketCandleRow[]> {
     const rows = await this.marketCandlesSelect(this.q, {
       where: this.q`
@@ -119,6 +121,8 @@ export class MarketCandlesDao {
         mc.started_at asc,
         mc.ended_at asc
       `,
+      limit,
+      offset,
     });
 
     return rows.map((row) => row.candle);
@@ -126,15 +130,16 @@ export class MarketCandlesDao {
 
   public async refresh(
     input: RefreshMarketCandlesInput,
-    query: Query = this.q,
   ): Promise<void> {
-    if (input.toAdd.length > 0) {
-      await this.insertMany(input.toAdd, query);
-    }
+    this.q.begin(async (trx) => {
+      if (input.toAdd.length > 0) {
+        await this.insertMany(input.toAdd, trx);
+      }
 
-    if (input.toRemove.length > 0) {
-      await this.deleteOld(input.toRemove, query);
-    }
+      if (input.toRemove.length > 0) {
+        await this.deleteOld(input.toRemove, trx);
+      }
+    });
   }
 
   private async insertMany(

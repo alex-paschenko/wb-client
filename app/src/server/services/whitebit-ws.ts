@@ -3,9 +3,6 @@ import { SECOND } from '../../shared/constants/time.js';
 import type {
   MarketRollingStatistics,
 } from '../../shared/types/market-statistics-rolling.js';
-import type {
-  MarketSnapshot,
-} from '../../shared/types/market-statistics-storage.js';
 import { SERVER_EVENT } from '../constants/events.js';
 import type {
   MarketsInfoUpdatedEvent,

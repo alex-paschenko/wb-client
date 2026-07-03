@@ -1,3 +1,4 @@
+// app/src/client/src/controllers/MarketStatisticsView.ts
 import type {
   CandlestickData,
   LineData,
@@ -14,7 +15,6 @@ import {
 
 import type {
   MarketCandle,
-  MarketSnapshot,
 } from '../../../shared/types/market-statistics-storage';
 
 import type {
@@ -39,7 +39,6 @@ export interface MarketStatisticsViewState {
   pointsCount: number;
   chartVersion: number;
   selectedInterval: number;
-  snapshotData: MarketChartLinePoint[];
   candleSeries: MarketChartCandleSeries[];
   visibleRange: MarketChartVisibleRange;
 }
@@ -64,7 +63,6 @@ export const createInitialMarketStatisticsViewState = (
   pointsCount: 0,
   chartVersion: 0,
   selectedInterval: interval,
-  snapshotData: [],
   candleSeries: [],
   visibleRange: createVisibleRange(interval),
 });
@@ -143,7 +141,6 @@ export class MarketStatisticsView {
       pointsCount: this.storage.size(),
       chartVersion: this.state.chartVersion + 1,
       selectedInterval: this.interval,
-      snapshotData: chartData.snapshotData,
       candleSeries: chartData.candleSeries,
       visibleRange,
     };
@@ -154,12 +151,10 @@ export class MarketStatisticsView {
   private createChartData(
     storage: MarketStatisticsStorageService,
   ): {
-    snapshotData: MarketChartLinePoint[];
     candleSeries: MarketChartCandleSeries[];
   } {
     const cutoff = Date.now() - this.interval;
 
-    const snapshotData: MarketChartLinePoint[] = [];
     const candleSeries: MarketChartCandleSeries[] = [];
 
     for (
@@ -170,16 +165,10 @@ export class MarketStatisticsView {
       const items = storage.readItemsAfter(level, cutoff);
       const levelSize = storage.size(level);
 
-      if (level === 0) {
-        snapshotData.push(
-          ...this.createSnapshotData(items as MarketSnapshot[]),
-        );
-      } else if (items.length > 0) {
-        candleSeries.push({
-          level,
-          data: this.createCandleData(items as MarketCandle[]),
-        });
-      }
+      candleSeries.push({
+        level,
+        data: this.createCandleData(items as MarketCandle[]),
+      });
 
       if (items.length < levelSize) {
         break;
@@ -187,27 +176,8 @@ export class MarketStatisticsView {
     }
 
     return {
-      snapshotData,
       candleSeries,
     };
-  }
-
-  private createSnapshotData(
-    snapshots: MarketSnapshot[],
-  ): MarketChartLinePoint[] {
-    const dataByTime = new Map<UTCTimestamp, MarketChartLinePoint>();
-
-    for (const snapshot of snapshots) {
-      const time = this.toChartTime(snapshot.receivedAt);
-
-      dataByTime.set(time, {
-        time,
-        value: snapshot.price,
-      });
-    }
-
-    return [...dataByTime.values()]
-      .sort((left, right) => Number(left.time) - Number(right.time));
   }
 
   private createCandleData(

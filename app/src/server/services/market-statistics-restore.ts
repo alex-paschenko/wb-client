@@ -6,7 +6,6 @@ import {
 
 import type {
   MarketCandle,
-  MarketSnapshot,
 } from '../../shared/types/market-statistics-storage.js';
 
 import { SERVER_EVENT } from '../constants/events.js';
@@ -15,15 +14,7 @@ import {
   marketCandlesDao,
   type MarketCandleRow,
 } from '../dao/market-candles.js';
-
-import {
-  marketSnapshotsDao,
-  type MarketSnapshotRow,
-} from '../dao/market-snapshots.js';
-
-import type {
-  MarketStatisticsRestoredMarketData,
-} from '../types/events.js';
+import { MarketStatisticsRestoredMarketData } from '../types/events.js';
 
 import { eventBus } from './event-bus.js';
 
@@ -42,9 +33,8 @@ export class MarketStatisticsRestoreService {
       { interval: 0, result: [] as number[] },
     ).result;
 
-    const itemsByMarket: Record<string, MarketStatisticsRestoredMarketData> = {};
+    const itemsByMarket: MarketStatisticsRestoredMarketData = {};
 
-    await this.restoreSnapshots(now, itemsByMarket);
     await this.restoreCandles(now, itemsByMarket);
 
     eventBus.emit(SERVER_EVENT.marketStatisticsRestored, {
@@ -52,42 +42,14 @@ export class MarketStatisticsRestoreService {
     });
   }
 
-  private async restoreSnapshots(
-    now: number,
-    itemsByMarket: Record<string, MarketStatisticsRestoredMarketData>,
-  ): Promise<void> {
-    const timeThreshold = this.timeTreshold[0];
-
-    try {
-      const rows = await marketSnapshotsDao.getFrom(timeThreshold);
-
-      for (const row of rows) {
-        const market = this.getOrCreateMarketData(
-          itemsByMarket,
-          row.marketName,
-        );
-
-        market.snapshots.push(this.toSnapshot(row));
-      }
-    } catch (error) {
-      console.error('Failed to restore market snapshots from DB', error);
-    }
-  }
-
   private async restoreCandles(
     now: number,
-    itemsByMarket: Record<string, MarketStatisticsRestoredMarketData>,
+    itemsByMarket: MarketStatisticsRestoredMarketData,
   ): Promise<void> {
     const candleLevels = MARKET_STATISTICS_LEVEL_CONFIGS
       .map((configEntry, level) => ({
-        sourceType: configEntry.sourceType,
         level,
         timeThreshold: this.timeTreshold[level],
-      }))
-      .filter(({ sourceType }) => sourceType === 'candle')
-      .map(({ level, timeThreshold }) => ({
-        level,
-        timeThreshold,
       }));
 
     try {
@@ -99,8 +61,7 @@ export class MarketStatisticsRestoreService {
           row.marketName,
         );
 
-        market.candlesByLevel[row.level] ??= [];
-        market.candlesByLevel[row.level].push(this.toCandle(row));
+        market[row.level].push(this.toCandle(row));
       }
     } catch (error) {
       console.error('Failed to restore market candles from DB', error);
@@ -108,25 +69,13 @@ export class MarketStatisticsRestoreService {
   }
 
   private getOrCreateMarketData(
-    itemsByMarket: Record<string, MarketStatisticsRestoredMarketData>,
+    itemsByMarket: MarketStatisticsRestoredMarketData,
     marketName: string,
-  ): MarketStatisticsRestoredMarketData {
-    itemsByMarket[marketName] ??= {
-      snapshots: [],
-      candlesByLevel: {},
-    };
+  ): MarketCandle[][] {
+    itemsByMarket[marketName] ??=
+      MARKET_STATISTICS_LEVEL_CONFIGS.map(() => []);
 
     return itemsByMarket[marketName];
-  }
-
-  private toSnapshot(
-    row: MarketSnapshotRow,
-  ): MarketSnapshot {
-    return {
-      receivedAt: row.receivedAt,
-      price: row.price,
-      speed: row.speed,
-    };
   }
 
   private toCandle(

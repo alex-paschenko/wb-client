@@ -6,30 +6,28 @@ import {
 } from '../constants/market-statistics-storage.js';
 
 import type {
-  MarketCandle,
-  MarketSnapshot,
   MarketStatisticsChunk,
   MarketStatisticsDeltaRecordMode,
-  MarketStatisticsItem,
-  MarketStatisticsItems,
-  MarketStatisticsItemsDirection,
+  MarketCandle,
+  MarketCandles,
+  MarketCandlesDirection,
   MarketStatisticsLevel,
 } from '../types/market-statistics-storage.js';
 
 import {
   getMarketStatisticsFieldsPerItem,
-  getMarketStatisticsItemByteLength,
-  readMarketStatisticsItemFromDataView,
-  readMarketStatisticsItemFromFloat64Array,
-  writeMarketStatisticsItemToDataView,
-  writeMarketStatisticsItemToFloat64Array,
+  getMarketCandleByteLength,
+  readMarketCandleFromDataView,
+  readMarketCandleFromFloat64Array,
+  writeMarketCandleToDataView,
+  writeMarketCandleToFloat64Array,
 } from '../utilities/market-statistics-codec.js';
 
 type DeltaOperation =
   | {
       type: typeof MARKET_STATISTICS_DELTA_OPERATION_TYPE.addItem;
       level: number;
-      item: MarketStatisticsItem;
+      item: MarketCandle;
     }
   | {
       type: typeof MARKET_STATISTICS_DELTA_OPERATION_TYPE.removeItems;
@@ -49,7 +47,7 @@ export class MarketStatisticsStorageService {
 
   addItem(
     level: number,
-    item: MarketStatisticsItem,
+    item: MarketCandle,
     deltaRecordMode: MarketStatisticsDeltaRecordMode = 'should record delta',
   ): void {
     const config = MARKET_STATISTICS_LEVEL_CONFIGS[level];
@@ -67,29 +65,17 @@ export class MarketStatisticsStorageService {
       levelStorage.chunks.push(chunk);
     }
 
-    if (config.sourceType === 'snapshot') {
-      writeMarketStatisticsItemToFloat64Array(
-        chunk.data,
-        chunk.end,
-        level,
-        item,
-      );
+    const candle = item as MarketCandle;
 
-      levelStorage.startedAt ??= item.receivedAt;
-      levelStorage.endedAt = item.receivedAt;
-    } else {
-      const candle = item as MarketCandle;
+    writeMarketCandleToFloat64Array(
+      chunk.data,
+      chunk.end,
+      level,
+      candle,
+    );
 
-      writeMarketStatisticsItemToFloat64Array(
-        chunk.data,
-        chunk.end,
-        level,
-        candle,
-      );
-
-      levelStorage.startedAt ??= candle.startedAt;
-      levelStorage.endedAt = candle.endedAt;
-    }
+    levelStorage.startedAt ??= candle.startedAt;
+    levelStorage.endedAt = candle.endedAt;
 
     chunk.end++;
 
@@ -241,15 +227,15 @@ export class MarketStatisticsStorageService {
     }
   }
 
-  public getAllItemsByLevel(): MarketStatisticsItem[][] {
+  public getAllItemsByLevel(): MarketCandle[][] {
     return this.levels.map((levelStorage, level) => {
       const config = MARKET_STATISTICS_LEVEL_CONFIGS[level];
-      const items: MarketStatisticsItem[] = [];
+      const items: MarketCandle[] = [];
 
       for (const chunk of levelStorage.chunks) {
         for (let itemIndex = chunk.start; itemIndex < chunk.end; itemIndex++) {
           items.push(
-            readMarketStatisticsItemFromFloat64Array(
+            readMarketCandleFromFloat64Array(
               chunk.data,
               itemIndex,
               level,
@@ -282,7 +268,7 @@ export class MarketStatisticsStorageService {
     return this.levels[level]?.endedAt ?? null;
   }
 
-  getLastItem(level: number): MarketStatisticsItem | null {
+  getLastItem(level: number): MarketCandle | null {
     const levelStorage = this.levels[level];
     const config = MARKET_STATISTICS_LEVEL_CONFIGS[level];
 
@@ -298,7 +284,7 @@ export class MarketStatisticsStorageService {
 
     const itemIndex = chunk.end - 1;
 
-    return readMarketStatisticsItemFromFloat64Array(
+    return readMarketCandleFromFloat64Array(
       chunk.data,
       itemIndex,
       level,
@@ -308,8 +294,8 @@ export class MarketStatisticsStorageService {
   readItemsBefore(
     level: number,
     cutoff: number,
-    direction: MarketStatisticsItemsDirection = 'direct',
-  ): MarketStatisticsItem[] {
+    direction: MarketCandlesDirection = 'direct',
+  ): MarketCandle[] {
     const levelStorage = this.levels[level];
     const config = MARKET_STATISTICS_LEVEL_CONFIGS[level];
 
@@ -317,19 +303,17 @@ export class MarketStatisticsStorageService {
       return [];
     }
 
-    const result: MarketStatisticsItem[] = [];
+    const result: MarketCandle[] = [];
 
     for (const chunk of levelStorage.chunks) {
       for (let itemIndex = chunk.start; itemIndex < chunk.end; itemIndex++) {
-        const item = readMarketStatisticsItemFromFloat64Array(
+        const item = readMarketCandleFromFloat64Array(
           chunk.data,
           itemIndex,
           level,
         );
 
-        const itemEndedAt = config.sourceType === 'snapshot'
-          ? (item as MarketSnapshot).receivedAt
-          : (item as MarketCandle).endedAt;
+        const itemEndedAt = item.endedAt;
 
         if (itemEndedAt >= cutoff) {
           return direction === 'direct' ? result : result.reverse();
@@ -345,8 +329,8 @@ export class MarketStatisticsStorageService {
   readItemsAfter(
     level: number,
     cutoff: number,
-    direction: MarketStatisticsItemsDirection = 'direct',
-  ): MarketStatisticsItem[] {
+    direction: MarketCandlesDirection = 'direct',
+  ): MarketCandle[] {
     const levelStorage = this.levels[level];
     const config = MARKET_STATISTICS_LEVEL_CONFIGS[level];
 
@@ -354,21 +338,19 @@ export class MarketStatisticsStorageService {
       return [];
     }
 
-    const result: MarketStatisticsItem[] = [];
+    const result: MarketCandle[] = [];
 
     for (let chunkIndex = levelStorage.chunks.length - 1; chunkIndex >= 0; chunkIndex--) {
       const chunk = levelStorage.chunks[chunkIndex];
 
       for (let itemIndex = chunk.end - 1; itemIndex >= chunk.start; itemIndex--) {
-        const item = readMarketStatisticsItemFromFloat64Array(
+        const item = readMarketCandleFromFloat64Array(
           chunk.data,
           itemIndex,
           level,
         );
 
-        const itemStartedAt = config.sourceType === 'snapshot'
-          ? (item as MarketSnapshot).receivedAt
-          : (item as MarketCandle).startedAt;
+        const itemStartedAt = item.startedAt;
 
         if (itemStartedAt < cutoff) {
           return direction === 'direct' ? result.reverse() : result;
@@ -382,23 +364,13 @@ export class MarketStatisticsStorageService {
   }
 
   public createItems(
-    direction: MarketStatisticsItemsDirection = 'direct',
-  ): MarketStatisticsItems {
-    return new MarketStatisticsItemsView(
+    direction: MarketCandlesDirection = 'direct',
+  ): MarketCandles {
+    return new MarketCandlesView(
       this.marketName,
       this,
       direction,
     );
-  }
-
-  public getSnapshotByPointIndex(index: number): MarketSnapshot {
-    const resolved = this.resolvePointIndex(index);
-
-    return readMarketStatisticsItemFromFloat64Array(
-      resolved.chunk.data,
-      resolved.itemIndex,
-      resolved.level,
-    ) as MarketSnapshot;
   }
 
   public getCandleByPointIndex(index: number): MarketCandle | null {
@@ -409,7 +381,7 @@ export class MarketStatisticsStorageService {
       return null;
     }
 
-    return readMarketStatisticsItemFromFloat64Array(
+    return readMarketCandleFromFloat64Array(
       resolved.chunk.data,
       resolved.itemIndex,
       resolved.level,
@@ -482,7 +454,6 @@ export class MarketStatisticsStorageService {
   }
 
   private refreshLevelBounds(level: number): void {
-    const config = MARKET_STATISTICS_LEVEL_CONFIGS[level];
     const levelStorage = this.levels[level];
     const firstChunk = levelStorage.chunks[0];
     const lastChunk = levelStorage.chunks.at(-1);
@@ -493,29 +464,12 @@ export class MarketStatisticsStorageService {
       return;
     }
 
-    if (config.sourceType === 'snapshot') {
-      const first = readMarketStatisticsItemFromFloat64Array(
-        firstChunk.data,
-        firstChunk.start,
-        level,
-      ) as MarketSnapshot;
-      const last = readMarketStatisticsItemFromFloat64Array(
-        lastChunk.data,
-        lastChunk.end - 1,
-        level,
-      ) as MarketSnapshot;
-
-      levelStorage.startedAt = first.receivedAt;
-      levelStorage.endedAt = last.receivedAt;
-      return;
-    }
-
-    const first = readMarketStatisticsItemFromFloat64Array(
+    const first = readMarketCandleFromFloat64Array(
       firstChunk.data,
       firstChunk.start,
       level,
     ) as MarketCandle;
-    const last = readMarketStatisticsItemFromFloat64Array(
+    const last = readMarketCandleFromFloat64Array(
       lastChunk.data,
       lastChunk.end - 1,
       level,
@@ -530,16 +484,16 @@ export class MarketStatisticsStorageService {
       return 2;
     }
 
-    return 1 + getMarketStatisticsItemByteLength(operation.level);
+    return 1 + getMarketCandleByteLength(operation.level);
   }
 
   private writeDeltaItem(
     view: DataView,
     offset: number,
     level: number,
-    item: MarketStatisticsItem,
+    item: MarketCandle,
   ): number {
-    return writeMarketStatisticsItemToDataView(
+    return writeMarketCandleToDataView(
       view,
       offset,
       level,
@@ -552,29 +506,23 @@ export class MarketStatisticsStorageService {
     offset: number,
     level: number,
   ): {
-    item: MarketStatisticsItem;
+    item: MarketCandle;
     nextOffset: number;
   } {
-    return readMarketStatisticsItemFromDataView(view, offset, level);
+    return readMarketCandleFromDataView(view, offset, level);
   }
 
 }
 
-class MarketStatisticsItemsView implements MarketStatisticsItems {
+class MarketCandlesView implements MarketCandles {
   public constructor(
     public readonly marketName: string,
     private readonly storage: MarketStatisticsStorageService,
-    private readonly direction: MarketStatisticsItemsDirection,
+    private readonly direction: MarketCandlesDirection,
   ) {}
 
   public get length(): number {
     return this.storage.size();
-  }
-
-  public get(index: number): MarketSnapshot {
-    return this.storage.getSnapshotByPointIndex(
-      this.normalizeIndex(index),
-    );
   }
 
   public candle(index: number): MarketCandle | null {

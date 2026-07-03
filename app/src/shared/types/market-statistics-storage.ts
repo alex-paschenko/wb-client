@@ -1,3 +1,4 @@
+// app/src/shared/types/market-statistics-storage.ts
 export interface MarketStatisticsLevelConfig {
   duration: number;
   interval: number;
@@ -28,6 +29,8 @@ export type MarketCandlesDirection =
 export interface MarketCandles {
   readonly marketName: string;
   readonly length: number;
+  readonly [index: number]: MarketCandle | undefined;
+
   candle(index: number): MarketCandle | null;
 }
 
@@ -35,11 +38,13 @@ export interface MarketStatisticsChunk {
   data: Float64Array;
   start: number;
   end: number;
+  size: number;
 }
 
 export interface MarketStatisticsLevel {
   chunks: MarketStatisticsChunk[];
 
+  size: number;
   startedAt: number | null;
   endedAt: number | null;
 }

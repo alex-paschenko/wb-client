@@ -155,11 +155,6 @@ export class MarketStatisticsAggregationService {
       marketName,
       changes: this.toPersistenceChanges(storage, addedItems),
     });
-
-    eventBus.emit(SERVER_EVENT.marketStatisticsViewUpdated, {
-      marketName,
-      createItems: (direction) => storage.createItems(direction),
-    });
   }
 
   private aggregate(
@@ -361,6 +356,17 @@ export class MarketStatisticsAggregationService {
     }
 
     return buffer;
+  }
+
+  private emitStorageUpdated(
+    marketName: string,
+    storage: MarketStatisticsStorageService,
+  ): void {
+    eventBus.emit(SERVER_EVENT.marketStatisticsStorageUpdated, {
+      marketName,
+      candles: storage.getViewsCreator('direct'),
+      reversedCandles: storage.getViewsCreator('reverse'),
+    });
   }
 }
 

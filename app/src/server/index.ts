@@ -11,14 +11,25 @@ import { invalidateAndRefreshUserBalance } from './services/sync-user-balance.js
 import { marketsService } from './services/markets.js';
 import { waitForDatabase } from './db/wait-for-start.js';
 import { whitebitWsService } from './services/whitebit-ws.js';
-import { marketStatisticsAggregationService } from './services/market-statistics-aggregation.js';
-import { marketStatisticsPersistenceBufferService } from './services/market-statistics-persistence-buffer.js';
-import { marketStatisticsRollingService } from './services/market-statistics-rolling.js';
-import { marketStatisticsRestoreService } from './services/market-statistics-restore.js';
+import {
+  marketStatisticsAggregationService
+} from './services/market-statistics-aggregation.js';
+import {
+  marketStatisticsPersistenceBufferService
+} from './services/market-statistics-persistence-buffer.js';
+import {
+  marketStatisticsRollingService
+} from './services/market-statistics-rolling.js';
+import {
+  marketStatisticsRestoreService
+} from './services/market-statistics-restore.js';
 import { frontendWsService } from './services/frontend-ws.js';
 import {
   marketStatisticsDbPromotionService,
 } from './services/market-statistics-db-promotion.js';
+import {
+  indicatorManager,
+} from './indicators/indicator-manager.js';
 
 const port = Number(process.env.PORT ?? 3000);
 const app = createApp();
@@ -76,6 +87,8 @@ const start = async (): Promise<void> => {
 
   marketStatisticsAggregationService.start();
   marketStatisticsPersistenceBufferService.start();
+
+  indicatorManager.start();
 
   await marketStatisticsRestoreService.start();
 

@@ -1,3 +1,4 @@
+// app/src/server/types/events.ts
 import type {
   MarketCandle,
   MarketCandles,
@@ -7,6 +8,9 @@ import type {
   MarketRollingStatistics,
   MarketRollingStatisticsByMarket,
 } from '../../shared/types/market-statistics-rolling.js';
+import type {
+  MarketIndicators,
+} from '../../shared/types/market-indicators.js';
 import type { StrategySignal } from './strategy-signals.js';
 import type { SERVER_EVENT } from '../constants/events.js';
 import { MarketTick } from './market-statistics.js';
@@ -47,12 +51,10 @@ export interface MarketStatisticsStorageChangedEvent {
   delta: ArrayBuffer;
 }
 
-export interface MarketStatisticsViewUpdated {
+export interface MarketStatisticsStorageUpdatedEvent {
   marketName: string;
-  createItems:
-    (direction: MarketCandlesDirection) =>
-      MarketCandles
-
+  candles: MarketCandles;
+  reversedCandles: MarketCandles;
 }
 
 export type MarketStatisticsRestoredMarketData =
@@ -74,6 +76,15 @@ export interface FreezeOnStatisticsStorageNeedsToBeLoweredEvent {
   marketName: string;
 }
 
+export interface MarketRemovedEvent {
+  marketName: string;
+}
+
+export interface MarketIndicatorsUpdatedEvent {
+  marketName: string;
+  indicators: MarketIndicators;
+}
+
 export interface StrategySignalCreatedEvent {
   marketName: string;
   strategyKey: string;
@@ -92,16 +103,32 @@ export interface StrategyFailedEvent {
 export interface ServerEventMap {
   [SERVER_EVENT.marketsInfoUpdated]: MarketsInfoUpdatedEvent;
 
+  [SERVER_EVENT.marketRemoved]: MarketRemovedEvent;
+
   [SERVER_EVENT.marketRollingTickReceived]: MarketRollingTickReceivedEvent;
   [SERVER_EVENT.marketRollingUpdated]: MarketRollingUpdatedEvent;
-  [SERVER_EVENT.marketTickReceived]: MarketTickReceivedEvent;
-  [SERVER_EVENT.marketStatisticsStorageChanged]: MarketStatisticsStorageChangedEvent;
-  [SERVER_EVENT.marketStatisticsViewUpdated]: MarketStatisticsViewUpdated;
-  [SERVER_EVENT.marketStatisticsRestored]: MarketStatisticsRestoredEvent;
-  [SERVER_EVENT.marketStatisticsPersistenceChanged]: MarketStatisticsPersistenceChangedEvent;
-  [SERVER_EVENT.marketStatisticsApproximated]: MarketStatisticsApproximatedEvent;
 
-  [SERVER_EVENT.freezeOnStatisticsStorageNeedsToBeLowered]: FreezeOnStatisticsStorageNeedsToBeLoweredEvent;
+  [SERVER_EVENT.marketTickReceived]: MarketTickReceivedEvent;
+
+  [SERVER_EVENT.marketStatisticsStorageChanged]:
+    MarketStatisticsStorageChangedEvent;
+
+  [SERVER_EVENT.marketStatisticsStorageUpdated]:
+    MarketStatisticsStorageUpdatedEvent;
+
+  [SERVER_EVENT.marketStatisticsRestored]:
+    MarketStatisticsRestoredEvent;
+
+  [SERVER_EVENT.marketStatisticsPersistenceChanged]:
+    MarketStatisticsPersistenceChangedEvent;
+
+  [SERVER_EVENT.marketStatisticsApproximated]:
+    MarketStatisticsApproximatedEvent;
+
+  [SERVER_EVENT.marketIndicatorsUpdated]: MarketIndicatorsUpdatedEvent;
+
+  [SERVER_EVENT.freezeOnStatisticsStorageNeedsToBeLowered]:
+    FreezeOnStatisticsStorageNeedsToBeLoweredEvent;
 
   [SERVER_EVENT.strategySignalCreated]: StrategySignalCreatedEvent;
   [SERVER_EVENT.strategyFailed]: StrategyFailedEvent;

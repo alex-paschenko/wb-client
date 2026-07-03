@@ -1,6 +1,8 @@
+// app/src/shared/services/market-statistics-storage.ts
 import {
-  MARKET_STATISTICS_LEVEL_CONFIGS
+  MARKET_STATISTICS_LEVEL_CONFIGS,
 } from '../constants/market-statistics-config.js';
+
 import {
   MARKET_STATISTICS_DELTA_OPERATION_TYPE,
 } from '../constants/market-statistics-storage.js';
@@ -65,19 +67,19 @@ export class MarketStatisticsStorageService {
       levelStorage.chunks.push(chunk);
     }
 
-    const candle = item as MarketCandle;
-
     writeMarketCandleToFloat64Array(
       chunk.data,
       chunk.end,
       level,
-      candle,
+      item,
     );
 
-    levelStorage.startedAt ??= candle.startedAt;
-    levelStorage.endedAt = candle.endedAt;
+    levelStorage.startedAt ??= item.startedAt;
+    levelStorage.endedAt = item.endedAt;
 
-    chunk.end++;
+    chunk.end += 1;
+    chunk.size += 1;
+    levelStorage.size += 1;
 
     if (deltaRecordMode === 'should record delta') {
       this.deltaOperations.push({
@@ -103,6 +105,12 @@ export class MarketStatisticsStorageService {
       throw new Error(`Unknown market statistics level: ${level}`);
     }
 
+    if (count > levelStorage.size) {
+      throw new Error(
+        `Cannot remove ${count} items from level ${level}: level size is ${levelStorage.size}`,
+      );
+    }
+
     let remaining = count;
 
     while (remaining > 0) {
@@ -114,13 +122,14 @@ export class MarketStatisticsStorageService {
         );
       }
 
-      const available = chunk.end - chunk.start;
-      const removed = Math.min(available, remaining);
+      const removed = Math.min(chunk.size, remaining);
 
       chunk.start += removed;
+      chunk.size -= removed;
+      levelStorage.size -= removed;
       remaining -= removed;
 
-      if (chunk.start === chunk.end) {
+      if (chunk.size === 0) {
         levelStorage.chunks.shift();
       }
     }
@@ -229,11 +238,10 @@ export class MarketStatisticsStorageService {
 
   public getAllItemsByLevel(): MarketCandle[][] {
     return this.levels.map((levelStorage, level) => {
-      const config = MARKET_STATISTICS_LEVEL_CONFIGS[level];
       const items: MarketCandle[] = [];
 
       for (const chunk of levelStorage.chunks) {
-        for (let itemIndex = chunk.start; itemIndex < chunk.end; itemIndex++) {
+        for (let itemIndex = chunk.start; itemIndex < chunk.end; itemIndex += 1) {
           items.push(
             readMarketCandleFromFloat64Array(
               chunk.data,
@@ -256,9 +264,9 @@ export class MarketStatisticsStorageService {
     return this.levels[level] ?? null;
   }
 
-  getNumOfLevels():number {
+  getNumOfLevels(): number {
     return this.levels.length;
-  };
+  }
 
   getStartedAt(level: number): number | null {
     return this.levels[level]?.startedAt ?? null;
@@ -270,23 +278,20 @@ export class MarketStatisticsStorageService {
 
   getLastItem(level: number): MarketCandle | null {
     const levelStorage = this.levels[level];
-    const config = MARKET_STATISTICS_LEVEL_CONFIGS[level];
 
-    if (!levelStorage || !config) {
+    if (!levelStorage || levelStorage.size === 0) {
       return null;
     }
 
     const chunk = levelStorage.chunks.at(-1);
 
-    if (!chunk || chunk.start === chunk.end) {
+    if (!chunk || chunk.size === 0) {
       return null;
     }
 
-    const itemIndex = chunk.end - 1;
-
     return readMarketCandleFromFloat64Array(
       chunk.data,
-      itemIndex,
+      chunk.end - 1,
       level,
     );
   }
@@ -299,23 +304,25 @@ export class MarketStatisticsStorageService {
     const levelStorage = this.levels[level];
     const config = MARKET_STATISTICS_LEVEL_CONFIGS[level];
 
-    if (!levelStorage || !config) {
+    if (!levelStorage || !config || levelStorage.size === 0) {
       return [];
     }
 
     const result: MarketCandle[] = [];
 
     for (const chunk of levelStorage.chunks) {
-      for (let itemIndex = chunk.start; itemIndex < chunk.end; itemIndex++) {
+      if (chunk.size === 0) {
+        continue;
+      }
+
+      for (let itemIndex = chunk.start; itemIndex < chunk.end; itemIndex += 1) {
         const item = readMarketCandleFromFloat64Array(
           chunk.data,
           itemIndex,
           level,
         );
 
-        const itemEndedAt = item.endedAt;
-
-        if (itemEndedAt >= cutoff) {
+        if (item.endedAt >= cutoff) {
           return direction === 'direct' ? result : result.reverse();
         }
 
@@ -334,25 +341,27 @@ export class MarketStatisticsStorageService {
     const levelStorage = this.levels[level];
     const config = MARKET_STATISTICS_LEVEL_CONFIGS[level];
 
-    if (!levelStorage || !config) {
+    if (!levelStorage || !config || levelStorage.size === 0) {
       return [];
     }
 
     const result: MarketCandle[] = [];
 
-    for (let chunkIndex = levelStorage.chunks.length - 1; chunkIndex >= 0; chunkIndex--) {
+    for (let chunkIndex = levelStorage.chunks.length - 1; chunkIndex >= 0; chunkIndex -= 1) {
       const chunk = levelStorage.chunks[chunkIndex];
 
-      for (let itemIndex = chunk.end - 1; itemIndex >= chunk.start; itemIndex--) {
+      if (chunk.size === 0) {
+        continue;
+      }
+
+      for (let itemIndex = chunk.end - 1; itemIndex >= chunk.start; itemIndex -= 1) {
         const item = readMarketCandleFromFloat64Array(
           chunk.data,
           itemIndex,
           level,
         );
 
-        const itemStartedAt = item.startedAt;
-
-        if (itemStartedAt < cutoff) {
+        if (item.startedAt < cutoff) {
           return direction === 'direct' ? result.reverse() : result;
         }
 
@@ -363,47 +372,84 @@ export class MarketStatisticsStorageService {
     return direction === 'direct' ? result.reverse() : result;
   }
 
-  public createItems(
+  public getViewsCreator(
     direction: MarketCandlesDirection = 'direct',
   ): MarketCandles {
-    return new MarketCandlesView(
-      this.marketName,
-      this,
-      direction,
-    );
+    return this.createItemsProxy(direction);
   }
 
   public getCandleByPointIndex(index: number): MarketCandle | null {
     const resolved = this.resolvePointIndex(index);
-    const config = MARKET_STATISTICS_LEVEL_CONFIGS[resolved.level];
-
-    if (config.sourceType !== 'candle') {
-      return null;
-    }
 
     return readMarketCandleFromFloat64Array(
       resolved.chunk.data,
       resolved.itemIndex,
       resolved.level,
-    ) as MarketCandle;
+    );
   }
 
   public size(level?: number): number {
     if (typeof level === 'number') {
-      return this.getLevelItemsCount(this.levels[level]);
+      return this.levels[level]?.size ?? 0;
     }
 
     return this.levels.reduce(
-      (sum, level) => sum + this.getLevelItemsCount(level),
+      (sum, levelStorage) => sum + levelStorage.size,
       0,
     );
   }
 
-  private getLevelItemsCount(level: MarketStatisticsLevel): number {
-    return level.chunks.reduce(
-      (sum, chunk) => sum + chunk.end - chunk.start,
-      0,
-    );
+  private createItemsProxy(
+    direction: MarketCandlesDirection,
+  ): MarketCandles {
+    const storage = this;
+    const target = {
+      marketName: this.marketName,
+
+      get length(): number {
+        return storage.size();
+      },
+
+      candle(index: number): MarketCandle | null {
+        return storage.getCandleByPointIndex(
+          normalizeIndex(index),
+        );
+      },
+    };
+
+    const normalizeIndex = (index: number): number => {
+      const length = storage.size();
+
+      if (!Number.isInteger(index) || index < 0 || index >= length) {
+        throw new Error(`Market statistics item index out of range: ${index}`);
+      }
+
+      if (direction === 'direct') {
+        return index;
+      }
+
+      return length - 1 - index;
+    };
+
+    return new Proxy(target, {
+      get(proxyTarget, property, receiver) {
+        if (typeof property === 'string' && isArrayIndexProperty(property)) {
+          return storage.getCandleByPointIndex(
+            normalizeIndex(Number(property)),
+          );
+        }
+
+        return Reflect.get(proxyTarget, property, receiver);
+      },
+
+      set() {
+        throw new Error('Market candles view is read-only');
+      },
+
+      deleteProperty() {
+        throw new Error('Market candles view is read-only');
+      },
+    }) as MarketCandles;
   }
 
   private resolvePointIndex(index: number): {
@@ -413,13 +459,16 @@ export class MarketStatisticsStorageService {
   } {
     let rest = index;
 
-    for (let level = this.levels.length - 1; level >= 0; level--) {
+    for (let level = this.levels.length - 1; level >= 0; level -= 1) {
       const levelStorage = this.levels[level];
 
-      for (const chunk of levelStorage.chunks) {
-        const count = chunk.end - chunk.start;
+      if (rest >= levelStorage.size) {
+        rest -= levelStorage.size;
+        continue;
+      }
 
-        if (rest < count) {
+      for (const chunk of levelStorage.chunks) {
+        if (rest < chunk.size) {
           return {
             level,
             chunk,
@@ -427,7 +476,7 @@ export class MarketStatisticsStorageService {
           };
         }
 
-        rest -= count;
+        rest -= chunk.size;
       }
     }
 
@@ -437,6 +486,7 @@ export class MarketStatisticsStorageService {
   private createLevel(): MarketStatisticsLevel {
     return {
       chunks: [],
+      size: 0,
       startedAt: null,
       endedAt: null,
     };
@@ -450,30 +500,39 @@ export class MarketStatisticsStorageService {
       data: new Float64Array(chunkCapacity * fieldsPerItem),
       start: 0,
       end: 0,
+      size: 0,
     };
   }
 
   private refreshLevelBounds(level: number): void {
     const levelStorage = this.levels[level];
+
+    if (levelStorage.size === 0) {
+      levelStorage.startedAt = null;
+      levelStorage.endedAt = null;
+      return;
+    }
+
     const firstChunk = levelStorage.chunks[0];
     const lastChunk = levelStorage.chunks.at(-1);
 
     if (!firstChunk || !lastChunk) {
-      levelStorage.startedAt = null;
-      levelStorage.endedAt = null;
-      return;
+      throw new Error(
+        `Market statistics level ${level} has size ${levelStorage.size} but has no chunks`,
+      );
     }
 
     const first = readMarketCandleFromFloat64Array(
       firstChunk.data,
       firstChunk.start,
       level,
-    ) as MarketCandle;
+    );
+
     const last = readMarketCandleFromFloat64Array(
       lastChunk.data,
       lastChunk.end - 1,
       level,
-    ) as MarketCandle;
+    );
 
     levelStorage.startedAt = first.startedAt;
     levelStorage.endedAt = last.endedAt;
@@ -511,35 +570,18 @@ export class MarketStatisticsStorageService {
   } {
     return readMarketCandleFromDataView(view, offset, level);
   }
-
 }
 
-class MarketCandlesView implements MarketCandles {
-  public constructor(
-    public readonly marketName: string,
-    private readonly storage: MarketStatisticsStorageService,
-    private readonly direction: MarketCandlesDirection,
-  ) {}
-
-  public get length(): number {
-    return this.storage.size();
+function isArrayIndexProperty(property: string): boolean {
+  if (property === '') {
+    return false;
   }
 
-  public candle(index: number): MarketCandle | null {
-    return this.storage.getCandleByPointIndex(
-      this.normalizeIndex(index),
-    );
-  }
+  const index = Number(property);
 
-  private normalizeIndex(index: number): number {
-    if (index < 0 || index >= this.length) {
-      throw new Error(`Market statistics item index out of range: ${index}`);
-    }
-
-    if (this.direction === 'direct') {
-      return index;
-    }
-
-    return this.length - 1 - index;
-  }
+  return (
+    Number.isInteger(index) &&
+    index >= 0 &&
+    String(index) === property
+  );
 }

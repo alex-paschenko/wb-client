@@ -155,6 +155,8 @@ export class MarketStatisticsAggregationService {
       marketName,
       changes: this.toPersistenceChanges(storage, addedItems),
     });
+
+    this.emitStorageUpdated(marketName, storage);
   }
 
   private aggregate(
@@ -301,6 +303,8 @@ export class MarketStatisticsAggregationService {
       }
 
       storage.commitDelta();
+
+      this.emitStorageUpdated(marketName, storage);
     }
   }
 

@@ -33,9 +33,6 @@ import {
 } from '../../shared/utilities/market-statistics-payload-codec.js';
 import { SERVER_EVENT } from '../constants/events.js';
 import { getWsServer } from '../frontend/index.js';
-import type {
-  MarketStatisticsStorageChangedEvent,
-} from '../types/events.js';
 import { eventBus } from './event-bus.js';
 import {
   marketStatisticsAggregationService
@@ -45,11 +42,11 @@ import { marketsService } from './markets.js';
 import type {
   MarketRollingStatisticsByMarket
 } from '../types/market-statistics.js';
+import type {
+  MarketStatisticsStorageChangedEvent,
+} from '../types/events.js';
 
-type MarketSubscriptionState = {
-  clientId: number;
-  markets: Set<string>;
-};
+type MarketSubscriptionState = Set<string>;
 
 type FrontendWsClientState = {
   isReady: boolean;
@@ -61,7 +58,8 @@ type FrontendWsClientState = {
   };
   marketStatisticsSubscription: MarketSubscriptionState;
   marketRollingSubscription: MarketSubscriptionState;
-  marketsBetweenFullSyncAndSubscription: Set<string>;
+  marketsBetweenFullSyncAndSubscription: MarketSubscriptionState;
+  marketIndicatorsSubscription: MarketSubscriptionState;
 };
 
 export class FrontendWsService {
@@ -130,55 +128,11 @@ export class FrontendWsService {
         clientId: 0,
         isSubscribed: false,
       },
-      marketStatisticsSubscription: {
-        clientId: 0,
-        markets: new Set(),
-      },
-      marketRollingSubscription: {
-        clientId: 0,
-        markets: new Set(),
-      },
+      marketStatisticsSubscription: new Set(),
+      marketRollingSubscription: new Set(),
       marketsBetweenFullSyncAndSubscription: new Set(),
+      marketIndicatorsSubscription: new Set(),
     };
-  }
-  private ensureMarketSubscription(
-    subscription: MarketSubscriptionState,
-    clientId: number,
-  ): MarketSubscriptionState {
-    if (subscription.clientId === 0) {
-      subscription.clientId = clientId;
-      return subscription;
-    }
-
-    if (subscription.clientId !== clientId) {
-      subscription.clientId = clientId;
-      subscription.markets.clear();
-    }
-
-    return subscription;
-  }
-
-  private ensureMarketStatisticsSubscription(
-    state: FrontendWsClientState,
-    clientId: number,
-  ): MarketSubscriptionState {
-    if (state.marketStatisticsSubscription.clientId === 0) {
-      state.marketStatisticsSubscription = {
-        clientId,
-        markets: new Set(),
-      };
-
-      return state.marketStatisticsSubscription;
-    }
-
-    if (state.marketStatisticsSubscription.clientId !== clientId) {
-      state.marketStatisticsSubscription = {
-        clientId,
-        markets: new Set(),
-      };
-    }
-
-    return state.marketStatisticsSubscription;
   }
 
   private sendServerHello(socket: WebSocket): void {
@@ -243,7 +197,7 @@ private handleMarketRollingUpdated(
     const subscribedRolling =
       this.filterSubscribedRollingStatistics(
         rollingStatisticsByMarket,
-        state.marketRollingSubscription.markets,
+        state.marketRollingSubscription,
       );
 
     if (Object.keys(subscribedRolling).length === 0) {
@@ -413,10 +367,7 @@ private handleMarketRollingUpdated(
       return;
     }
 
-    state.marketStatisticsSubscription = {
-      clientId: message.clientId,
-      markets: new Set(message.params.markets),
-    };
+    state.marketStatisticsSubscription = new Set(message.params.markets);
   }
 
   private handleChangeSubscription(
@@ -434,25 +385,21 @@ private handleMarketRollingUpdated(
       return;
     }
 
-    if (message.params.entity !== FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics) {
+    if (message.params.entity === FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketIndicators) {
+      this.handleMarketIndicatorsSubscriptionChanged(state, message);
       return;
     }
 
-    const subscription = this.ensureMarketStatisticsSubscription(
-      state,
-      message.clientId,
-    );
-
-    if (message.clientId !== state.marketStatisticsSubscription.clientId) {
+    if (message.params.entity !== FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics) {
       return;
     }
 
     if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.add) {
       for (const marketName of message.params.markets) {
-        subscription.markets.add(marketName);
+        state.marketStatisticsSubscription.add(marketName);
 
         if (state.marketsBetweenFullSyncAndSubscription.delete(marketName)) {
-          subscription.markets.delete(marketName);
+          state.marketStatisticsSubscription.delete(marketName);
           this.freezeOnStatisticsStorageNeedsToBeLowered(marketName);
         }
       }
@@ -462,7 +409,7 @@ private handleMarketRollingUpdated(
 
     if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove) {
       for (const marketName of message.params.markets) {
-        state.marketStatisticsSubscription.markets.delete(marketName);
+        state.marketStatisticsSubscription.delete(marketName);
       }
     }
   }
@@ -472,19 +419,13 @@ private handleMarketRollingUpdated(
     socket: WebSocket,
     message: FrontendWsChangeSubscriptionMessage,
   ): void {
-    const subscription = this.ensureMarketSubscription(
-      state.marketRollingSubscription,
-      message.clientId,
-    );
-
     if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.add) {
       for (const marketName of message.params.markets) {
-        subscription.markets.add(marketName);
+        state.marketRollingSubscription.add(marketName);
       }
 
       this.sendRollingSnapshot(
         socket,
-        subscription.clientId,
         message.params.markets,
       );
 
@@ -493,7 +434,26 @@ private handleMarketRollingUpdated(
 
     if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove) {
       for (const marketName of message.params.markets) {
-        subscription.markets.delete(marketName);
+        state.marketRollingSubscription.delete(marketName);
+      }
+    }
+  }
+
+  private handleMarketIndicatorsSubscriptionChanged(
+    state: FrontendWsClientState,
+    message: FrontendWsChangeSubscriptionMessage,
+  ): void {
+    if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.add) {
+      for (const marketName of message.params.markets) {
+        state.marketIndicatorsSubscription.add(marketName);
+      }
+
+      return;
+    }
+
+    if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove) {
+      for (const marketName of message.params.markets) {
+        state.marketIndicatorsSubscription.delete(marketName);
       }
     }
   }
@@ -509,7 +469,7 @@ private handleMarketRollingUpdated(
     for (const [socket, state] of this.clients) {
       if (
         !state.isReady ||
-        !state.marketStatisticsSubscription.markets.has(event.marketName)
+        !state.marketStatisticsSubscription.has(event.marketName)
       ) {
         continue;
       }
@@ -517,7 +477,7 @@ private handleMarketRollingUpdated(
       this.sendMarketStatisticsPacket(
         socket,
         state,
-        state.marketStatisticsSubscription.clientId,
+        0,
         FRONTEND_WS_BINARY_MESSAGE_TYPES.marketStatisticsDelta,
         payload,
       );
@@ -574,7 +534,6 @@ private handleMarketRollingUpdated(
 
   private sendRollingSnapshot(
     socket: WebSocket,
-    _clientId: number,
     marketNames: string[],
   ): void {
     const rollingStatisticsByMarket: MarketRollingStatisticsByMarket = {};

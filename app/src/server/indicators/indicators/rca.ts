@@ -1,80 +1,53 @@
-// app/src/server/indicators/indicators/rca.ts
+import type {
+  MarketIndicatorRecalculatedItem,
+} from '../../../shared/types/market-indicators.js';
+
 import type {
   MarketIndicatorCalculationParams,
 } from '../../types/market-indicators.js';
+
 import {
-  BaseIndicator,
+  type IndicatorAffectedRange,
 } from '../base-indicator.js';
+
+import {
+  IncrementalIndicator,
+} from '../incremental-indicator.js';
 
 interface RcaIndicatorParams {
   period: number;
 }
 
 interface RcaIndicatorState {
-  value: number;
   sum: number;
-  lastReceivedAt: number;
 }
 
-export class RcaIndicator extends BaseIndicator<RcaIndicatorState> {
+export class RcaIndicator extends IncrementalIndicator<RcaIndicatorState> {
   public readonly name: string;
 
+  protected readonly storage = {
+    codec: 'float32',
+  } as const;
+
   public constructor(
-    private readonly params: RcaIndicatorParams,
+    params: RcaIndicatorParams,
   ) {
-    super();
+    super(params.period);
 
-    this.name = `rca${params.period}`;
+    this.name = `rca-${params.period}`;
   }
 
-  public calculate(
+  protected fullCalculate(
     params: MarketIndicatorCalculationParams,
   ): number | null {
-    const latest = params.reversedCandles[0];
-
-    if (!latest) {
-      return this.stateByMarket.get(params.marketName)?.value ?? null;
-    }
-
-    const state = this.stateByMarket.get(params.marketName);
-
-    if (state?.lastReceivedAt === latest.receivedAt) {
-      return state.value;
-    }
-
-    if (!state) {
-      return this.initialize(params);
-    }
-
-    const previousWindowLast = params.reversedCandles[this.params.period];
-
-    if (!previousWindowLast) {
-      return this.initialize(params);
-    }
-
-    const sum = state.sum + latest.close - previousWindowLast.close;
-    const value = sum / this.params.period;
-
-    this.stateByMarket.set(params.marketName, {
-      value,
-      sum,
-      lastReceivedAt: latest.receivedAt,
-    });
-
-    return value;
-  }
-
-  private initialize(
-    params: MarketIndicatorCalculationParams,
-  ): number | null {
-    if (params.reversedCandles.length < this.params.period) {
+    if (params.descending.candles.length < this.period) {
       return null;
     }
 
     let sum = 0;
 
-    for (let index = 0; index < this.params.period; index += 1) {
-      const candle = params.reversedCandles[index];
+    for (let index = 0; index < this.period; index += 1) {
+      const candle = params.descending.candles[index];
 
       if (!candle) {
         return null;
@@ -83,20 +56,123 @@ export class RcaIndicator extends BaseIndicator<RcaIndicatorState> {
       sum += candle.close;
     }
 
-    const latest = params.reversedCandles[0];
+    this.stateByMarket.set(params.marketName, {
+      sum,
+    });
 
-    if (!latest) {
+    return this.calculateValue(params, sum);
+  }
+
+  protected incrementalCalculate(
+    params: MarketIndicatorCalculationParams,
+  ): number | null {
+    const state = this.stateByMarket.get(params.marketName);
+    const newestCandle = params.descending.candles[0];
+    const removedCandle = params.descending.candles[this.period];
+
+    if (!state || !newestCandle || !removedCandle) {
+      return this.fullCalculate(params);
+    }
+
+    const sum =
+      state.sum +
+      newestCandle.close -
+      removedCandle.close;
+
+    this.stateByMarket.set(params.marketName, {
+      sum,
+    });
+
+    return this.calculateValue(params, sum);
+  }
+
+  public rangeCalculate(
+    params: MarketIndicatorCalculationParams,
+    affectedRanges: IndicatorAffectedRange[],
+  ): MarketIndicatorRecalculatedItem[] {
+    return affectedRanges.map((range) => ({
+      startIndexAsc: range.startIndexAsc,
+      values: this.calculateRange(params, range),
+    }));
+  }
+
+  private calculateRange(
+    params: MarketIndicatorCalculationParams,
+    range: IndicatorAffectedRange,
+  ): (number | null)[] {
+    const values: (number | null)[] = [];
+
+    for (
+      let index = range.startIndexAsc;
+      index <= range.endIndexAsc;
+      index += 1
+    ) {
+      values.push(
+        this.calculateValueAt(params, index),
+      );
+    }
+
+    return values;
+  }
+
+  private calculateValueAt(
+    params: MarketIndicatorCalculationParams,
+    indexAsc: number,
+  ): number | null {
+    const firstIndexAsc = indexAsc - this.period + 1;
+
+    if (firstIndexAsc < 0) {
       return null;
     }
 
-    const value = sum / this.params.period;
+    let sum = 0;
 
-    this.stateByMarket.set(params.marketName, {
-      value,
-      sum,
-      lastReceivedAt: latest.receivedAt,
-    });
+    for (let index = firstIndexAsc; index <= indexAsc; index += 1) {
+      const candle = params.ascending.candles[index];
 
-    return value;
+      if (!candle) {
+        return null;
+      }
+
+      sum += candle.close;
+    }
+
+    const newestCandle = params.ascending.candles[indexAsc];
+    const oldestCandle = params.ascending.candles[firstIndexAsc];
+
+    if (!newestCandle || !oldestCandle) {
+      return null;
+    }
+
+    const duration =
+      newestCandle.receivedAt - oldestCandle.receivedAt;
+
+    if (duration <= 0) {
+      return null;
+    }
+
+    return sum / duration;
+  }
+
+  private calculateValue(
+    params: MarketIndicatorCalculationParams,
+    sum: number,
+  ): number | null {
+    const newestCandle = params.descending.candles[0];
+    const oldestCandle =
+      params.descending.candles[this.period - 1];
+
+    if (!newestCandle || !oldestCandle) {
+      return null;
+    }
+
+    const duration =
+      newestCandle.receivedAt - oldestCandle.receivedAt;
+
+    if (duration <= 0) {
+      return null;
+    }
+
+    return sum / duration;
   }
 }

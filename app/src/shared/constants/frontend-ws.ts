@@ -48,6 +48,7 @@ export const FRONTEND_WS_SUBSCRIPTION_ENTITIES = {
   marketInfo: 'marketInfo',
   marketStatistics: 'marketStatistics',
   marketRolling: 'marketRolling',
+  marketIndicators: 'marketIndicators',
 } as const;
 
 export const FRONTEND_WS_SUBSCRIPTION_ACTIONS = {

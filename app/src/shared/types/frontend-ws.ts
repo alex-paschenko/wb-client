@@ -139,7 +139,8 @@ export type FrontendWsChangeSubscriptionMessage =
     {
       entity:
         | typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics
-        | typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketRolling;
+        | typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketRolling
+        | typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketIndicators;
       action: FrontendWsSubscriptionAction;
       markets: string[];
     }

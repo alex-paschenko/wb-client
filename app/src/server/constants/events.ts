@@ -1,3 +1,4 @@
+// app/src/server/constants/events.ts
 export const SERVER_EVENT = {
   marketsInfoUpdated: 'markets info updated',
 
@@ -9,14 +10,15 @@ export const SERVER_EVENT = {
   marketTickReceived: 'market tick received',
 
   marketStatisticsStorageChanged: 'market statistics storage changed',
-  marketStatisticsStorageUpdated: 'market statistics storage updated',
 
   marketStatisticsViewUpdated: 'market statistics view updated',
   marketStatisticsRestored: 'market statistics restored',
   marketStatisticsPersistenceChanged: 'market statistics persistence changed',
   marketStatisticsApproximated: 'market statistics approximated',
 
-  marketIndicatorsUpdated: 'market indicators updated',
+  marketIndicatorsRegistryReady: 'market indicators registry ready',
+  recalculateIndicatorsRequest: 'recalculate indicators request',
+  recalculateIndicatorsResults: 'recalculate indicators results',
 
   freezeOnStatisticsStorageNeedsToBeLowered:
     'freeze on the statistics storage needs to be lowered',

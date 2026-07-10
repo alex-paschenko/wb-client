@@ -1,15 +1,15 @@
 // app/src/server/types/events.ts
 import type {
+  ExtendedMarketDataView,
   MarketCandle,
-  MarketCandles,
-  MarketCandlesDirection,
 } from '../../shared/types/market-statistics-storage.js';
 import type {
   MarketRollingStatistics,
   MarketRollingStatisticsByMarket,
 } from '../../shared/types/market-statistics-rolling.js';
 import type {
-  MarketIndicators,
+  IndicatorResults,
+  MarketIndicatorsRegistry,
 } from '../../shared/types/market-indicators.js';
 import type { StrategySignal } from './strategy-signals.js';
 import type { SERVER_EVENT } from '../constants/events.js';
@@ -51,10 +51,17 @@ export interface MarketStatisticsStorageChangedEvent {
   delta: ArrayBuffer;
 }
 
-export interface MarketStatisticsStorageUpdatedEvent {
+export type RecalculateIndicatorsRequestEvent = ExtendedMarketDataView;
+
+export interface RecalculateIndicatorsResultsEvent {
   marketName: string;
-  candles: MarketCandles;
-  reversedCandles: MarketCandles;
+  receivedAt: number;
+  numOfAffectedLevels: number;
+  indicators: IndicatorResults[];
+}
+
+export interface MarketIndicatorsRegistryReadyEvent {
+  registry: MarketIndicatorsRegistry;
 }
 
 export type MarketStatisticsRestoredMarketData =
@@ -78,11 +85,6 @@ export interface FreezeOnStatisticsStorageNeedsToBeLoweredEvent {
 
 export interface MarketRemovedEvent {
   marketName: string;
-}
-
-export interface MarketIndicatorsUpdatedEvent {
-  marketName: string;
-  indicators: MarketIndicators;
 }
 
 export interface StrategySignalCreatedEvent {
@@ -113,8 +115,12 @@ export interface ServerEventMap {
   [SERVER_EVENT.marketStatisticsStorageChanged]:
     MarketStatisticsStorageChangedEvent;
 
-  [SERVER_EVENT.marketStatisticsStorageUpdated]:
-    MarketStatisticsStorageUpdatedEvent;
+  [SERVER_EVENT.marketIndicatorsRegistryReady]:
+    MarketIndicatorsRegistryReadyEvent;
+  [SERVER_EVENT.recalculateIndicatorsRequest]:
+    RecalculateIndicatorsRequestEvent;
+  [SERVER_EVENT.recalculateIndicatorsResults]:
+    RecalculateIndicatorsResultsEvent;
 
   [SERVER_EVENT.marketStatisticsRestored]:
     MarketStatisticsRestoredEvent;
@@ -124,8 +130,6 @@ export interface ServerEventMap {
 
   [SERVER_EVENT.marketStatisticsApproximated]:
     MarketStatisticsApproximatedEvent;
-
-  [SERVER_EVENT.marketIndicatorsUpdated]: MarketIndicatorsUpdatedEvent;
 
   [SERVER_EVENT.freezeOnStatisticsStorageNeedsToBeLowered]:
     FreezeOnStatisticsStorageNeedsToBeLoweredEvent;

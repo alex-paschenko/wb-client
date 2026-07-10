@@ -1,3 +1,5 @@
+// app/src/shared/utilities/market-statistics-payload-codec.ts
+
 import type {
   MarketCandle,
 } from '../types/market-statistics-storage.js';

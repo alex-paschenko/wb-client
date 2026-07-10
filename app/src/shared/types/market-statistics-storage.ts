@@ -26,12 +26,34 @@ export type MarketCandlesDirection =
   | 'direct'
   | 'reverse';
 
-export interface MarketCandles {
-  readonly marketName: string;
-  readonly length: number;
-  readonly [index: number]: MarketCandle | undefined;
+import type {
+  MarketIndicatorValues,
+} from './market-indicators.js';
 
-  candle(index: number): MarketCandle | null;
+export interface MarketDataArray<T> {
+  readonly length: number;
+  readonly [index: number]: T | undefined;
+}
+
+export type MarketDataProjectionDirection =
+  | 'ascending'
+  | 'descending';
+
+export interface MarketDataProjection {
+  readonly candles: MarketDataArray<MarketCandle>;
+  readonly indicators: MarketDataArray<MarketIndicatorValues>;
+}
+
+export interface MarketDataView {
+  readonly marketName: string;
+  readonly receivedAt: number;
+  readonly ascending: MarketDataProjection;
+  readonly descending: MarketDataProjection;
+}
+
+export interface ExtendedMarketDataView extends MarketDataView {
+  centralIndexesAsc: number[];
+  numOfAffectedLevels: number;
 }
 
 export interface MarketStatisticsChunk {

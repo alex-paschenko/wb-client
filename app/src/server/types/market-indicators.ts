@@ -1,16 +1,24 @@
 // app/src/server/types/market-indicators.ts
 import type {
-  MarketCandles,
+  IndicatorResults,
+  MarketIndicatorStorageConfig,
+} from '../../shared/types/market-indicators.js';
+
+import type {
+  ExtendedMarketDataView,
 } from '../../shared/types/market-statistics-storage.js';
 
 export interface MarketIndicatorResultsReader {
   get(name: string): number | null;
 }
 
-export interface MarketIndicatorCalculationParams {
-  marketName: string;
-  candles: MarketCandles;
-  reversedCandles: MarketCandles;
+export interface MarketIndicatorCalculationParams
+  extends ExtendedMarketDataView {
+    results: MarketIndicatorResultsReader;
+  }
+
+export interface MarketIndicatorCalculationParams
+  extends ExtendedMarketDataView {
   results: MarketIndicatorResultsReader;
 }
 
@@ -18,6 +26,9 @@ export interface MarketIndicator {
   readonly name: string;
   readonly dependencies: readonly string[];
 
-  calculate(params: MarketIndicatorCalculationParams): number | null;
+  getStorageConfig(): MarketIndicatorStorageConfig;
+
+  calculate(params: MarketIndicatorCalculationParams): IndicatorResults;
+
   removeMarket(marketName: string): void;
 }

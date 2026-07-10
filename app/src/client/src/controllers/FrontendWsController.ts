@@ -3,27 +3,25 @@ import type {
   AppContextValue,
 } from '../contexts/AppContext';
 import { appEvents } from '../events/app-events';
-
 import { FrontendSettings } from '../../../shared/services/frontend-settings';
-
 import {
   FRONTEND_WS_BINARY_MESSAGE_TYPES,
   FRONTEND_WS_CONTROL_MESSAGE_TYPES,
   FRONTEND_WS_SUBSCRIPTION_ENTITIES,
 } from '../../../shared/constants/frontend-ws';
-
 import {
   decodeFrontendWsBinaryPacket,
 } from '../../../shared/utilities/frontend-ws-binary-codec';
-
 import {
   decodeFullMarketStatisticsPayload,
   decodeMarketStatisticsDeltaPayload,
 } from '../../../shared/utilities/market-statistics-payload-codec';
-
 import {
   clientStartDataRequestController,
 } from './ClientStartDataRequestController';
+import {
+  SERVER_WS_EVENT_TYPE,
+} from '../../../shared/types/server-events';
 
 type GetAppContext = () => AppContextValue;
 
@@ -37,6 +35,7 @@ export class FrontendWsController {
   private unsubscribeSettingsChanged: (() => void) | null = null;
   private unsubscribeRequestMarketStatisticsFullSync: (() => void) | null = null;
   private unsubscribeChangeMarketStatisticsSubscription: (() => void) | null = null;
+  private unsubscribeChangeMarketIndicatorsSubscription: (() => void) | null = null;
 
   private settingsSaveTimeoutId: number | null = null;
   private lastSettingsToSave: FrontendSettings | null = null;
@@ -99,6 +98,19 @@ export class FrontendWsController {
         clientStartDataRequestController.markPrimaryDataReceived('marketInfo');
         return;
       }
+
+      if (message.type === SERVER_WS_EVENT_TYPE.marketIndicatorsUpdated) {
+        appEvents.emit(
+          {
+            eventName: 'marketIndicatorsUpdated',
+            condition: message.payload.marketName,
+          },
+          message.payload.marketName,
+          message.payload.indicators,
+        );
+
+        return;
+      }
     });
 
     this.unsubscribeBinaryMessage = frontendWsClient.onBinaryMessage((data) => {
@@ -126,6 +138,13 @@ export class FrontendWsController {
       },
     );
 
+    this.unsubscribeChangeMarketIndicatorsSubscription = appEvents.on(
+      'changeMarketIndicatorsSubscription',
+      (action, markets) => {
+        this.sendChangeMarketIndicatorsSubscription(action, markets);
+      },
+    );
+
     frontendWsClient.connect();
   }
 
@@ -136,6 +155,7 @@ export class FrontendWsController {
     this.unsubscribeSettingsChanged?.();
     this.unsubscribeRequestMarketStatisticsFullSync?.();
     this.unsubscribeChangeMarketStatisticsSubscription?.();
+    this.unsubscribeChangeMarketIndicatorsSubscription?.();
 
     this.unsubscribeConnectionState = null;
     this.unsubscribeJsonMessage = null;
@@ -143,6 +163,7 @@ export class FrontendWsController {
     this.unsubscribeSettingsChanged = null;
     this.unsubscribeRequestMarketStatisticsFullSync = null;
     this.unsubscribeChangeMarketStatisticsSubscription = null;
+    this.unsubscribeChangeMarketIndicatorsSubscription = null;
 
     this.clearSettingsSaveTimeout();
 
@@ -181,6 +202,21 @@ export class FrontendWsController {
       clientId: frontendWsClient.createClientId(),
       params: {
         entity: FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics,
+        action,
+        markets,
+      },
+    });
+  }
+
+  private sendChangeMarketIndicatorsSubscription(
+    action: 'add' | 'remove',
+    markets: string[],
+  ): void {
+    frontendWsClient.sendJson({
+      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.changeSubscription,
+      clientId: frontendWsClient.createClientId(),
+      params: {
+        entity: FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketIndicators,
         action,
         markets,
       },

@@ -15,6 +15,9 @@ import {
 import type {
   MarketRollingStatistics,
 } from '../../../shared/types/market-statistics-rolling';
+import type {
+  MarketIndicators,
+} from '../../../shared/types/market-indicators';
 
 type AppEventMap = EventMapBase & {
   settingsChanged: [settings: FrontendSettings];
@@ -42,6 +45,16 @@ type AppEventMap = EventMapBase & {
 
   marketStatisticsDeltaReceived: [
     payload: MarketStatisticsDeltaPayload,
+  ];
+
+  changeMarketIndicatorsSubscription: [
+    action: FrontendWsSubscriptionAction,
+    markets: string[],
+  ];
+
+  marketIndicatorsUpdated: [
+    marketName: string,
+    indicators: MarketIndicators,
   ];
 };
 

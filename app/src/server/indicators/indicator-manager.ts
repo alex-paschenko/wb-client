@@ -1,14 +1,13 @@
 // app/src/server/indicators/indicator-manager.ts
-
-import { SERVER_EVENT } from '../constants/events.js';
+import { SERVER_EVENT }  from '../constants/events.js';
 import type {
   MarketIndicator,
   MarketIndicatorResultsReader,
 } from '../types/market-indicators.js';
+import type { RecalculateIndicatorsRequestEvent } from '../types/events.js';
 import { eventBus } from '../services/event-bus.js';
 import { EmaIndicator } from './indicators/ema.js';
 import { RcaIndicator } from './indicators/rca.js';
-import { MarketStatisticsStorageUpdatedEvent } from '../types/events.js';
 
 export class IndicatorManager {
   private readonly indicators: MarketIndicator[];
@@ -20,10 +19,16 @@ export class IndicatorManager {
   }
 
   public start(): void {
+    eventBus.emit(SERVER_EVENT.marketIndicatorsRegistryReady, {
+      registry: this.indicators.map((indicator) =>
+        indicator.getStorageConfig(),
+      ),
+    });
+
     eventBus.on(
-      SERVER_EVENT.marketStatisticsStorageUpdated,
+      SERVER_EVENT.recalculateIndicatorsRequest,
       (event) => {
-        this.handleStorageUpdated(event);
+        this.handleRecalculateIndicatorsRequest(event);
       },
     );
 
@@ -35,34 +40,31 @@ export class IndicatorManager {
     );
   }
 
-  private handleStorageUpdated(
-    event: MarketStatisticsStorageUpdatedEvent,
+  private handleRecalculateIndicatorsRequest(
+    event: RecalculateIndicatorsRequestEvent,
   ): void {
-    const mutableResults: Record<string, number> = {};
+    const mutableResults: Record<string, number | null> = {};
 
     const resultsReader: MarketIndicatorResultsReader = {
       get: (name) => mutableResults[name] ?? null,
     };
 
-    for (const indicator of this.indicators) {
-      const value = indicator.calculate({
-        marketName: event.marketName,
-        candles: event.candles,
-        reversedCandles: event.reversedCandles,
+    const indicatorResults = this.indicators.map((indicator) => {
+      const result = indicator.calculate({
+        ...event,
         results: resultsReader,
       });
 
-      if (value === null) {
-        delete mutableResults[indicator.name];
-        continue;
-      }
+      mutableResults[indicator.name] = result.lastResult;
 
-      mutableResults[indicator.name] = value;
-    }
+      return result;
+    });
 
-    eventBus.emit(SERVER_EVENT.marketIndicatorsUpdated, {
+    eventBus.emit(SERVER_EVENT.recalculateIndicatorsResults, {
       marketName: event.marketName,
-      indicators: Object.freeze({ ...mutableResults }),
+      receivedAt: event.receivedAt,
+      numOfAffectedLevels: event.numOfAffectedLevels,
+      indicators: indicatorResults,
     });
   }
 

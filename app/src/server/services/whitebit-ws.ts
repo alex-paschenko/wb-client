@@ -14,6 +14,7 @@ import type {
 } from '../../shared/types/whitebit-api.js';
 import { WhitebitWSClient } from '../whitebit/ws-client.js';
 import { eventBus } from './event-bus.js';
+import { globalStateService } from '../../shared/services/global-state.js';
 
 const WS_REQUEST_TIMEOUT = 10 * SECOND;
 
@@ -77,6 +78,16 @@ export class WhitebitWsService {
         SUBSCRIBE_TYPE.marketStatistics,
         event.marketNames,
       ),
+    );
+
+    const marketNames = globalStateService.getMarketNames();
+    if (!marketNames) {
+      throw new Error('Market Info did not loaded');
+    }
+
+    this.handleSubscribeEvent(
+      SUBSCRIBE_TYPE.marketStatistics,
+      marketNames,
     );
 
     this.wsClient.connect();

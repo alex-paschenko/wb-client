@@ -1,3 +1,4 @@
+// app/src/shared/utilities/frontend-ws-binary-codec.ts
 import {
   FRONTEND_WS_BINARY_HEADER_LENGTH_BYTES,
   FRONTEND_WS_BINARY_HEADER_OFFSETS,

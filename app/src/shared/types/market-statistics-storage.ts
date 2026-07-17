@@ -27,6 +27,7 @@ export type MarketCandlesDirection =
   | 'reverse';
 
 import type {
+  ChangedIndicatorChunk,
   MarketIndicatorValues,
 } from './market-indicators.js';
 
@@ -42,6 +43,11 @@ export type MarketDataProjectionDirection =
 export interface MarketDataProjection {
   readonly candles: MarketDataArray<MarketCandle>;
   readonly indicators: MarketDataArray<MarketIndicatorValues>;
+}
+
+export interface MarketDataProjectionSnapshot {
+  candles: MarketCandle[];
+  indicators: MarketIndicatorValues[];
 }
 
 export interface MarketDataView {
@@ -69,4 +75,21 @@ export interface MarketStatisticsLevel {
   size: number;
   startedAt: number | null;
   endedAt: number | null;
+}
+
+export interface FullMarketStatisticsLevel {
+  candles: MarketCandle[];
+  indicators: MarketIndicatorValues[];
+}
+
+export interface CandleIndicatorsChange {
+  level: number;
+  startedAt: number;
+  endedAt: number;
+  indicators: MarketIndicatorValues;
+}
+
+export interface AppliedIndicatorResults {
+  changedChunks: ChangedIndicatorChunk[];
+  persistenceChanges: CandleIndicatorsChange[];
 }

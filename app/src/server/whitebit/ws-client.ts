@@ -1,3 +1,4 @@
+// app/src/server/whitebit/ws-client.ts
 import WebSocket from 'ws';
 import { SECONDS } from '../../shared/constants/time';
 

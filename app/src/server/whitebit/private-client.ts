@@ -1,3 +1,4 @@
+// app/src/server/whitebit/private-client.ts
 import crypto from 'node:crypto';
 
 export interface WhitebitTradingBalance {

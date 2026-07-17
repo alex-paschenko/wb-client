@@ -1,9 +1,12 @@
+// app/src/client/src/controllers/FrontendWsController.ts
 import { frontendWsClient } from '../api/frontend-ws';
 import type {
   AppContextValue,
 } from '../contexts/AppContext';
 import { appEvents } from '../events/app-events';
-import { FrontendSettings } from '../../../shared/services/frontend-settings';
+import {
+  FrontendSettings
+} from '../../../shared/services/frontend-settings';
 import {
   FRONTEND_WS_BINARY_MESSAGE_TYPES,
   FRONTEND_WS_CONTROL_MESSAGE_TYPES,
@@ -20,8 +23,8 @@ import {
   clientStartDataRequestController,
 } from './ClientStartDataRequestController';
 import {
-  SERVER_WS_EVENT_TYPE,
-} from '../../../shared/types/server-events';
+  globalStateService,
+} from '../../../shared/services/global-state';
 
 type GetAppContext = () => AppContextValue;
 
@@ -33,9 +36,10 @@ export class FrontendWsController {
   private unsubscribeJsonMessage: (() => void) | null = null;
   private unsubscribeBinaryMessage: (() => void) | null = null;
   private unsubscribeSettingsChanged: (() => void) | null = null;
-  private unsubscribeRequestMarketStatisticsFullSync: (() => void) | null = null;
-  private unsubscribeChangeMarketStatisticsSubscription: (() => void) | null = null;
-  private unsubscribeChangeMarketIndicatorsSubscription: (() => void) | null = null;
+  private unsubscribeRequestMarketStatisticsFullSync:
+    (() => void) | null = null;
+  private unsubscribeChangeMarketStatisticsSubscription:
+    (() => void) | null = null;
 
   private settingsSaveTimeoutId: number | null = null;
   private lastSettingsToSave: FrontendSettings | null = null;
@@ -51,7 +55,8 @@ export class FrontendWsController {
 
     this.unsubscribeConnectionState =
       frontendWsClient.onConnectionStateChange((isConnected) => {
-        const appContext = this.getCurrentAppContext();
+        const appContext =
+          this.getCurrentAppContext();
 
         appContext.logger.debug(
           isConnected
@@ -60,6 +65,10 @@ export class FrontendWsController {
         );
 
         if (!isConnected) {
+          globalStateService.clearIndicatorRegistry();
+          globalStateService.clearMarkets();
+
+          clientStartDataRequestController.reset();
           return;
         }
 
@@ -91,37 +100,52 @@ export class FrontendWsController {
         return;
       }
 
-      if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.marketsUpdated) {
-        appContext.setMarkets(message.markets);
-        appContext.logger.debug('log.messages.marketsUpdated');
+      if (
+        message.type ===
+          FRONTEND_WS_CONTROL_MESSAGE_TYPES.marketsUpdated
+      ) {
+        globalStateService.setMarkets(
+          message.markets,
+          Object.keys(message.markets),
+        );
 
-        clientStartDataRequestController.markPrimaryDataReceived('marketInfo');
+        appContext.logger.debug(
+          'log.messages.marketsUpdated',
+        );
+
+        clientStartDataRequestController
+          .markPrimaryDataReceived('marketInfo');
+
         return;
       }
 
-      if (message.type === SERVER_WS_EVENT_TYPE.marketIndicatorsUpdated) {
-        appEvents.emit(
-          {
-            eventName: 'marketIndicatorsUpdated',
-            condition: message.payload.marketName,
-          },
-          message.payload.marketName,
-          message.payload.indicators,
+      if (
+        message.type ===
+          FRONTEND_WS_CONTROL_MESSAGE_TYPES.marketIndicatorsRegistryLoaded
+      ) {
+        globalStateService.setIndicatorRegistry(
+          message.params.registry,
+        );
+
+        clientStartDataRequestController.markPrimaryDataReceived(
+          'marketIndicatorsRegistry',
+        );
+
+        appContext.logger.debug(
+          'log.messages.marketIndicatorsRegistryLoaded',
         );
 
         return;
       }
     });
 
-    this.unsubscribeBinaryMessage = frontendWsClient.onBinaryMessage((data) => {
-      this.handleBinaryMessage(data);
-    });
+    this.unsubscribeBinaryMessage = frontendWsClient.onBinaryMessage(
+      (data) => { this.handleBinaryMessage(data) }
+    );
 
     this.unsubscribeSettingsChanged = appEvents.on(
       'settingsChanged',
-      (settings) => {
-        this.scheduleSettingsSave(settings);
-      },
+      (settings) => { this.scheduleSettingsSave(settings) },
     );
 
     this.unsubscribeRequestMarketStatisticsFullSync = appEvents.on(
@@ -138,13 +162,6 @@ export class FrontendWsController {
       },
     );
 
-    this.unsubscribeChangeMarketIndicatorsSubscription = appEvents.on(
-      'changeMarketIndicatorsSubscription',
-      (action, markets) => {
-        this.sendChangeMarketIndicatorsSubscription(action, markets);
-      },
-    );
-
     frontendWsClient.connect();
   }
 
@@ -155,7 +172,6 @@ export class FrontendWsController {
     this.unsubscribeSettingsChanged?.();
     this.unsubscribeRequestMarketStatisticsFullSync?.();
     this.unsubscribeChangeMarketStatisticsSubscription?.();
-    this.unsubscribeChangeMarketIndicatorsSubscription?.();
 
     this.unsubscribeConnectionState = null;
     this.unsubscribeJsonMessage = null;
@@ -163,7 +179,6 @@ export class FrontendWsController {
     this.unsubscribeSettingsChanged = null;
     this.unsubscribeRequestMarketStatisticsFullSync = null;
     this.unsubscribeChangeMarketStatisticsSubscription = null;
-    this.unsubscribeChangeMarketIndicatorsSubscription = null;
 
     this.clearSettingsSaveTimeout();
 
@@ -208,29 +223,17 @@ export class FrontendWsController {
     });
   }
 
-  private sendChangeMarketIndicatorsSubscription(
-    action: 'add' | 'remove',
-    markets: string[],
-  ): void {
-    frontendWsClient.sendJson({
-      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.changeSubscription,
-      clientId: frontendWsClient.createClientId(),
-      params: {
-        entity: FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketIndicators,
-        action,
-        markets,
-      },
-    });
-  }
-
   private handleBinaryMessage(data: ArrayBuffer): void {
     const packet = decodeFrontendWsBinaryPacket(data);
 
     if (
       packet.header.messageType ===
-        FRONTEND_WS_BINARY_MESSAGE_TYPES.fullMarketStatistics
+      FRONTEND_WS_BINARY_MESSAGE_TYPES.fullMarketStatistics
     ) {
-      const payload = decodeFullMarketStatisticsPayload(packet.payload);
+      const payload = decodeFullMarketStatisticsPayload(
+        packet.payload,
+        globalStateService.getIndicatorRegistry(),
+      );
 
       appEvents.emit(
         {
@@ -260,7 +263,9 @@ export class FrontendWsController {
   }
 
   private scheduleSettingsSave(settings: FrontendSettings): void {
-    this.lastSettingsToSave = FrontendSettings.fromValue(settings.toValue());
+    this.lastSettingsToSave =
+      FrontendSettings.fromValue(settings.toValue());
+
     this.clearSettingsSaveTimeout();
 
     this.settingsSaveTimeoutId = window.setTimeout(() => {

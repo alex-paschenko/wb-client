@@ -1,3 +1,4 @@
+// app/src/client/src/hooks/useController.ts
 import {
   useEffect,
   useState,
@@ -13,14 +14,7 @@ export const useController = <TState,>(
   const [state, setState] = useState(() => controller.getState());
 
   useEffect(() => {
-    const unsubscribe = controller.subscribe(setState);
-
-    controller.start();
-
-    return () => {
-      controller.stop();
-      unsubscribe();
-    };
+    return controller.subscribe(setState);
   }, [controller]);
 
   return state;

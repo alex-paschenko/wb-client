@@ -1,3 +1,4 @@
+// app/src/server/frontend/ws-server.ts
 import type { Server } from 'node:http';
 
 import {

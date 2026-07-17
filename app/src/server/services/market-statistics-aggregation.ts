@@ -1,29 +1,62 @@
 // app/src/server/services/market-statistics-aggregation.ts
-import { SERVER_EVENT } from '../constants/events.js';
 import {
   MARKET_STATISTICS_LEVEL_CONFIGS,
 } from '../../shared/constants/market-statistics-config.js';
-import { eventBus } from './event-bus.js';
-
-import type {
-  MarketCandle,
-} from '../../shared/types/market-statistics-storage.js';
-import type {
-  MarketIndicatorsRegistry,
-} from '../../shared/types/market-indicators.js';
 import {
   MarketStatisticsStorageService,
 } from '../../shared/services/market-statistics-storage.js';
 import type {
-  MarketTickReceivedEvent,
+  IndicatorResults,
+  MarketIndicatorValues,
+} from '../../shared/types/market-indicators.js';
+import type {
+  CandleIndicatorsChange,
+  FullMarketStatisticsLevel,
+  MarketCandle,
+} from '../../shared/types/market-statistics-storage.js';
+import {
+  SERVER_EVENT,
+} from '../constants/events.js';
+import {
+  marketCandlesDao,
+  type MarketCandleRemoveRow,
+  type MarketCandleRow,
+  type RefreshMarketCandlesInput,
+} from '../dao/market-candles.js';
+import type {
   MarketStatisticsPersistenceChange,
   MarketStatisticsRestoredEvent,
-  MarketIndicatorsRegistryReadyEvent,
+  MarketTickReceivedEvent,
   RecalculateIndicatorsResultsEvent,
 } from '../types/events.js';
-import { MarketTick } from '../types/market-statistics.js';
-import { getMiddleTimestamp } from '../utilities/time.js';
-import { calculateCandlePrice, calculateSpeed } from '../utilities/price.js';
+import type {
+  MarketTick,
+} from '../types/market-statistics.js';
+import {
+  calculateCandlePrice,
+  calculateSpeed,
+} from '../utilities/price.js';
+import {
+  getMiddleTimestamp,
+} from '../utilities/time.js';
+import { getCumulativeCutoffs } from '../../shared/utilities/time.js';
+import { eventBus } from './event-bus.js';
+import {
+  globalStateService
+} from '../../shared/services/global-state.js';
+
+interface IndicatorResultWaiter {
+  resolve: (
+    event: RecalculateIndicatorsResultsEvent,
+  ) => void;
+}
+
+interface StartupPromotionResult {
+  addedRows: MarketCandleRow[];
+  removals: MarketCandleRemoveRow[];
+}
+
+const STARTUP_PERSISTENCE_MARKETS_PER_BATCH = 20;
 
 export class MarketStatisticsAggregationService {
   private readonly storagesByMarket = new Map<
@@ -35,24 +68,9 @@ export class MarketStatisticsAggregationService {
 
   private readonly tickBuffersByMarket = new Map<string, MarketTick[]>();
 
-  private indicatorRegistry: MarketIndicatorsRegistry = [];
+  private indicatorResultWaiter: IndicatorResultWaiter | null = null;
 
-  start(): void {
-    eventBus.on(
-      SERVER_EVENT.marketTickReceived,
-      (event) => this.handleTickReceived(event),
-    );
-
-    eventBus.on(
-      SERVER_EVENT.marketStatisticsRestored,
-      (event) => this.handleMarketStatisticsRestored(event),
-    );
-
-    eventBus.on(
-      SERVER_EVENT.marketIndicatorsRegistryReady,
-      (event) => this.handleMarketIndicatorsRegistryReady(event),
-    );
-
+  public async start(): Promise<void> {
     eventBus.on(
       SERVER_EVENT.recalculateIndicatorsResults,
       (event) => this.handleRecalculateIndicatorsResults(event),
@@ -63,28 +81,57 @@ export class MarketStatisticsAggregationService {
       (event) => this.decrementFreezing(event.marketName),
     );
 
+    await globalStateService.waitForIndicatorRegistry();
+
+    await this.prepareStoragesFromDatabase();
+
+    this.indicatorResultWaiter = null;
+
+    eventBus.on(
+      SERVER_EVENT.marketTickReceived,
+      (event) => this.handleTickReceived(event),
+    );
+
     // TODO Remove it! For testing purpose only!
-    const stor = this.storagesByMarket;
+    const storages = this.storagesByMarket;
+
     setInterval(() => {
       let marketName = '---';
       let numOfPoints = 0;
 
-      for (const [k, v] of stor.entries()) {
-        const nop = v.size(0);
+      for (const [currentMarketName, storage] of storages.entries()) {
+        const currentNumOfPoints = storage.size(0);
 
-        if (nop > numOfPoints) {
-          numOfPoints = nop;
-          marketName = k;
+        if (currentNumOfPoints > numOfPoints) {
+          numOfPoints = currentNumOfPoints;
+          marketName = currentMarketName;
         }
       }
 
-      console.log(`Most active market: ${marketName} (${numOfPoints})`);
-    }, 30000);
+      console.log(
+        `Most active market: ${marketName} (${numOfPoints})`,
+      );
+    }, 30_000);
+  }
+
+  private waitForIndicatorResults():
+    Promise<RecalculateIndicatorsResultsEvent> {
+    if (this.indicatorResultWaiter) {
+      throw new Error(
+        'Indicator result waiter already exists',
+      );
+    }
+
+    return new Promise((resolve) => {
+      this.indicatorResultWaiter = {
+        resolve,
+      };
+    });
   }
 
   public createFullSyncSnapshot(
     marketName: string,
-  ): MarketCandle[][] {
+  ): FullMarketStatisticsLevel[] {
     this.incrementFreezing(marketName);
 
     const storage = this.getOrCreateStorage(marketName);
@@ -92,12 +139,15 @@ export class MarketStatisticsAggregationService {
     return storage.getAllItemsByLevel();
   }
 
-  public getStorageItemsByMarket(): Record<string, MarketCandle[][]> {
+  public getStorageItemsByMarket():
+    Record<string, FullMarketStatisticsLevel[]> {
     return Object.fromEntries(
-      [...this.storagesByMarket.entries()].map(([marketName, storage]) => [
-        marketName,
-        storage.getAllItemsByLevel(),
-      ]),
+      [...this.storagesByMarket.entries()].map(
+        ([marketName, storage]) => [
+          marketName,
+          storage.getAllItemsByLevel(),
+        ],
+      ),
     );
   }
 
@@ -140,7 +190,13 @@ export class MarketStatisticsAggregationService {
     }
 
     this.incrementFreezing(event.marketName);
-    this.tickProcessor(event.marketName, event.tick);
+
+    try {
+      this.tickProcessor(event.marketName, event.tick);
+    } catch (error) {
+      this.decrementFreezing(event.marketName);
+      throw error;
+    }
   }
 
   private tickProcessor(
@@ -149,11 +205,14 @@ export class MarketStatisticsAggregationService {
   ): void {
     const storage = this.getOrCreateStorage(marketName);
     const candle = this.tickToCandle(storage, tick);
-
     const previousTick = storage.getLastItem(0);
 
     if (previousTick?.receivedAt === candle.receivedAt) {
-      console.warn('Duplicate tick received', candle);
+      console.warn('Duplicate tick received', {
+        marketName,
+        candle,
+      });
+
       this.decrementFreezing(marketName);
       return;
     }
@@ -183,8 +242,11 @@ export class MarketStatisticsAggregationService {
       level < MARKET_STATISTICS_LEVEL_CONFIGS.length - 1;
       level += 1
     ) {
-      const currentConfig = MARKET_STATISTICS_LEVEL_CONFIGS[level];
-      const nextConfig = MARKET_STATISTICS_LEVEL_CONFIGS[level + 1];
+      const currentConfig =
+        MARKET_STATISTICS_LEVEL_CONFIGS[level];
+
+      const nextConfig =
+        MARKET_STATISTICS_LEVEL_CONFIGS[level + 1];
 
       const startedAt = storage.getStartedAt(level);
       const endedAt = storage.getEndedAt(level);
@@ -227,43 +289,114 @@ export class MarketStatisticsAggregationService {
     return centralIndexesAsc;
   }
 
+  private applyLiveIndicatorResults(
+    event: RecalculateIndicatorsResultsEvent,
+  ): void {
+    const storage = this.storagesByMarket.get(event.marketName);
+
+    if (!storage) {
+      console.error(
+        'Cannot apply indicator results: market storage was not found',
+        {
+          marketName: event.marketName,
+          receivedAt: event.receivedAt,
+        },
+      );
+
+      this.decrementFreezing(event.marketName);
+      return;
+    }
+
+    try {
+      const latestCandle =
+        this.getLatestStorageCandle(storage);
+
+      const receivedAtMatches =
+        latestCandle?.receivedAt === event.receivedAt;
+
+      const resultsToApply = receivedAtMatches
+        ? event.indicators
+        : this.createResultsWithEmptyLastValues(
+            event.indicators,
+          );
+
+      if (!receivedAtMatches) {
+        console.error(
+          'Cannot apply latest indicator values: receivedAt mismatch',
+          {
+            marketName: event.marketName,
+            expectedReceivedAt:
+              latestCandle?.receivedAt ?? null,
+            actualReceivedAt: event.receivedAt,
+          },
+        );
+      }
+
+      const appliedIndicatorResults = storage.applyIndicatorResults(
+        resultsToApply,
+      );
+
+      const delta = storage.commitDelta();
+
+      if (delta) {
+        eventBus.emit(
+          SERVER_EVENT.marketStatisticsStorageChanged,
+          {
+            marketName: event.marketName,
+            delta,
+          },
+        );
+      }
+
+      eventBus.emit(
+        SERVER_EVENT.marketStatisticsPersistenceChanged,
+        {
+          marketName: event.marketName,
+          changes: this.toPersistenceChanges(
+            storage,
+            event.numOfAffectedLevels,
+          ),
+          latestIndicators:
+            this.getLastIndicatorValues(resultsToApply),
+          indicatorChanges:
+            appliedIndicatorResults.persistenceChanges,
+        },
+      );
+    } finally {
+      this.decrementFreezing(event.marketName);
+    }
+  }
+
   private handleRecalculateIndicatorsResults(
     event: RecalculateIndicatorsResultsEvent,
   ): void {
-    const storage = this.getOrCreateStorage(event.marketName);
+    const waiter = this.indicatorResultWaiter;
 
-    for (const result of event.indicators) {
-      storage.addIndicatorResults(result);
+    if (waiter) {
+      this.indicatorResultWaiter = null;
+      waiter.resolve(event);
+      return;
     }
 
-    const delta = storage.commitDelta();
-
-    if (delta) {
-      eventBus.emit(SERVER_EVENT.marketStatisticsStorageChanged, {
-        marketName: event.marketName,
-        delta,
-      });
-    }
-
-    eventBus.emit(SERVER_EVENT.marketStatisticsPersistenceChanged, {
-      marketName: event.marketName,
-      changes: this.toPersistenceChanges(
-        storage,
-        event.numOfAffectedLevels,
-      ),
-    });
-
-    this.decrementFreezing(event.marketName);
+    this.applyLiveIndicatorResults(event);
   }
 
-  private handleMarketIndicatorsRegistryReady(
-    event: MarketIndicatorsRegistryReadyEvent,
-  ): void {
-    this.indicatorRegistry = event.registry;
+  private getLatestStorageCandle(
+    storage: MarketStatisticsStorageService,
+  ): MarketCandle | null {
+    for (
+      let level = 0;
+      level < storage.getNumOfLevels();
+      level += 1
+    ) {
+      const candle = storage.getLastItem(level);
 
-    for (const storage of this.storagesByMarket.values()) {
-      storage.setIndicatorRegistry(event.registry);
+      if (candle) {
+        return candle;
+      }
     }
+
+    return null;
   }
 
   private toPersistenceChanges(
@@ -296,6 +429,26 @@ export class MarketStatisticsAggregationService {
     );
   }
 
+  private getLastIndicatorValues(
+    results: readonly IndicatorResults[],
+  ): MarketIndicatorValues {
+    return Object.fromEntries(
+      results.map((result) => [
+        result.indicatorName,
+        result.lastResult,
+      ]),
+    );
+  }
+
+  private createResultsWithEmptyLastValues(
+    results: readonly IndicatorResults[],
+  ): IndicatorResults[] {
+    return results.map((result) => ({
+      ...result,
+      lastResult: null,
+    }));
+  }
+
   private aggregateCandles(
     candles: MarketCandle[],
   ): MarketCandle {
@@ -312,29 +465,390 @@ export class MarketStatisticsAggregationService {
 
     const startedAt = first.startedAt;
     const endedAt = last.endedAt;
-    const receivedAt = getMiddleTimestamp(startedAt, endedAt);
+    const receivedAt = getMiddleTimestamp(
+      startedAt,
+      endedAt,
+    );
 
     const open = first.open;
     const close = last.close;
 
     return {
       receivedAt,
-      price: calculateCandlePrice(open, close, high, low),
+      price: calculateCandlePrice(
+        open,
+        close,
+        high,
+        low,
+      ),
       speed: calculateSpeed(
         first.startedAt,
         first.price,
         last.endedAt,
         last.price,
       ),
-
       startedAt,
       endedAt,
-
       open,
       close,
       high,
       low,
     };
+  }
+
+  private async prepareStoragesFromDatabase(): Promise<void> {
+    const now = Date.now();
+
+    const cumulativeCutoffs =
+      getCumulativeCutoffs(now);
+
+    const maxLevel =
+      MARKET_STATISTICS_LEVEL_CONFIGS.length - 1;
+
+    const maxLevelCutoff =
+      cumulativeCutoffs[maxLevel];
+
+    const marketNames =
+      await marketCandlesDao.getMarketNames();
+
+    const activeMarketNames = new Set(
+      globalStateService.getMarketNames(),
+    );
+
+    const persistenceBatch:
+      RefreshMarketCandlesInput[] = [];
+
+    console.log(
+      'Market statistics startup aggregation started',
+      {
+        markets: marketNames.length,
+      },
+    );
+
+    const maxMarketIndex =
+      marketNames.length - 1;
+
+    let decile = '0';
+
+    for (
+      const [index, marketName]
+      of marketNames.entries()
+    ) {
+      const persistenceInput =
+        await this.prepareMarketStorage(
+          marketName,
+          cumulativeCutoffs,
+          maxLevel,
+          maxLevelCutoff,
+        );
+
+      if (persistenceInput) {
+        persistenceBatch.push(
+          persistenceInput,
+        );
+      }
+
+      if (
+        persistenceBatch.length >=
+        STARTUP_PERSISTENCE_MARKETS_PER_BATCH
+      ) {
+        await marketCandlesDao.refreshBatch(
+          persistenceBatch,
+        );
+
+        persistenceBatch.length = 0;
+      }
+
+      if (!activeMarketNames.has(marketName)) {
+        this.removeMarketStorage(
+          marketName,
+        );
+      }
+
+      const currentDecile = (
+        index * 10 / maxMarketIndex
+      ).toFixed();
+
+      if (currentDecile !== decile) {
+        decile = currentDecile;
+
+        console.log(
+          `processed: ${currentDecile}/10`,
+        );
+      }
+    }
+
+    if (persistenceBatch.length > 0) {
+      await marketCandlesDao.refreshBatch(
+        persistenceBatch,
+      );
+    }
+
+    console.log(
+      'Market statistics startup aggregation finished',
+      {
+        storages: this.storagesByMarket.size,
+      },
+    );
+  }
+
+private async prepareMarketStorage(
+  marketName: string,
+  cumulativeCutoffs: readonly number[],
+  maxLevel: number,
+  maxLevelCutoff: number,
+): Promise<RefreshMarketCandlesInput | null> {
+    const rows = await marketCandlesDao.getForStartup(
+      marketName,
+      maxLevel,
+      maxLevelCutoff,
+    );
+
+    if (rows.length === 0) {
+      return null;
+    }
+
+    const storage = this.getOrCreateStorage(marketName);
+
+    storage.restoreAllItemsByLevel(
+      this.toFullMarketStatisticsLevels(rows),
+    );
+
+    const promotionResult =
+      this.promoteStartupStorage(
+        storage,
+        marketName,
+        cumulativeCutoffs,
+      );
+
+    const indicatorPersistenceChanges =
+      await this.recalculateStartupIndicators(storage);
+
+    /*
+    * Clear the accumulated binary delta, but do not publish it.
+    * Clients will receive the final storage through full sync.
+    */
+    storage.commitDelta();
+
+    return {
+      toAdd: promotionResult.addedRows,
+
+      toChange:
+        indicatorPersistenceChanges.map(
+          (change) => ({
+            marketName,
+            ...change,
+          }),
+        ),
+
+      toRemove: promotionResult.removals,
+    };
+  }
+
+  private toFullMarketStatisticsLevels(
+    rows: readonly MarketCandleRow[],
+  ): FullMarketStatisticsLevel[] {
+    const levels =
+      MARKET_STATISTICS_LEVEL_CONFIGS.map(() => ({
+        candles: [],
+        indicators: [],
+      } as FullMarketStatisticsLevel));
+
+    for (const row of rows) {
+      const levelData = levels[row.level];
+
+      if (!levelData) {
+        throw new Error(
+          `Unknown market statistics level from DB: ${row.level}`,
+        );
+      }
+
+      levelData.candles.push({
+        receivedAt: row.receivedAt,
+        price: row.price,
+        speed: row.speed,
+        startedAt: row.startedAt,
+        endedAt: row.endedAt,
+        open: row.open,
+        close: row.close,
+        high: row.high,
+        low: row.low,
+      });
+
+      levelData.indicators.push(row.indicators);
+    }
+
+    return levels;
+  }
+
+  private promoteStartupStorage(
+    storage: MarketStatisticsStorageService,
+    marketName: string,
+    cumulativeCutoffs: readonly number[],
+  ): StartupPromotionResult {
+    const addedRows: MarketCandleRow[] = [];
+    const removals: MarketCandleRemoveRow[] = [];
+
+    const maxLevel =
+      MARKET_STATISTICS_LEVEL_CONFIGS.length - 1;
+
+    for (
+      let sourceLevel = 0;
+      sourceLevel < maxLevel;
+      sourceLevel += 1
+    ) {
+      const cutoff =
+        cumulativeCutoffs[sourceLevel];
+
+      const sourceItems =
+        storage.readItemsBefore(sourceLevel, cutoff);
+
+      if (sourceItems.length === 0) {
+        continue;
+      }
+
+      const targetLevel = sourceLevel + 1;
+      const targetDuration =
+        MARKET_STATISTICS_LEVEL_CONFIGS[targetLevel].duration;
+
+      const targetCandles =
+        this.aggregateCandlesByDuration(
+          sourceItems,
+          targetDuration,
+        );
+
+      storage.removeNItems(
+        sourceLevel,
+        sourceItems.length,
+        'should record delta',
+      );
+
+      for (const candle of targetCandles) {
+        storage.addItem(
+          targetLevel,
+          candle,
+          'should record delta',
+        );
+
+        addedRows.push({
+          marketName,
+          level: targetLevel,
+          ...candle,
+          indicators: {},
+        });
+      }
+
+      removals.push({
+        marketName,
+        level: sourceLevel,
+        timeThreshold: cutoff,
+      });
+    }
+
+    /*
+    * Old candles of the maximum level were deliberately not loaded.
+    * This deletion removes them directly from the database.
+    */
+    removals.push({
+      marketName,
+      level: maxLevel,
+      timeThreshold: cumulativeCutoffs[maxLevel],
+    });
+
+    return {
+      addedRows,
+      removals,
+    };
+  }
+
+  private aggregateCandlesByDuration(
+    candles: readonly MarketCandle[],
+    targetDuration: number,
+  ): MarketCandle[] {
+    const result: MarketCandle[] = [];
+
+    let bucket: MarketCandle[] = [];
+    let bucketStartedAt: number | null = null;
+
+    for (const candle of candles) {
+      if (bucketStartedAt === null) {
+        bucketStartedAt = candle.startedAt;
+      }
+
+      if (
+        bucket.length > 0 &&
+        candle.startedAt - bucketStartedAt >= targetDuration
+      ) {
+        result.push(
+          this.aggregateCandles(bucket),
+        );
+
+        bucket = [];
+        bucketStartedAt = candle.startedAt;
+      }
+
+      bucket.push(candle);
+    }
+
+    if (bucket.length > 0) {
+      result.push(
+        this.aggregateCandles(bucket),
+      );
+    }
+
+    return result;
+  }
+
+  private async recalculateStartupIndicators(
+    storage: MarketStatisticsStorageService,
+  ): Promise<CandleIndicatorsChange[]> {
+    const size = storage.size();
+
+    if (size === 0) {
+      return [];
+    }
+
+    const resultPromise =
+      this.waitForIndicatorResults();
+
+    this.emitRecalculateIndicatorsRequest(
+      storage,
+      Array.from(
+        {
+          length: size,
+        },
+        (_, index) => index,
+      ),
+      storage.getNumOfLevels(),
+    );
+
+    const resultEvent =
+      await resultPromise;
+
+    const appliedResults =
+      storage.applyIndicatorResults(
+        resultEvent.indicators,
+      );
+
+    return appliedResults.persistenceChanges;
+  }
+
+  private removeMarketStorage(
+    marketName: string,
+  ): void {
+    if (!this.storagesByMarket.delete(marketName)) {
+      return;
+    }
+
+    this.tickBuffersByMarket.delete(marketName);
+    this.freezingByMarket.delete(marketName);
+
+    eventBus.emit(
+      SERVER_EVENT.marketRemoved,
+      {
+        marketName,
+      },
+    );
   }
 
   private getOrCreateStorage(
@@ -346,8 +860,8 @@ export class MarketStatisticsAggregationService {
       return existing;
     }
 
-    const created = new MarketStatisticsStorageService(marketName);
-    created.setIndicatorRegistry(this.indicatorRegistry);
+    const created =
+      new MarketStatisticsStorageService(marketName);
 
     this.storagesByMarket.set(marketName, created);
 
@@ -357,32 +871,30 @@ export class MarketStatisticsAggregationService {
   private handleMarketStatisticsRestored(
     event: MarketStatisticsRestoredEvent,
   ): void {
-    for (const [marketName, data] of Object.entries(event.itemsByMarket)) {
+    for (
+      const [marketName, levels]
+      of Object.entries(event.itemsByMarket)
+    ) {
       const storage = this.getOrCreateStorage(marketName);
 
-      for (const [level, candles] of data.entries()) {
-        for (const candle of candles) {
-          storage.addItem(
-            level,
-            candle,
-            'suppress record delta',
-          );
-        }
-      }
-
-      storage.commitDelta();
+      storage.restoreAllItemsByLevel(levels);
     }
   }
 
-  private incrementFreezing(marketName: string): void {
+  private incrementFreezing(
+    marketName: string,
+  ): void {
     this.freezingByMarket.set(
       marketName,
       (this.freezingByMarket.get(marketName) ?? 0) + 1,
     );
   }
 
-  private decrementFreezing(marketName: string): void {
-    const current = this.freezingByMarket.get(marketName) ?? 0;
+  private decrementFreezing(
+    marketName: string,
+  ): void {
+    const current =
+      this.freezingByMarket.get(marketName) ?? 0;
 
     if (current <= 1) {
       this.freezingByMarket.delete(marketName);
@@ -390,17 +902,25 @@ export class MarketStatisticsAggregationService {
       return;
     }
 
-    this.freezingByMarket.set(marketName, current - 1);
+    this.freezingByMarket.set(
+      marketName,
+      current - 1,
+    );
   }
 
-  private flushTickBuffer(marketName: string): void {
+  private flushTickBuffer(
+    marketName: string,
+  ): void {
     if (this.isFrozen(marketName)) {
       return;
     }
 
     const buffer = this.getTickBuffer(marketName);
 
-    while (buffer.length > 0 && !this.isFrozen(marketName)) {
+    while (
+      buffer.length > 0 &&
+      !this.isFrozen(marketName)
+    ) {
       const tick = buffer.shift();
 
       if (!tick) {
@@ -408,20 +928,35 @@ export class MarketStatisticsAggregationService {
       }
 
       this.incrementFreezing(marketName);
-      this.tickProcessor(marketName, tick);
+
+      try {
+        this.tickProcessor(marketName, tick);
+      } catch (error) {
+        this.decrementFreezing(marketName);
+        throw error;
+      }
     }
   }
 
-  private isFrozen(marketName: string): boolean {
-    return (this.freezingByMarket.get(marketName) ?? 0) > 0;
+  private isFrozen(
+    marketName: string,
+  ): boolean {
+    return (
+      this.freezingByMarket.get(marketName) ?? 0
+    ) > 0;
   }
 
-  private getTickBuffer(marketName: string): MarketTick[] {
+  private getTickBuffer(
+    marketName: string,
+  ): MarketTick[] {
     let buffer = this.tickBuffersByMarket.get(marketName);
 
     if (!buffer) {
       buffer = [];
-      this.tickBuffersByMarket.set(marketName, buffer);
+      this.tickBuffersByMarket.set(
+        marketName,
+        buffer,
+      );
     }
 
     return buffer;

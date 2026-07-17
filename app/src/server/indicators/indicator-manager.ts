@@ -1,13 +1,26 @@
 // app/src/server/indicators/indicator-manager.ts
-import { SERVER_EVENT }  from '../constants/events.js';
+import {
+  SERVER_EVENT,
+} from '../constants/events.js';
+import {
+  eventBus,
+} from '../services/event-bus.js';
+import type {
+  RecalculateIndicatorsRequestEvent,
+} from '../types/events.js';
 import type {
   MarketIndicator,
   MarketIndicatorResultsReader,
 } from '../types/market-indicators.js';
-import type { RecalculateIndicatorsRequestEvent } from '../types/events.js';
-import { eventBus } from '../services/event-bus.js';
-import { EmaIndicator } from './indicators/ema.js';
-import { RcaIndicator } from './indicators/rca.js';
+import type {
+  IndicatorResults,
+} from '../../shared/types/market-indicators.js';
+import {
+  EmaIndicator,
+} from './indicators/ema.js';
+import {
+  RcaIndicator,
+} from './indicators/rca.js';
 
 export class IndicatorManager {
   private readonly indicators: MarketIndicator[];
@@ -19,11 +32,14 @@ export class IndicatorManager {
   }
 
   public start(): void {
-    eventBus.emit(SERVER_EVENT.marketIndicatorsRegistryReady, {
-      registry: this.indicators.map((indicator) =>
-        indicator.getStorageConfig(),
-      ),
-    });
+    eventBus.emit(
+      SERVER_EVENT.marketIndicatorsRegistryReady,
+      {
+        registry: this.indicators.map((indicator) =>
+          indicator.getStorageConfig(),
+        ),
+      },
+    );
 
     eventBus.on(
       SERVER_EVENT.recalculateIndicatorsRequest,
@@ -43,32 +59,46 @@ export class IndicatorManager {
   private handleRecalculateIndicatorsRequest(
     event: RecalculateIndicatorsRequestEvent,
   ): void {
-    const mutableResults: Record<string, number | null> = {};
+    const resultsByName = new Map<string, IndicatorResults>();
 
     const resultsReader: MarketIndicatorResultsReader = {
-      get: (name) => mutableResults[name] ?? null,
+      getLast: (name) =>
+        resultsByName.get(name)?.lastResult ?? null,
+
+      getRecalculated: (name) =>
+        resultsByName.get(name)?.recalculatedValues ?? [],
     };
 
-    const indicatorResults = this.indicators.map((indicator) => {
+    const indicatorResults: IndicatorResults[] = [];
+
+    for (const indicator of this.indicators) {
       const result = indicator.calculate({
         ...event,
         results: resultsReader,
       });
 
-      mutableResults[indicator.name] = result.lastResult;
+      resultsByName.set(
+        indicator.name,
+        result,
+      );
 
-      return result;
-    });
+      indicatorResults.push(result);
+    }
 
-    eventBus.emit(SERVER_EVENT.recalculateIndicatorsResults, {
-      marketName: event.marketName,
-      receivedAt: event.receivedAt,
-      numOfAffectedLevels: event.numOfAffectedLevels,
-      indicators: indicatorResults,
-    });
+    eventBus.emit(
+      SERVER_EVENT.recalculateIndicatorsResults,
+      {
+        marketName: event.marketName,
+        receivedAt: event.receivedAt,
+        numOfAffectedLevels: event.numOfAffectedLevels,
+        indicators: indicatorResults,
+      },
+    );
   }
 
-  private handleMarketRemoved(marketName: string): void {
+  private handleMarketRemoved(
+    marketName: string,
+  ): void {
     for (const indicator of this.indicators) {
       indicator.removeMarket(marketName);
     }
@@ -78,8 +108,12 @@ export class IndicatorManager {
     const periods = [20, 50, 90, 200];
 
     return [
-      ...periods.map((period) => new RcaIndicator({ period })),
-      ...periods.map((period) => new EmaIndicator({ period })),
+      ...periods.map(
+        (period) => new RcaIndicator({ period }),
+      ),
+      ...periods.map(
+        (period) => new EmaIndicator({ period }),
+      ),
     ];
   }
 
@@ -91,10 +125,15 @@ export class IndicatorManager {
     const temporary = new Set<string>();
 
     const byName = new Map(
-      indicators.map((indicator) => [indicator.name, indicator]),
+      indicators.map((indicator) => [
+        indicator.name,
+        indicator,
+      ]),
     );
 
-    const visit = (indicator: MarketIndicator): void => {
+    const visit = (
+      indicator: MarketIndicator,
+    ): void => {
       if (permanent.has(indicator.name)) {
         return;
       }
@@ -108,11 +147,13 @@ export class IndicatorManager {
       temporary.add(indicator.name);
 
       for (const dependency of indicator.dependencies) {
-        const dependencyIndicator = byName.get(dependency);
+        const dependencyIndicator =
+          byName.get(dependency);
 
         if (!dependencyIndicator) {
           throw new Error(
-            `Indicator ${indicator.name} depends on unknown indicator ${dependency}`,
+            `Indicator ${indicator.name} depends on ` +
+            `unknown indicator ${dependency}`,
           );
         }
 
@@ -132,4 +173,6 @@ export class IndicatorManager {
   }
 }
 
-export const indicatorManager = new IndicatorManager();
+export const indicatorManager =
+  new IndicatorManager();
+

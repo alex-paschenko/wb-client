@@ -1,3 +1,4 @@
+// app/src/client/src/api/frontend-ws.ts
 import { CLIENT_VERSION } from '../../../shared/constants/client-version';
 import {
   FRONTEND_WS_CLIENT_PING_INTERVAL_MS,

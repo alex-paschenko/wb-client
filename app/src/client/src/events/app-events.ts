@@ -1,28 +1,30 @@
+// app/src/client/src/events/app-events.ts
+import type {
+  FrontendSettings,
+} from '../../../shared/services/frontend-settings';
 import type {
   FrontendWsSubscriptionAction,
 } from '../../../shared/types/frontend-ws';
 import type {
+  MarketRollingStatistics,
+} from '../../../shared/types/market-statistics-rolling';
+import type {
   FullMarketStatisticsPayload,
   MarketStatisticsDeltaPayload,
 } from '../../../shared/utilities/market-statistics-payload-codec';
-import type {
-  FrontendSettings,
-} from '../../../shared/services/frontend-settings';
 import {
   EventEmitter,
   type EventMapBase,
 } from '../utilities/event-emitter';
-import type {
-  MarketRollingStatistics,
-} from '../../../shared/types/market-statistics-rolling';
-import type {
-  MarketIndicators,
-} from '../../../shared/types/market-indicators';
 
 type AppEventMap = EventMapBase & {
-  settingsChanged: [settings: FrontendSettings];
+  settingsChanged: [
+    settings: FrontendSettings,
+  ];
 
-  requestMarketStatisticsFullSync: [marketName: string];
+  requestMarketStatisticsFullSync: [
+    marketName: string,
+  ];
 
   changeMarketStatisticsSubscription: [
     action: FrontendWsSubscriptionAction,
@@ -46,16 +48,7 @@ type AppEventMap = EventMapBase & {
   marketStatisticsDeltaReceived: [
     payload: MarketStatisticsDeltaPayload,
   ];
-
-  changeMarketIndicatorsSubscription: [
-    action: FrontendWsSubscriptionAction,
-    markets: string[],
-  ];
-
-  marketIndicatorsUpdated: [
-    marketName: string,
-    indicators: MarketIndicators,
-  ];
 };
 
-export const appEvents = new EventEmitter<AppEventMap>();
+export const appEvents =
+  new EventEmitter<AppEventMap>();

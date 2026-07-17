@@ -1,3 +1,4 @@
+// app/src/server/services/sync-user-balance.ts
 import { userBalanceStore } from './user-balance-store.js';
 
 import { whitebitPrivateClient } from '../whitebit/private-client.js';

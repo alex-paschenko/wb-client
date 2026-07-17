@@ -13,33 +13,41 @@ import {
 } from 'lightweight-charts';
 
 import type {
-  MarketChartCandleSeries,
+  MarketChartCandlePoint,
   MarketChartLinePoint,
   MarketChartVisibleRange,
 } from '../controllers/MarketStatisticsView';
 
 interface MarketChartProps {
-  candleSeries: MarketChartCandleSeries[];
+  candleData: MarketChartCandlePoint[];
   chartVersion: number;
   visibleRange: MarketChartVisibleRange;
 }
 
 export const MarketChart = ({
-  candleSeries,
+  candleData,
   chartVersion,
   visibleRange,
 }: MarketChartProps) => {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const chartRef = useRef<IChartApi | null>(null);
+  const containerRef =
+    useRef<HTMLDivElement | null>(null);
 
-  const candleSeriesByLevelRef =
-    useRef<Map<number, ISeriesApi<'Candlestick'>>>(new Map());
+  const chartRef =
+    useRef<IChartApi | null>(null);
 
-  const lineSeriesByLevelRef =
-    useRef<Map<number, ISeriesApi<'Line'>>>(new Map());
+  const candleSeriesRef =
+    useRef<ISeriesApi<'Candlestick'> | null>(
+      null,
+    );
+
+  const lineSeriesRef =
+    useRef<ISeriesApi<'Line'> | null>(
+      null,
+    );
 
   useEffect(() => {
-    const container = containerRef.current;
+    const container =
+      containerRef.current;
 
     if (!container) {
       return;
@@ -52,9 +60,12 @@ export const MarketChart = ({
         background: {
           color: 'transparent',
         },
-        textColor: getComputedStyle(document.documentElement)
-          .getPropertyValue('--color-muted')
-          .trim(),
+        textColor:
+          getComputedStyle(
+            document.documentElement,
+          )
+            .getPropertyValue('--color-muted')
+            .trim(),
       },
       grid: {
         vertLines: {
@@ -76,14 +87,38 @@ export const MarketChart = ({
       },
     });
 
-    chartRef.current = chart;
+    const candleSeries =
+      chart.addSeries(
+        CandlestickSeries,
+        {
+          priceLineVisible: false,
+          lastValueVisible: false,
+        },
+      );
 
-    const resizeObserver = new ResizeObserver(() => {
-      chart.applyOptions({
-        width: container.clientWidth,
-        height: container.clientHeight,
+    const lineSeries =
+      chart.addSeries(
+        LineSeries,
+        {
+          lineWidth: 1,
+          priceLineVisible: true,
+          lastValueVisible: true,
+        },
+      );
+
+    chartRef.current = chart;
+    candleSeriesRef.current =
+      candleSeries;
+    lineSeriesRef.current =
+      lineSeries;
+
+    const resizeObserver =
+      new ResizeObserver(() => {
+        chart.applyOptions({
+          width: container.clientWidth,
+          height: container.clientHeight,
+        });
       });
-    });
 
     resizeObserver.observe(container);
 
@@ -92,81 +127,49 @@ export const MarketChart = ({
       chart.remove();
 
       chartRef.current = null;
-      candleSeriesByLevelRef.current.clear();
-      lineSeriesByLevelRef.current.clear();
+      candleSeriesRef.current = null;
+      lineSeriesRef.current = null;
     };
   }, []);
 
   useEffect(() => {
-    const chart = chartRef.current;
+    const chart =
+      chartRef.current;
 
-    if (!chart) {
+    const candleSeries =
+      candleSeriesRef.current;
+
+    const lineSeries =
+      lineSeriesRef.current;
+
+    if (
+      !chart ||
+      !candleSeries ||
+      !lineSeries
+    ) {
       return;
     }
 
-    const activeLevels = new Set(
-      candleSeries.map((series) => series.level),
+    candleSeries.setData(
+      candleData,
     );
 
-    for (const [level, series] of candleSeriesByLevelRef.current) {
-      if (!activeLevels.has(level)) {
-        chart.removeSeries(series);
-        candleSeriesByLevelRef.current.delete(level);
-      }
-    }
-
-    for (const [level, series] of lineSeriesByLevelRef.current) {
-      if (!activeLevels.has(level)) {
-        chart.removeSeries(series);
-        lineSeriesByLevelRef.current.delete(level);
-      }
-    }
-
-    for (const item of candleSeries) {
-      let candleSeriesItem =
-        candleSeriesByLevelRef.current.get(item.level);
-
-      if (!candleSeriesItem) {
-        candleSeriesItem = chart.addSeries(CandlestickSeries, {
-          priceLineVisible: false,
-          lastValueVisible: false,
-        });
-
-        candleSeriesByLevelRef.current.set(item.level, candleSeriesItem);
-      }
-
-      candleSeriesItem.setData(item.data);
-
-      let lineSeriesItem =
-        lineSeriesByLevelRef.current.get(item.level);
-
-      if (!lineSeriesItem) {
-        lineSeriesItem = chart.addSeries(LineSeries, {
-          lineWidth: 1,
-          priceLineVisible: item.level === 0,
-          lastValueVisible: item.level === 0,
-        });
-
-        lineSeriesByLevelRef.current.set(item.level, lineSeriesItem);
-      }
-
-      lineSeriesItem.setData(
-        item.data.map<MarketChartLinePoint>((candle) => ({
+    lineSeries.setData(
+      candleData.map<MarketChartLinePoint>(
+        (candle) => ({
           time: candle.time,
           value: candle.close,
-        })),
-      );
-    }
-
-    const hasData = candleSeries.some(
-      (series) => series.data.length > 0,
+        }),
+      ),
     );
 
-    if (hasData) {
-      chart.timeScale().setVisibleRange(visibleRange);
+    if (candleData.length > 0) {
+      chart.timeScale().setVisibleRange(
+        visibleRange,
+      );
     }
   }, [
-    candleSeries,
+    candleData,
     chartVersion,
     visibleRange,
   ]);

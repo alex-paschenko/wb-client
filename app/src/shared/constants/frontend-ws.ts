@@ -1,3 +1,4 @@
+// app/src/shared/constants/frontend-ws.ts
 import { SECONDS } from './time.js';
 
 export const FRONTEND_WS_CLIENT_PING_INTERVAL_MS = 15 * SECONDS;
@@ -36,9 +37,15 @@ export const FRONTEND_WS_CONTROL_MESSAGE_TYPES = {
   settingsChanged: 'settingsChanged',
   settingsAccepted: 'settingsAccepted',
 
+  requestMarketIndicatorsRegistry:
+    'requestMarketIndicatorsRegistry',
+  marketIndicatorsRegistryLoaded:
+    'marketIndicatorsRegistryLoaded',
+
   marketsUpdated: 'marketsUpdated',
 
-  requestMarketStatisticsFullSync: 'requestMarketStatisticsFullSync',
+  requestMarketStatisticsFullSync:
+    'requestMarketStatisticsFullSync',
 
   setSubscription: 'setSubscription',
   changeSubscription: 'changeSubscription',
@@ -48,7 +55,6 @@ export const FRONTEND_WS_SUBSCRIPTION_ENTITIES = {
   marketInfo: 'marketInfo',
   marketStatistics: 'marketStatistics',
   marketRolling: 'marketRolling',
-  marketIndicators: 'marketIndicators',
 } as const;
 
 export const FRONTEND_WS_SUBSCRIPTION_ACTIONS = {

@@ -55,3 +55,17 @@ const intervalToLevel = (interval: number): number =>
     },
     { level: 0, summInterval: 0 },
   ).level;
+
+export const getCumulativeCutoffs = (
+  now: number,
+): number[] => {
+  let retentionDepth = 0;
+
+  return MARKET_STATISTICS_LEVEL_CONFIGS.map(
+    (config) => {
+      retentionDepth += config.interval;
+
+      return now - retentionDepth;
+    },
+  );
+};

@@ -144,7 +144,7 @@ export const MarketView = ({
         <div className="min-h-0 flex-1">
           <div className="relative h-full w-full">
             <MarketChart
-              candleSeries={controllerState.candleSeries}
+              candleData={controllerState.candleData}
               chartVersion={controllerState.chartVersion}
               visibleRange={controllerState.visibleRange}
             />

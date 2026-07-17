@@ -23,10 +23,13 @@ export interface IndicatorAffectedRange {
   endIndexAsc: number;
 }
 
-export abstract class BaseIndicator<TState = never> implements MarketIndicator {
+export abstract class BaseIndicator<TState = never>
+  implements MarketIndicator {
   public abstract readonly name: string;
 
   protected abstract readonly storage: IndicatorStorageSettings;
+
+  protected abstract readonly infiniteRange: boolean;
 
   public readonly dependencies: readonly string[] = [];
 
@@ -45,7 +48,8 @@ export abstract class BaseIndicator<TState = never> implements MarketIndicator {
 
     if (codecIndex < 0) {
       throw new Error(
-        `Unknown indicator codec "${this.storage.codec}" for indicator "${this.name}"`,
+        `Unknown indicator codec "${this.storage.codec}" ` +
+        `for indicator "${this.name}"`,
       );
     }
 
@@ -58,23 +62,33 @@ export abstract class BaseIndicator<TState = never> implements MarketIndicator {
   public calculate(
     params: MarketIndicatorCalculationParams,
   ): IndicatorResults {
+    const rangesBuilder = this.infiniteRange
+      ? this.buildAffectedInfiniteRange.bind(this)
+      : this.buildAffectedFiniteRanges.bind(this);
+
+    const affectedRanges =
+      params.centralIndexesAsc.length === 0
+        ? []
+        : rangesBuilder(
+            params.centralIndexesAsc,
+            params.ascending.candles.length,
+          );
+
     return {
-      lastResult: this.singleCalculate(params),
-      recalculatedValues: params.centralIndexesAsc.length > 0
-        ? this.rangeCalculate(
-            params,
-            this.buildAffectedRanges(
-              params.centralIndexesAsc,
-              params.ascending.candles.length,
-            ),
-          )
-        : [],
       indicatorName: this.name,
+      lastResult: this.singleCalculate(params),
+      recalculatedValues:
+        affectedRanges.length > 0
+          ? this.rangeCalculate(
+              params,
+              affectedRanges,
+            )
+          : [],
     };
   }
 
   public abstract singleCalculate(
-    params: MarketIndicatorCalculationParams
+    params: MarketIndicatorCalculationParams,
   ): number | null;
 
   public abstract rangeCalculate(
@@ -82,39 +96,44 @@ export abstract class BaseIndicator<TState = never> implements MarketIndicator {
     affectedRanges: IndicatorAffectedRange[],
   ): MarketIndicatorRecalculatedItem[];
 
-  public removeMarket(marketName: string): void {
+  public removeMarket(
+    marketName: string,
+  ): void {
     this.stateByMarket.delete(marketName);
   }
 
-  private validateName(): void {
-    if (new TextEncoder().encode(this.name).length > INDICATOR_NAME_MAX_LENGTH) {
-      throw new Error(
-        `Indicator name "${this.name}" is too long. Max length is ${INDICATOR_NAME_MAX_LENGTH} bytes.`,
-      );
-    }
-  }
-
-  protected buildAffectedRanges(
-    centralIndexesAsc: readonly number[],
+  protected buildAffectedFiniteRanges(
+    indexesAsc: readonly number[],
     length: number,
   ): IndicatorAffectedRange[] {
-    if (this.period <= 0 || length <= 0) {
+    if (
+      indexesAsc.length === 0 ||
+      this.period <= 0 ||
+      length <= 0
+    ) {
       return [];
     }
 
     const ranges: IndicatorAffectedRange[] = [];
 
-    for (const centralIndex of centralIndexesAsc) {
-      const startIndexAsc = Math.max(0, centralIndex - this.period + 1);
-      const endIndexAsc = Math.min(length - 1, centralIndex + this.period - 1);
+    for (const indexAsc of indexesAsc) {
+      const startIndexAsc = indexAsc;
+      const endIndexAsc = Math.min(
+        length - 1,
+        indexAsc + this.period - 1,
+      );
 
       const lastRange = ranges.at(-1);
 
-      if (!lastRange || startIndexAsc > lastRange.endIndexAsc) {
+      if (
+        !lastRange ||
+        startIndexAsc > lastRange.endIndexAsc
+      ) {
         ranges.push({
           startIndexAsc,
           endIndexAsc,
         });
+
         continue;
       }
 
@@ -125,5 +144,34 @@ export abstract class BaseIndicator<TState = never> implements MarketIndicator {
     }
 
     return ranges;
+  }
+
+  protected buildAffectedInfiniteRange(
+    indexesAsc: readonly number[],
+    length: number,
+  ): IndicatorAffectedRange[] {
+    if (
+      indexesAsc.length === 0 ||
+      length <= 0
+    ) {
+      return [];
+    }
+
+    return [{
+      startIndexAsc: indexesAsc[0],
+      endIndexAsc: length - 1,
+    }];
+  }
+
+  private validateName(): void {
+    if (
+      new TextEncoder().encode(this.name).length >
+      INDICATOR_NAME_MAX_LENGTH
+    ) {
+      throw new Error(
+        `Indicator name "${this.name}" is too long. ` +
+        `Max length is ${INDICATOR_NAME_MAX_LENGTH} bytes.`,
+      );
+    }
   }
 }

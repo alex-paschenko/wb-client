@@ -8,15 +8,12 @@ import type {
 import {
   MARKET_STATISTICS_LEVEL_DURATIONS,
 } from '../../../shared/constants/market-statistics-config';
-
 import {
   MarketStatisticsStorageService,
 } from '../../../shared/services/market-statistics-storage';
-
 import type {
   MarketCandle,
 } from '../../../shared/types/market-statistics-storage';
-
 import type {
   FullMarketStatisticsPayload,
   MarketStatisticsDeltaPayload,
@@ -24,11 +21,6 @@ import type {
 
 export type MarketChartLinePoint = LineData;
 export type MarketChartCandlePoint = CandlestickData;
-
-export type MarketChartCandleSeries = {
-  level: number;
-  data: MarketChartCandlePoint[];
-};
 
 export type MarketChartVisibleRange = {
   from: UTCTimestamp;
@@ -39,7 +31,7 @@ export interface MarketStatisticsViewState {
   pointsCount: number;
   chartVersion: number;
   selectedInterval: number;
-  candleSeries: MarketChartCandleSeries[];
+  candleData: MarketChartCandlePoint[];
   visibleRange: MarketChartVisibleRange;
 }
 
@@ -52,7 +44,9 @@ const createVisibleRange = (
   const now = Date.now();
 
   return {
-    from: Math.floor((now - interval) / 1000) as UTCTimestamp,
+    from: Math.floor(
+      (now - interval) / 1000,
+    ) as UTCTimestamp,
     to: Math.floor(now / 1000) as UTCTimestamp,
   };
 };
@@ -63,12 +57,13 @@ export const createInitialMarketStatisticsViewState = (
   pointsCount: 0,
   chartVersion: 0,
   selectedInterval: interval,
-  candleSeries: [],
+  candleData: [],
   visibleRange: createVisibleRange(interval),
 });
 
 export class MarketStatisticsView {
-  private storage: MarketStatisticsStorageService | null = null;
+  private storage:
+    MarketStatisticsStorageService | null = null;
 
   private state: MarketStatisticsViewState;
 
@@ -76,14 +71,19 @@ export class MarketStatisticsView {
     private readonly marketName: string,
     private interval: number = defaultInterval,
   ) {
-    this.state = createInitialMarketStatisticsViewState(interval);
+    this.state =
+      createInitialMarketStatisticsViewState(
+        interval,
+      );
   }
 
   public getState(): MarketStatisticsViewState {
     return this.state;
   }
 
-  public setInterval(interval: number): MarketStatisticsViewState {
+  public setInterval(
+    interval: number,
+  ): MarketStatisticsViewState {
     this.interval = interval;
 
     return this.refresh();
@@ -92,17 +92,22 @@ export class MarketStatisticsView {
   public applyFullSync(
     payload: FullMarketStatisticsPayload,
   ): MarketStatisticsViewState {
-    const storage = new MarketStatisticsStorageService(this.marketName);
-
-    for (const [level, items] of payload.levels.entries()) {
-      for (const item of items) {
-        storage.addItem(
-          level,
-          item,
-          'suppress record delta',
-        );
-      }
+    if (payload.marketName !== this.marketName) {
+      throw new Error(
+        `Cannot apply full sync for market ` +
+        `"${payload.marketName}" to view ` +
+        `"${this.marketName}"`,
+      );
     }
+
+    const storage =
+      new MarketStatisticsStorageService(
+        this.marketName,
+      );
+
+    storage.restoreAllItemsByLevel(
+      payload.levels,
+    );
 
     this.storage = storage;
 
@@ -112,17 +117,30 @@ export class MarketStatisticsView {
   public applyDelta(
     payload: MarketStatisticsDeltaPayload,
   ): MarketStatisticsViewState {
+    if (payload.marketName !== this.marketName) {
+      throw new Error(
+        `Cannot apply delta for market ` +
+        `"${payload.marketName}" to view ` +
+        `"${this.marketName}"`,
+      );
+    }
+
     if (!this.storage) {
       return this.refresh();
     }
 
-    this.storage.applyDelta(payload.delta);
+    this.storage.applyDelta(
+      payload.delta,
+    );
 
     return this.refresh();
   }
 
   public refresh(): MarketStatisticsViewState {
-    const visibleRange = createVisibleRange(this.interval);
+    const now = Date.now();
+
+    const visibleRange =
+      createVisibleRange(this.interval);
 
     if (!this.storage) {
       this.state = {
@@ -134,59 +152,44 @@ export class MarketStatisticsView {
       return this.state;
     }
 
-    const chartData = this.createChartData(this.storage);
+    const projection =
+      this.storage.createIntervalProjection(
+        this.interval,
+        now,
+      );
+
+    const candleData =
+      this.createCandleData(
+        projection.candles,
+      );
 
     this.state = {
       ...this.state,
-      pointsCount: this.storage.size(),
-      chartVersion: this.state.chartVersion + 1,
+      pointsCount: candleData.length,
+      chartVersion:
+        this.state.chartVersion + 1,
       selectedInterval: this.interval,
-      candleSeries: chartData.candleSeries,
+      candleData,
       visibleRange,
     };
 
     return this.state;
   }
 
-  private createChartData(
-    storage: MarketStatisticsStorageService,
-  ): {
-    candleSeries: MarketChartCandleSeries[];
-  } {
-    const cutoff = Date.now() - this.interval;
-
-    const candleSeries: MarketChartCandleSeries[] = [];
-
-    for (
-      let level = 0;
-      level < storage.getNumOfLevels();
-      level += 1
-    ) {
-      const items = storage.readItemsAfter(level, cutoff);
-      const levelSize = storage.size(level);
-
-      candleSeries.push({
-        level,
-        data: this.createCandleData(items as MarketCandle[]),
-      });
-
-      if (items.length < levelSize) {
-        break;
-      }
-    }
-
-    return {
-      candleSeries,
-    };
-  }
-
   private createCandleData(
     candles: MarketCandle[],
   ): MarketChartCandlePoint[] {
-    const dataByTime = new Map<UTCTimestamp, MarketChartCandlePoint>();
+    const dataByTime =
+      new Map<
+        UTCTimestamp,
+        MarketChartCandlePoint
+      >();
 
     for (const candle of candles) {
-      const time = this.toChartTime(candle.startedAt);
+      const time =
+        this.toChartTime(
+          candle.startedAt,
+        );
 
       dataByTime.set(time, {
         time,
@@ -198,12 +201,18 @@ export class MarketStatisticsView {
     }
 
     return [...dataByTime.values()]
-      .sort((left, right) => Number(left.time) - Number(right.time));
+      .sort(
+        (left, right) =>
+          Number(left.time) -
+          Number(right.time),
+      );
   }
 
   private toChartTime(
-    receivedAt: number,
+    timestamp: number,
   ): UTCTimestamp {
-    return Math.floor(receivedAt / 1000) as UTCTimestamp;
+    return Math.floor(
+      timestamp / 1000,
+    ) as UTCTimestamp;
   }
 }

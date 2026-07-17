@@ -1,6 +1,8 @@
 // app/src/server/types/events.ts
 import type {
+  CandleIndicatorsChange,
   ExtendedMarketDataView,
+  FullMarketStatisticsLevel,
   MarketCandle,
 } from '../../shared/types/market-statistics-storage.js';
 import type {
@@ -10,15 +12,18 @@ import type {
 import type {
   IndicatorResults,
   MarketIndicatorsRegistry,
+  MarketIndicatorValues,
 } from '../../shared/types/market-indicators.js';
 import type { StrategySignal } from './strategy-signals.js';
 import type { SERVER_EVENT } from '../constants/events.js';
 import { MarketTick } from './market-statistics.js';
+import { MarketsByName } from '../../shared/types/market.js';
 
 export type ServerEventName =
   typeof SERVER_EVENT[keyof typeof SERVER_EVENT];
 
 export interface MarketsInfoUpdatedEvent {
+  markets: MarketsByName;
   marketNames: string[];
 }
 
@@ -39,6 +44,8 @@ export interface MarketStatisticsPersistenceChange {
 export interface MarketStatisticsPersistenceChangedEvent {
   marketName: string;
   changes: MarketStatisticsPersistenceChange[];
+  latestIndicators: MarketIndicatorValues;
+  indicatorChanges: CandleIndicatorsChange[];
 }
 
 export interface MarketTickReceivedEvent {
@@ -65,7 +72,7 @@ export interface MarketIndicatorsRegistryReadyEvent {
 }
 
 export type MarketStatisticsRestoredMarketData =
-  Record<string, MarketCandle[][]>;
+  Record<string, FullMarketStatisticsLevel[]>;
 
 export interface MarketStatisticsRestoredEvent {
   itemsByMarket: MarketStatisticsRestoredMarketData;

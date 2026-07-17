@@ -1,8 +1,10 @@
+// app/src/client/src/contexts/AppContext.tsx
 import {
   createContext,
   type ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -23,6 +25,9 @@ import type {
   MarketsByName,
 } from '../../../shared/types/market';
 import { appEvents } from '../events/app-events';
+import {
+  globalStateService,
+} from '../../../shared/services/global-state';
 
 type AppLogger = {
   debug: (body: string) => void;
@@ -46,7 +51,7 @@ export type AppContextValue = {
 
   setTheme: (theme: string) => void;
   setLanguage: (language: string) => void;
-  setMarkets: (markets: MarketsByName) => void;
+
   setMarketViewState: (
     marketName: string,
     state: MarketViewState,
@@ -74,7 +79,6 @@ export const AppProvider = ({
     );
   const [logs, setLogs] = useState<LogEntry[]>([]);
 
-  const marketsRef = useRef<MarketsByName>(markets);
   const settingsValueRef = useRef<FrontendSettingsValue>(settingsValue);
 
   const settings = useMemo(
@@ -82,12 +86,52 @@ export const AppProvider = ({
     [settingsValue],
   );
 
+  useEffect(() => {
+    return globalStateService.subscribeMarkets(
+      (nextMarkets) => {
+        if (!nextMarkets) {
+          setMarketsState({});
+          return;
+        }
+
+        setMarketsState(nextMarkets);
+
+        const nextSettings =
+          FrontendSettings.fromValue(
+            settingsValueRef.current,
+          );
+
+        const hasChanges =
+          nextSettings.ensureMarkets(
+            nextMarkets,
+          );
+
+        if (!hasChanges) {
+          return;
+        }
+
+        const nextValue =
+          nextSettings.toValue();
+
+        settingsValueRef.current =
+          nextValue;
+
+        setSettingsValue(nextValue);
+
+        appEvents.emit(
+          'settingsChanged',
+          nextSettings,
+        );
+      },
+    );
+  }, []);
+
   const getSettings = useCallback((): FrontendSettings => {
     return FrontendSettings.fromValue(settingsValueRef.current);
   }, []);
 
   const getMarkets = useCallback((): MarketsByName => {
-    return marketsRef.current;
+    return globalStateService.getMarkets();
   }, []);
 
   const applySettingsFromServer = useCallback((
@@ -134,25 +178,6 @@ export const AppProvider = ({
       nextSettings.setLanguage(language);
     });
   }, [updateSettingsValue]);
-
-  const setMarkets = useCallback((nextMarkets: MarketsByName) => {
-    marketsRef.current = nextMarkets;
-    setMarketsState(nextMarkets);
-
-    const nextSettings = FrontendSettings.fromValue(settingsValueRef.current);
-    const hasChanges = nextSettings.ensureMarkets(nextMarkets);
-
-    if (!hasChanges) {
-      return;
-    }
-
-    const nextValue = nextSettings.toValue();
-
-    settingsValueRef.current = nextValue;
-    setSettingsValue(nextValue);
-
-    appEvents.emit('settingsChanged', nextSettings);
-  }, []);
 
   const setMarketViewState = useCallback((
     marketName: string,
@@ -219,33 +244,39 @@ export const AppProvider = ({
     markets,
     settings,
     logs,
+
     getSettings,
     getMarkets,
+
     setTheme,
     setLanguage,
-    setMarkets,
+
     setMarketViewState,
     openMarket,
     closeMarket,
     moveMarket,
     applySettingsFromServer,
     updateSettings,
+
     logger,
   }), [
     markets,
     settings,
     logs,
+
     getSettings,
     getMarkets,
+
     setTheme,
     setLanguage,
-    setMarkets,
+
     setMarketViewState,
     openMarket,
     closeMarket,
     moveMarket,
     applySettingsFromServer,
     updateSettings,
+
     logger,
   ]);
 

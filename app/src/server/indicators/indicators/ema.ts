@@ -25,6 +25,8 @@ interface EmaIndicatorState {
 export class EmaIndicator extends IncrementalIndicator<EmaIndicatorState> {
   public readonly name: string;
 
+  protected readonly infiniteRange = true;
+
   protected readonly storage = {
     codec: 'float32',
   } as const;

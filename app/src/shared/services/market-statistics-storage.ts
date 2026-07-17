@@ -24,6 +24,10 @@ import type {
   MarketDataView,
   MarketStatisticsLevel,
   MarketDataProjectionDirection,
+  FullMarketStatisticsLevel,
+  MarketDataProjectionSnapshot,
+  AppliedIndicatorResults,
+  CandleIndicatorsChange,
 } from '../types/market-statistics-storage.js';
 
 import {
@@ -40,6 +44,7 @@ import {
   writeMarketCandleToDataView,
   writeMarketCandleToFloat64Array,
 } from '../utilities/market-statistics-codec.js';
+import { globalStateService } from './global-state.js';
 
 type DeltaOperation =
   | {
@@ -61,25 +66,9 @@ type DeltaOperation =
 export class MarketStatisticsStorageService {
   public constructor(
     private readonly marketName: string,
-  ) {}
-
-  private readonly levels: MarketStatisticsLevel[] =
-    MARKET_STATISTICS_LEVEL_CONFIGS.map(() => this.createLevel());
-
-  private readonly indicatorChunksByLevel =
-    MARKET_STATISTICS_LEVEL_CONFIGS.map(
-      () => new Map<string, Uint8Array[]>(),
-    );
-
-  private indicatorRegistry: MarketIndicatorsRegistry = [];
-
-  private deltaOperations: DeltaOperation[] = [];
-
-  setIndicatorRegistry(
-    registry: MarketIndicatorsRegistry,
-  ): void {
-    this.indicatorRegistry = registry;
-
+    private readonly indicatorRegistry =
+      globalStateService.getIndicatorRegistry(),
+  ) {
     for (
       let level = 0;
       level < MARKET_STATISTICS_LEVEL_CONFIGS.length;
@@ -89,27 +78,73 @@ export class MarketStatisticsStorageService {
     }
   }
 
-  getIndicatorRegistry(): MarketIndicatorsRegistry {
-    return this.indicatorRegistry;
-  }
+  private readonly levels: MarketStatisticsLevel[] =
+    MARKET_STATISTICS_LEVEL_CONFIGS.map(() => this.createLevel());
 
-  addIndicatorResults(
-    result: IndicatorResults,
-  ): ChangedIndicatorChunk[] {
-    const chunks = this.splitIndicatorResultsByLevels(result);
+  private readonly indicatorChunksByLevel =
+    MARKET_STATISTICS_LEVEL_CONFIGS.map(
+      () => new Map<string, Uint8Array[]>(),
+    );
 
-    for (const chunk of chunks) {
+  private deltaOperations: DeltaOperation[] = [];
+
+  applyIndicatorResults(
+    results: readonly IndicatorResults[],
+  ): AppliedIndicatorResults {
+    const lastPosition = this.getLatestPointPosition();
+
+    if (!lastPosition) {
+      throw new Error(
+        `Cannot apply indicator results: market "${this.marketName}" ` +
+        'storage is empty',
+      );
+    }
+
+    const lastIndicators: MarketIndicatorValues = Object.fromEntries(
+      results.map((result) => [
+        result.indicatorName,
+        result.lastResult,
+      ]),
+    );
+
+    this.addIndicators(
+      lastPosition.item.receivedAt,
+      lastIndicators,
+      lastPosition.level,
+    );
+
+    const changedChunks = results.flatMap((result) =>
+      this.splitIndicatorResultsByLevels(result),
+    );
+
+    for (const chunk of changedChunks) {
       this.applyIndicatorChunk(chunk);
     }
 
-    if (chunks.length > 0) {
+    if (changedChunks.length > 0) {
       this.deltaOperations.push({
         type: MARKET_STATISTICS_DELTA_OPERATION_TYPE.changeItems,
-        chunks,
+        chunks: changedChunks,
       });
     }
 
-    return chunks;
+    const finalLastIndicators = this.readIndicatorsAtPosition(
+      lastPosition.level,
+      lastPosition.chunkIndex,
+      lastPosition.itemIndex,
+    );
+
+    this.updateAddItemDeltaIndicators(
+      lastPosition.level,
+      lastPosition.item.receivedAt,
+      finalLastIndicators,
+    );
+
+    return {
+      changedChunks,
+      persistenceChanges:
+        this.buildIndicatorPersistenceChanges(changedChunks),
+    };
   }
 
   applyIndicatorChunks(
@@ -178,59 +213,6 @@ export class MarketStatisticsStorageService {
           0,
         ) - 1
     );
-  }
-
-  addIndicators(
-    receivedAt: number,
-    indicators: MarketIndicatorValues,
-    level = 0,
-  ): boolean {
-    const position = this.getLastPointPosition(level);
-
-    if (!position) {
-      console.error('Cannot add market indicators: level is empty', {
-        marketName: this.marketName,
-        level,
-        receivedAt,
-        indicators,
-      });
-
-      return false;
-    }
-
-    const indicatorsToWrite =
-      position.item.receivedAt === receivedAt
-        ? indicators
-        : this.createEmptyIndicators();
-
-    if (position.item.receivedAt !== receivedAt) {
-      console.error('Cannot add market indicators: receivedAt mismatch', {
-        marketName: this.marketName,
-        level,
-        expectedReceivedAt: position.item.receivedAt,
-        actualReceivedAt: receivedAt,
-        indicators,
-      });
-    }
-
-    this.writeIndicatorsAtPosition(
-      position.level,
-      position.chunkIndex,
-      position.itemIndex,
-      indicatorsToWrite,
-    );
-
-    for (const operation of this.deltaOperations) {
-      if (
-        operation.type === MARKET_STATISTICS_DELTA_OPERATION_TYPE.addItem &&
-        operation.level === position.level &&
-        operation.item.receivedAt === position.item.receivedAt
-      ) {
-        operation.indicators = indicatorsToWrite;
-      }
-    }
-
-    return position.item.receivedAt === receivedAt;
   }
 
   removeNItems(
@@ -425,24 +407,83 @@ export class MarketStatisticsStorageService {
     }
   }
 
-  getAllItemsByLevel(): MarketCandle[][] {
+  getAllItemsByLevel(): FullMarketStatisticsLevel[] {
     return this.levels.map((levelStorage, level) => {
-      const items: MarketCandle[] = [];
+      const candles: MarketCandle[] = [];
+      const indicators: MarketIndicatorValues[] = [];
 
-      for (const chunk of levelStorage.chunks) {
-        for (let itemIndex = chunk.start; itemIndex < chunk.end; itemIndex += 1) {
-          items.push(
+      for (
+        let chunkIndex = 0;
+        chunkIndex < levelStorage.chunks.length;
+        chunkIndex += 1
+      ) {
+        const chunk = levelStorage.chunks[chunkIndex];
+
+        for (
+          let itemIndex = chunk.start;
+          itemIndex < chunk.end;
+          itemIndex += 1
+        ) {
+          candles.push(
             readMarketCandleFromFloat64Array(
               chunk.data,
               itemIndex,
               level,
             ),
           );
+
+          indicators.push(
+            this.readIndicatorsAtPosition(
+              level,
+              chunkIndex,
+              itemIndex,
+            ),
+          );
         }
       }
 
-      return items;
+      return {
+        candles,
+        indicators,
+      };
     });
+  }
+
+  restoreAllItemsByLevel(
+    levels: readonly FullMarketStatisticsLevel[],
+  ): void {
+    for (const [level, data] of levels.entries()) {
+      if (data.candles.length !== data.indicators.length) {
+        throw new Error(
+          `Cannot restore market statistics level ${level}: ` +
+          `candles length ${data.candles.length} does not match ` +
+          `indicators length ${data.indicators.length}`,
+        );
+      }
+
+      for (
+        let itemIndex = 0;
+        itemIndex < data.candles.length;
+        itemIndex += 1
+      ) {
+        const candle = data.candles[itemIndex];
+        const indicators = data.indicators[itemIndex];
+
+        this.addItem(
+          level,
+          candle,
+          'suppress record delta',
+        );
+
+        this.addIndicators(
+          candle.receivedAt,
+          indicators,
+          level,
+        );
+      }
+    }
+
+    this.deltaOperations = [];
   }
 
   getLevels(): readonly MarketStatisticsLevel[] {
@@ -561,16 +602,68 @@ export class MarketStatisticsStorageService {
     return direction === 'ascending' ? result.reverse() : result;
   }
 
-  getMarketDataView(): MarketDataView {
-    const receivedAt = this.getLastPointPosition(0)?.item.receivedAt;
+  public createIntervalProjection(
+    interval: number,
+    now: number = Date.now(),
+  ): MarketDataProjectionSnapshot {
+    const view = this.getMarketDataView();
+    const { candles, indicators } = view.ascending;
 
-    if (!receivedAt) {
-      throw new Error('Cannot get proxy: level is empty.');
+    const cutoff = now - interval;
+
+    let startIndex = 0;
+
+    while (startIndex < candles.length) {
+      const candle = candles[startIndex];
+
+      if (candle && candle.receivedAt >= cutoff) {
+        break;
+      }
+
+      startIndex += 1;
+    }
+
+    const projectedCandles: MarketCandle[] = [];
+    const projectedIndicators: MarketIndicatorValues[] = [];
+
+    for (
+      let index = startIndex;
+      index < candles.length;
+      index += 1
+    ) {
+      const candle = candles[index];
+      const indicatorValues = indicators[index];
+
+      if (!candle || !indicatorValues) {
+        throw new Error(
+          `Cannot create market data projection for "${this.marketName}": ` +
+          `missing data at ascending index ${index}`,
+        );
+      }
+
+      projectedCandles.push(candle);
+      projectedIndicators.push(indicatorValues);
+    }
+
+    return {
+      candles: projectedCandles,
+      indicators: projectedIndicators,
     };
+  }
+
+  getMarketDataView(): MarketDataView {
+    const receivedAt =
+      this.getLatestPointPosition()?.item.receivedAt;
+
+    if (receivedAt === undefined) {
+      throw new Error(
+        `Cannot get market data view: market "${this.marketName}" storage is empty`,
+      );
+    }
 
     return {
       receivedAt,
-      marketName:this.marketName,
+      marketName: this.marketName,
       ascending: this.createDataViewProxy('ascending'),
       descending: this.createDataViewProxy('descending'),
     };
@@ -585,6 +678,80 @@ export class MarketStatisticsStorageService {
       (sum, levelStorage) => sum + levelStorage.size,
       0,
     );
+  }
+
+  private addIndicators(
+    receivedAt: number,
+    indicators: MarketIndicatorValues,
+    level = 0,
+  ): boolean {
+    const position = this.getLastPointPosition(level);
+
+    if (!position) {
+      console.error('Cannot add market indicators: level is empty', {
+        marketName: this.marketName,
+        level,
+        receivedAt,
+        indicators,
+      });
+
+      return false;
+    }
+
+    const isReceivedAtMatching =
+      position.item.receivedAt === receivedAt;
+
+    const indicatorsToWrite = isReceivedAtMatching
+      ? this.normalizeIndicatorValues(indicators)
+      : this.createEmptyIndicators();
+
+    if (!isReceivedAtMatching) {
+      console.error('Cannot add market indicators: receivedAt mismatch', {
+        marketName: this.marketName,
+        level,
+        expectedReceivedAt: position.item.receivedAt,
+        actualReceivedAt: receivedAt,
+        indicators,
+      });
+    }
+
+    this.writeIndicatorsAtPosition(
+      position.level,
+      position.chunkIndex,
+      position.itemIndex,
+      indicatorsToWrite,
+    );
+
+    this.updateAddItemDeltaIndicators(
+      position.level,
+      position.item.receivedAt,
+      indicatorsToWrite,
+    );
+
+    return isReceivedAtMatching;
+  }
+
+  private updateAddItemDeltaIndicators(
+    level: number,
+    receivedAt: number,
+    indicators: MarketIndicatorValues,
+  ): void {
+    for (
+      let index = this.deltaOperations.length - 1;
+      index >= 0;
+      index -= 1
+    ) {
+      const operation = this.deltaOperations[index];
+
+      if (
+        operation.type === MARKET_STATISTICS_DELTA_OPERATION_TYPE.addItem &&
+        operation.level === level &&
+        operation.item.receivedAt === receivedAt
+      ) {
+        operation.indicators = indicators;
+        return;
+      }
+    }
   }
 
   private applyIndicatorChunk(
@@ -683,38 +850,6 @@ export class MarketStatisticsStorageService {
       `Cannot resolve market statistics level offset: level ${level}, offset ${levelOffset}`,
     );
   }
-
-private writeIndicatorAtPointIndex(
-  pointIndex: number,
-  indicatorName: string,
-  value: number | null,
-): void {
-  const resolved = this.resolvePointIndex(pointIndex);
-
-  this.writeIndicatorAtPosition(
-    resolved.level,
-    resolved.chunkIndex,
-    resolved.itemIndex,
-    indicatorName,
-    value,
-  );
-
-  const candle = readMarketCandleFromFloat64Array(
-    resolved.chunk.data,
-    resolved.itemIndex,
-    resolved.level,
-  );
-
-  for (const operation of this.deltaOperations) {
-    if (
-      operation.type === MARKET_STATISTICS_DELTA_OPERATION_TYPE.addItem &&
-      operation.item.receivedAt === candle.receivedAt
-    ) {
-      operation.indicators ??= {};
-      operation.indicators[indicatorName] = value;
-    }
-  }
-}
 
   private writeIndicatorAtPosition(
     level: number,
@@ -1190,12 +1325,20 @@ private writeIndicatorAtPointIndex(
   }
 
   private createEmptyIndicators(): MarketIndicatorValues {
-    return Object.fromEntries(
-      this.indicatorRegistry.map((indicator) => [
-        indicator.name,
-        null,
-      ]),
-    );
+    return this.normalizeIndicatorValues({});
+  }
+
+  private normalizeIndicatorValues(
+    values: Readonly<MarketIndicatorValues>,
+  ): MarketIndicatorValues {
+    const normalized: MarketIndicatorValues = {};
+
+    for (const indicatorConfig of this.indicatorRegistry) {
+      normalized[indicatorConfig.name] =
+        values[indicatorConfig.name] ?? null;
+    }
+
+    return normalized;
   }
 
   private writeEmptyIndicatorsAtPosition(
@@ -1217,20 +1360,30 @@ private writeIndicatorAtPointIndex(
     itemIndex: number,
     indicators: MarketIndicatorValues,
   ): void {
-    const chunksByIndicator = this.indicatorChunksByLevel[level];
+    const normalizedIndicators =
+      this.normalizeIndicatorValues(indicators);
+
+    const chunksByIndicator =
+      this.indicatorChunksByLevel[level];
 
     for (const indicatorConfig of this.indicatorRegistry) {
-      const chunks = chunksByIndicator.get(indicatorConfig.name);
+      const chunks =
+        chunksByIndicator.get(indicatorConfig.name);
+
       const chunk = chunks?.[chunkIndex];
 
       if (!chunk) {
         throw new Error(
-          `Indicator chunk "${indicatorConfig.name}" not found for level ${level}, chunk ${chunkIndex}`,
+          `Indicator chunk "${indicatorConfig.name}" not found ` +
+          `for level ${level}, chunk ${chunkIndex}`,
         );
       }
 
       const byteOffset =
-        itemIndex * getIndicatorValueByteLength(indicatorConfig.codecIndex);
+        itemIndex *
+        getIndicatorValueByteLength(
+          indicatorConfig.codecIndex,
+        );
 
       const view = new DataView(
         chunk.buffer,
@@ -1242,9 +1395,26 @@ private writeIndicatorAtPointIndex(
         view,
         byteOffset,
         indicatorConfig.codecIndex,
-        indicators[indicatorConfig.name] ?? null,
+        normalizedIndicators[indicatorConfig.name],
       );
     }
+  }
+
+  private getLatestPointPosition(): {
+    level: number;
+    chunkIndex: number;
+    itemIndex: number;
+    item: MarketCandle;
+  } | null {
+    for (let level = 0; level < this.levels.length; level += 1) {
+      const position = this.getLastPointPosition(level);
+
+      if (position) {
+        return position;
+      }
+    }
+
+    return null;
   }
 
   private getDeltaOperationByteLength(
@@ -1521,6 +1691,113 @@ private writeIndicatorAtPointIndex(
     }
 
     return config;
+  }
+
+  private buildIndicatorPersistenceChanges(
+    chunks: readonly ChangedIndicatorChunk[],
+  ): CandleIndicatorsChange[] {
+    interface PendingChange {
+      startedAt: number;
+      endedAt: number;
+      indicators: MarketIndicatorValues;
+    }
+
+    const changesByLevel =
+      new Map<number, Map<string, PendingChange>>();
+
+    for (const chunk of chunks) {
+      let changesByCandle =
+        changesByLevel.get(chunk.level);
+
+      if (!changesByCandle) {
+        changesByCandle =
+          new Map<string, PendingChange>();
+
+        changesByLevel.set(
+          chunk.level,
+          changesByCandle,
+        );
+      }
+
+      for (
+        let valueOffset = 0;
+        valueOffset < chunk.values.length;
+        valueOffset += 1
+      ) {
+        const levelOffset =
+          chunk.offset + valueOffset;
+
+        const position = this.resolveLevelOffset(
+          chunk.level,
+          levelOffset,
+        );
+
+        const levelStorage =
+          this.levels[chunk.level];
+
+        const candleChunk =
+          levelStorage?.chunks[position.chunkIndex];
+
+        if (!candleChunk) {
+          throw new Error(
+            `Cannot build indicator persistence change: ` +
+            `candle chunk not found for level ${chunk.level}, ` +
+            `chunk ${position.chunkIndex}`,
+          );
+        }
+
+        const candle =
+          readMarketCandleFromFloat64Array(
+            candleChunk.data,
+            position.itemIndex,
+            chunk.level,
+          );
+
+        const candleKey =
+          `${candle.startedAt}:${candle.endedAt}`;
+
+        let pendingChange =
+          changesByCandle.get(candleKey);
+
+        if (!pendingChange) {
+          pendingChange = {
+            startedAt: candle.startedAt,
+            endedAt: candle.endedAt,
+            indicators: {},
+          };
+
+          changesByCandle.set(
+            candleKey,
+            pendingChange,
+          );
+        }
+
+        pendingChange.indicators[
+          chunk.indicatorName
+        ] = chunk.values[valueOffset];
+      }
+    }
+
+    const result: CandleIndicatorsChange[] = [];
+
+    for (
+      const [level, changesByCandle]
+      of changesByLevel
+    ) {
+      for (
+        const change
+        of changesByCandle.values()
+      ) {
+        result.push({
+          level,
+          startedAt: change.startedAt,
+          endedAt: change.endedAt,
+          indicators: change.indicators,
+        });
+      }
+    }
+
+    return result;
   }
 }
 

@@ -25,6 +25,8 @@ interface RcaIndicatorState {
 export class RcaIndicator extends IncrementalIndicator<RcaIndicatorState> {
   public readonly name: string;
 
+  protected readonly infiniteRange = false;
+
   protected readonly storage = {
     codec: 'float32',
   } as const;

@@ -1,3 +1,4 @@
+// app/src/client/src/App.tsx
 import {
   useEffect,
   useState,
@@ -51,10 +52,9 @@ export function App() {
 
   const Page = route.Component;
 
-  return (
+return (
+  <AppBootstrap>
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-bg text-fg">
-      <AppBootstrap />
-
       <header className="relative flex h-14 w-full shrink-0 items-center border-b border-panel-border bg-panel px-3">
         <button
           className="app-button mr-3"
@@ -101,5 +101,5 @@ export function App() {
         <Page />
       </main>
     </div>
-  );
-}
+  </AppBootstrap>
+)};

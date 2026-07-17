@@ -1,3 +1,4 @@
+// app/src/shared/types/frontend-ws.ts
 import {
   FRONTEND_WS_CONTROL_MESSAGE_TYPES,
   FRONTEND_WS_SUBSCRIPTION_ACTIONS,
@@ -6,7 +7,12 @@ import {
 import type {
   FrontendSettingsValue,
 } from './frontend-settings.js';
-import type { MarketsByName } from './market.js';
+import type {
+  MarketIndicatorsRegistry,
+} from './market-indicators.js';
+import type {
+  MarketsByName,
+} from './market.js';
 
 export type FrontendWsClientRequest<
   Type extends string,
@@ -99,6 +105,22 @@ export type FrontendWsSettingsAcceptedMessage =
     Record<string, never>
   >;
 
+export type FrontendWsRequestMarketIndicatorsRegistryMessage =
+  FrontendWsClientRequest<
+    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES
+      .requestMarketIndicatorsRegistry,
+    Record<string, never>
+  >;
+
+export type FrontendWsMarketIndicatorsRegistryLoadedMessage =
+  FrontendWsServerResponse<
+    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES
+      .marketIndicatorsRegistryLoaded,
+    {
+      registry: MarketIndicatorsRegistry;
+    }
+  >;
+
 export type FrontendWsMarketsUpdatedMessage = {
   type: typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.marketsUpdated;
   markets: MarketsByName;
@@ -108,13 +130,15 @@ export type FrontendWsSetMarketInfoSubscriptionMessage =
   FrontendWsClientRequest<
     typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription,
     {
-      entity: typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketInfo;
+      entity:
+        typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketInfo;
     }
   >;
 
 export type FrontendWsRequestMarketStatisticsFullSyncMessage =
   FrontendWsClientRequest<
-    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestMarketStatisticsFullSync,
+    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES
+      .requestMarketStatisticsFullSync,
     {
       marketName: string;
     }
@@ -124,7 +148,8 @@ export type FrontendWsSetMarketStatisticsSubscriptionMessage =
   FrontendWsClientRequest<
     typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription,
     {
-      entity: typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics;
+      entity:
+        typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics;
       markets: string[];
     }
   >;
@@ -139,8 +164,7 @@ export type FrontendWsChangeSubscriptionMessage =
     {
       entity:
         | typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics
-        | typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketRolling
-        | typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketIndicators;
+        | typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketRolling;
       action: FrontendWsSubscriptionAction;
       markets: string[];
     }
@@ -152,6 +176,7 @@ export type FrontendWsClientControlMessage =
   | FrontendWsClientPongMessage
   | FrontendWsRequestSettingsMessage
   | FrontendWsSettingsChangedMessage
+  | FrontendWsRequestMarketIndicatorsRegistryMessage
   | FrontendWsRequestMarketStatisticsFullSyncMessage
   | FrontendWsSetSubscriptionMessage
   | FrontendWsChangeSubscriptionMessage;
@@ -162,4 +187,5 @@ export type FrontendWsServerControlMessage =
   | FrontendWsServerPingMessage
   | FrontendWsSettingsLoadedMessage
   | FrontendWsSettingsAcceptedMessage
+  | FrontendWsMarketIndicatorsRegistryLoadedMessage
   | FrontendWsMarketsUpdatedMessage;

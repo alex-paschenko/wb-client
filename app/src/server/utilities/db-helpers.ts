@@ -1,4 +1,10 @@
-import { JSONValue, QueryFragment, Sql, TransactionSql } from '../db/client';
+// app/src/server/utilities/db-helpers.ts
+import type {
+  JSONValue,
+  QueryFragment,
+  Sql,
+  TransactionSql
+} from '../db/client';
 
 export type DbRowValue =
     | string
@@ -6,6 +12,7 @@ export type DbRowValue =
     | boolean
     | null
     | Date
+    | JSONValue
     | undefined;
 
 export type DbRow = Record<string, Exclude<DbRowValue, undefined>>;

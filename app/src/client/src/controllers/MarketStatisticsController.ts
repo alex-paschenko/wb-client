@@ -13,21 +13,20 @@ import type {
   MarketStatisticsDeltaPayload,
 } from '../../../shared/utilities/market-statistics-payload-codec';
 import { appEvents } from '../events/app-events';
-import { BaseController } from './BaseController';
+import {
+  BaseController,
+  type ControllerUnusedCallback
+} from './BaseController';
 import {
   createInitialMarketStatisticsViewState,
   MarketStatisticsView,
   type MarketStatisticsViewState,
 } from './MarketStatisticsView';
-import type {
-  MarketIndicators,
-} from '../../../shared/types/market-indicators';
 import { SECONDS } from '../../../shared/constants/time';
 
 export interface MarketStatisticsControllerState
   extends MarketStatisticsViewState {
   rollingStatistics: MarketRollingStatistics | null;
-  marketIndicators: MarketIndicators | null;
 }
 
 export type MarketStatisticsChartMode = {
@@ -46,8 +45,12 @@ export const createInitialMarketStatisticsControllerState = (
 ): MarketStatisticsControllerState => ({
   ...createInitialMarketStatisticsViewState(interval),
   rollingStatistics: null,
-  marketIndicators: null,
 });
+
+export interface MarketStatisticsControllerOptions {
+  chartMode?: MarketStatisticsChartMode;
+  onUnused?: ControllerUnusedCallback;
+}
 
 export class MarketStatisticsController
   extends BaseController<MarketStatisticsControllerState> {
@@ -56,18 +59,21 @@ export class MarketStatisticsController
   private unsubscribeFullSync: (() => void) | null = null;
   private unsubscribeDelta: (() => void) | null = null;
   private unsubscribeRolling: (() => void) | null = null;
-  private unsubscribeIndicators: (() => void) | null = null;
 
   private windowTimer: ReturnType<typeof setInterval> | null = null;
 
   public constructor(
     private readonly marketName: string,
-    chartMode: MarketStatisticsChartMode = defaultChartMode,
+    options: MarketStatisticsControllerOptions = {},
   ) {
+    const chartMode =
+      options.chartMode ?? defaultChartMode;
+
     super(
       createInitialMarketStatisticsControllerState(
         chartMode.interval,
       ),
+      options.onUnused,
     );
 
     this.view = new MarketStatisticsView(
@@ -76,7 +82,7 @@ export class MarketStatisticsController
     );
   }
 
-  public override start(): void {
+  protected override onFirstSubscriber(): void {
     this.unsubscribeFullSync = appEvents.on(
       'marketStatisticsFullSyncReceived',
       (payload) => this.handleFullSync(payload),
@@ -97,26 +103,12 @@ export class MarketStatisticsController
       this.marketName,
     );
 
-    this.unsubscribeIndicators = appEvents.on(
-      'marketIndicatorsUpdated',
-      (_marketName, indicators) => {
-        this.handleIndicatorsUpdated(indicators);
-      },
-      this.marketName,
-    );
-
     this.windowTimer = setInterval(() => {
       this.refreshChartData();
     }, 30 * SECONDS);
 
     appEvents.emit(
       'changeMarketRollingSubscription',
-      FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
-      [this.marketName],
-    );
-
-    appEvents.emit(
-      'changeMarketIndicatorsSubscription',
       FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
       [this.marketName],
     );
@@ -129,16 +121,14 @@ export class MarketStatisticsController
     this.notify();
   }
 
-  public override stop(): void {
+  protected override onLastSubscriber(): void {
     this.unsubscribeFullSync?.();
     this.unsubscribeDelta?.();
     this.unsubscribeRolling?.();
-    this.unsubscribeIndicators?.();
 
     this.unsubscribeFullSync = null;
     this.unsubscribeDelta = null;
     this.unsubscribeRolling = null;
-    this.unsubscribeIndicators = null;
 
     if (this.windowTimer) {
       clearInterval(this.windowTimer);
@@ -147,12 +137,6 @@ export class MarketStatisticsController
 
     appEvents.emit(
       'changeMarketRollingSubscription',
-      FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove,
-      [this.marketName],
-    );
-
-    appEvents.emit(
-      'changeMarketIndicatorsSubscription',
       FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove,
       [this.marketName],
     );
@@ -197,14 +181,6 @@ export class MarketStatisticsController
   ): void {
     this.patchState({
       rollingStatistics,
-    });
-  }
-
-  private handleIndicatorsUpdated(
-    marketIndicators: MarketIndicators,
-  ): void {
-    this.patchState({
-      marketIndicators,
     });
   }
 

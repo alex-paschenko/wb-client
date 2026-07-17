@@ -1,3 +1,4 @@
+// app/src/server/services/event-bus.ts
 import type {
   ServerEventMap,
 } from '../types/events.js';

@@ -1,3 +1,4 @@
+// app/src/server/index.ts
 import 'dotenv/config';
 
 import type { Server } from 'node:http';
@@ -20,16 +21,11 @@ import {
 import {
   marketStatisticsRollingService
 } from './services/market-statistics-rolling.js';
-import {
-  marketStatisticsRestoreService
-} from './services/market-statistics-restore.js';
 import { frontendWsService } from './services/frontend-ws.js';
-import {
-  marketStatisticsDbPromotionService,
-} from './services/market-statistics-db-promotion.js';
 import {
   indicatorManager,
 } from './indicators/indicator-manager.js';
+import { serverGlobalStateService } from './services/global-state.js';
 
 const port = Number(process.env.PORT ?? 3000);
 const app = createApp();
@@ -53,6 +49,8 @@ const shutdown = async (signal: string): Promise<void> => {
       marketStatisticsPersistenceBufferService.stop(),
       marketStatisticsRollingService.stop(),
     ]);
+
+    serverGlobalStateService.stop();
 
     await new Promise<void>((resolve, reject) => {
       if (!server) {
@@ -83,20 +81,26 @@ const shutdown = async (signal: string): Promise<void> => {
 const start = async (): Promise<void> => {
   await waitForDatabase();
 
-  await marketStatisticsDbPromotionService.run();
+  serverGlobalStateService.start();
 
-  marketStatisticsAggregationService.start();
-  marketStatisticsPersistenceBufferService.start();
+  await marketsService.refreshMarkets();
+
+  /*
+   * start() synchronously registers the registry listener
+   * before reaching its first await.
+   */
+  const aggregationStart =
+    marketStatisticsAggregationService.start();
 
   indicatorManager.start();
 
-  await marketStatisticsRestoreService.start();
+  await aggregationStart;
+
+  marketStatisticsPersistenceBufferService.start();
 
   await marketStatisticsRollingService.start();
 
   whitebitWsService.start();
-
-  await marketsService.refreshMarkets();
 
   server = app.listen(port, '0.0.0.0', () => {
     initWsServer(server!);

@@ -61,8 +61,11 @@ export class MarketsService {
   }
 
   private emitMarketsInfoUpdated(): void {
+    const markets = this.getActiveMarkets();
+
     eventBus.emit(SERVER_EVENT.marketsInfoUpdated, {
-      marketNames: this.getActiveMarketNames(),
+      markets,
+      marketNames: Object.keys(markets),
     });
   }
 

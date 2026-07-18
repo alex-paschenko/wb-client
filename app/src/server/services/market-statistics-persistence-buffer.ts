@@ -3,10 +3,7 @@ import {
   performance,
 } from 'node:perf_hooks';
 
-import {
-  SECOND,
-  SECONDS,
-} from '../../shared/constants/time.js';
+import { SECONDS } from '../../shared/constants/time.js';
 
 import {
   marketCandlesDao,
@@ -25,6 +22,11 @@ import type {
 } from '../types/events.js';
 
 import { eventBus } from './event-bus.js';
+
+const isCpuProfiling =
+  process.execArgv.some(
+    (arg) => arg.startsWith('--cpu-prof'),
+  );
 
 const WORKER_INTERVAL = 10;
 
@@ -361,9 +363,22 @@ export class MarketStatisticsPersistenceBufferService {
 
       const startedAt = Date.now();
 
-      await marketCandlesDao.refreshBatch(
-        inputs,
-      );
+      if (isCpuProfiling) {
+
+        await new Promise<void>((resolve) => {
+          setTimeout(() => {
+            const dur = Date.now() - startedAt;
+            if (dur > 100) {
+              console.log(`Simulated DAO duration: `, dur);
+            }
+            resolve();
+          }, 10);
+        });
+      } else {
+        await marketCandlesDao.refreshBatch(
+          inputs,
+        );
+      }
 
       const duration =
         Date.now() - startedAt;

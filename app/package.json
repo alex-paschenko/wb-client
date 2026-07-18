@@ -3,7 +3,9 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "profiling": "concurrently \"npm run dev:server:prof\" \"npm run dev:client\"",
     "dev:server": "tsx watch src/server/index.ts",
+    "dev:server:prof": "node --import tsx --watch --inspect=0.0.0.0:9229 --cpu-prof --cpu-prof-dir=. src/server/index.ts",
     "dev:client": "vite --host 0.0.0.0",
     "build": "tsc --noEmit",
     "migrate:create": "node-pg-migrate create --migrations-dir src/server/db/migrations --migration-file-language ts",

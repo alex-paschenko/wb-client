@@ -10,6 +10,7 @@ services:
     ports:
       - '3000:3000'
       - '5173:5173'
+      - '9229:9229'
     volumes:
       - ./app:/app
       - /app/node_modules
@@ -36,6 +37,24 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    mem_limit: 4g
+    mem_reservation: 2g
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - wal_buffers=16MB
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - checkpoint_completion_target=0.9
 
 volumes:
   postgres_data:

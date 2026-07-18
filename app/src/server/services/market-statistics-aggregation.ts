@@ -54,6 +54,12 @@ interface IndicatorResultWaiter {
 interface StartupPromotionResult {
   addedRows: MarketCandleRow[];
   removals: MarketCandleRemoveRow[];
+  addedItemsByLevel: AddedItemsByLevel[];
+}
+
+interface AddedItemsByLevel {
+  level: number;
+  count: number;
 }
 
 const STARTUP_PERSISTENCE_MARKETS_PER_BATCH = 20;
@@ -127,6 +133,69 @@ export class MarketStatisticsAggregationService {
         resolve,
       };
     });
+  }
+
+  private incrementAddedItemsCount(
+    addedItemsCountByLevel: Map<number, number>,
+    level: number,
+    count: number,
+  ): void {
+    if (count <= 0) {
+      return;
+    }
+
+    addedItemsCountByLevel.set(
+      level,
+      (
+        addedItemsCountByLevel.get(level) ??
+        0
+      ) + count,
+    );
+  }
+
+  private refreshAddedItemsCountAfterRemoval(
+    addedItemsCountByLevel: Map<number, number>,
+    storage: MarketStatisticsStorageService,
+    level: number,
+  ): void {
+    const addedCount =
+      addedItemsCountByLevel.get(level);
+
+    if (addedCount === undefined) {
+      return;
+    }
+
+    /*
+    * Added items occupy the tail of the level.
+    * Removing items from the head can only remove
+    * added items after all older items have gone.
+    */
+    const remainingAddedCount = Math.min(
+      addedCount,
+      storage.size(level),
+    );
+
+    if (remainingAddedCount === 0) {
+      addedItemsCountByLevel.delete(level);
+      return;
+    }
+
+    addedItemsCountByLevel.set(
+      level,
+      remainingAddedCount,
+    );
+  }
+
+  private toAddedItemsByLevel(
+    addedItemsCountByLevel:
+      ReadonlyMap<number, number>,
+  ): AddedItemsByLevel[] {
+    return [...addedItemsCountByLevel.entries()]
+      .filter(([, count]) => count > 0)
+      .map(([level, count]) => ({
+        level,
+        count,
+      }));
   }
 
   public createFullSyncSnapshot(
@@ -223,23 +292,33 @@ export class MarketStatisticsAggregationService {
       'should record delta',
     );
 
-    const centralIndexesAsc = this.aggregate(storage);
+    const addedItemsByLevel =
+      this.aggregate(storage);
+
+    const numOfAffectedLevels = Math.max(
+      1,
+      ...addedItemsByLevel.map(
+        ({ level }) => level + 1,
+      ),
+    );
 
     this.emitRecalculateIndicatorsRequest(
       storage,
-      centralIndexesAsc,
-      centralIndexesAsc.length + 1,
+      addedItemsByLevel,
+      numOfAffectedLevels,
     );
   }
 
   private aggregate(
     storage: MarketStatisticsStorageService,
-  ): number[] {
-    const centralIndexesAsc: number[] = [];
+  ): AddedItemsByLevel[] {
+    const addedItemsCountByLevel =
+      new Map<number, number>();
 
     for (
       let level = 0;
-      level < MARKET_STATISTICS_LEVEL_CONFIGS.length - 1;
+      level <
+        MARKET_STATISTICS_LEVEL_CONFIGS.length - 1;
       level += 1
     ) {
       const currentConfig =
@@ -248,28 +327,39 @@ export class MarketStatisticsAggregationService {
       const nextConfig =
         MARKET_STATISTICS_LEVEL_CONFIGS[level + 1];
 
-      const startedAt = storage.getStartedAt(level);
-      const endedAt = storage.getEndedAt(level);
+      const startedAt =
+        storage.getStartedAt(level);
 
-      if (startedAt === null || endedAt === null) {
-        return centralIndexesAsc;
+      const endedAt =
+        storage.getEndedAt(level);
+
+      if (
+        startedAt === null ||
+        endedAt === null
+      ) {
+        break;
       }
 
       if (
         endedAt - startedAt <=
-        currentConfig.interval + nextConfig.duration
+        currentConfig.interval +
+          nextConfig.duration
       ) {
-        return centralIndexesAsc;
+        break;
       }
 
-      const cutoff = endedAt - currentConfig.interval;
-      const items = storage.readItemsBefore(level, cutoff);
+      const cutoff =
+        endedAt - currentConfig.interval;
+
+      const items =
+        storage.readItemsBefore(level, cutoff);
 
       if (items.length === 0) {
-        return centralIndexesAsc;
+        break;
       }
 
-      const candle = this.aggregateCandles(items);
+      const candle =
+        this.aggregateCandles(items);
 
       storage.removeNItems(
         level,
@@ -277,16 +367,30 @@ export class MarketStatisticsAggregationService {
         'should record delta',
       );
 
-      const index = storage.addItem(
-        level + 1,
+      this.refreshAddedItemsCountAfterRemoval(
+        addedItemsCountByLevel,
+        storage,
+        level,
+      );
+
+      const targetLevel = level + 1;
+
+      storage.addItem(
+        targetLevel,
         candle,
         'should record delta',
       );
 
-      centralIndexesAsc.push(index);
+      this.incrementAddedItemsCount(
+        addedItemsCountByLevel,
+        targetLevel,
+        1,
+      );
     }
 
-    return centralIndexesAsc;
+    return this.toAddedItemsByLevel(
+      addedItemsCountByLevel,
+    );
   }
 
   private applyLiveIndicatorResults(
@@ -621,8 +725,11 @@ private async prepareMarketStorage(
         cumulativeCutoffs,
       );
 
-    const indicatorPersistenceChanges =
-      await this.recalculateStartupIndicators(storage);
+  const indicatorPersistenceChanges =
+    await this.recalculateStartupIndicators(
+      storage,
+      promotionResult.addedItemsByLevel,
+    );
 
     /*
     * Clear the accumulated binary delta, but do not publish it.
@@ -689,6 +796,9 @@ private async prepareMarketStorage(
     const addedRows: MarketCandleRow[] = [];
     const removals: MarketCandleRemoveRow[] = [];
 
+    const addedItemsCountByLevel =
+      new Map<number, number>();
+
     const maxLevel =
       MARKET_STATISTICS_LEVEL_CONFIGS.length - 1;
 
@@ -701,15 +811,21 @@ private async prepareMarketStorage(
         cumulativeCutoffs[sourceLevel];
 
       const sourceItems =
-        storage.readItemsBefore(sourceLevel, cutoff);
+        storage.readItemsBefore(
+          sourceLevel,
+          cutoff,
+        );
 
       if (sourceItems.length === 0) {
         continue;
       }
 
       const targetLevel = sourceLevel + 1;
+
       const targetDuration =
-        MARKET_STATISTICS_LEVEL_CONFIGS[targetLevel].duration;
+        MARKET_STATISTICS_LEVEL_CONFIGS[
+          targetLevel
+        ].duration;
 
       const targetCandles =
         this.aggregateCandlesByDuration(
@@ -721,6 +837,12 @@ private async prepareMarketStorage(
         sourceLevel,
         sourceItems.length,
         'should record delta',
+      );
+
+      this.refreshAddedItemsCountAfterRemoval(
+        addedItemsCountByLevel,
+        storage,
+        sourceLevel,
       );
 
       for (const candle of targetCandles) {
@@ -738,6 +860,12 @@ private async prepareMarketStorage(
         });
       }
 
+      this.incrementAddedItemsCount(
+        addedItemsCountByLevel,
+        targetLevel,
+        targetCandles.length,
+      );
+
       removals.push({
         marketName,
         level: sourceLevel,
@@ -752,12 +880,17 @@ private async prepareMarketStorage(
     removals.push({
       marketName,
       level: maxLevel,
-      timeThreshold: cumulativeCutoffs[maxLevel],
+      timeThreshold:
+        cumulativeCutoffs[maxLevel],
     });
 
     return {
       addedRows,
       removals,
+      addedItemsByLevel:
+        this.toAddedItemsByLevel(
+          addedItemsCountByLevel,
+        ),
     };
   }
 
@@ -801,10 +934,10 @@ private async prepareMarketStorage(
 
   private async recalculateStartupIndicators(
     storage: MarketStatisticsStorageService,
+    addedItemsByLevel:
+      readonly AddedItemsByLevel[],
   ): Promise<CandleIndicatorsChange[]> {
-    const size = storage.size();
-
-    if (size === 0) {
+    if (addedItemsByLevel.length === 0) {
       return [];
     }
 
@@ -813,12 +946,7 @@ private async prepareMarketStorage(
 
     this.emitRecalculateIndicatorsRequest(
       storage,
-      Array.from(
-        {
-          length: size,
-        },
-        (_, index) => index,
-      ),
+      addedItemsByLevel,
       storage.getNumOfLevels(),
     );
 
@@ -964,9 +1092,52 @@ private async prepareMarketStorage(
 
   private emitRecalculateIndicatorsRequest(
     storage: MarketStatisticsStorageService,
-    centralIndexesAsc: number[] = [],
+    addedItemsByLevel:
+      readonly AddedItemsByLevel[] = [],
     numOfAffectedLevels = 1,
   ): void {
+    const centralIndexesAsc: number[] = [];
+
+    for (
+      const { level, count }
+      of addedItemsByLevel
+    ) {
+      const levelSize = storage.size(level);
+
+      if (
+        !Number.isInteger(count) ||
+        count < 0 ||
+        count > levelSize
+      ) {
+        throw new Error(
+          `Invalid added items count: ` +
+          `level ${level}, count ${count}, ` +
+          `level size ${levelSize}`,
+        );
+      }
+
+      const firstAddedLevelOffset =
+        levelSize - count;
+
+      for (
+        let levelOffset =
+          firstAddedLevelOffset;
+        levelOffset < levelSize;
+        levelOffset += 1
+      ) {
+        centralIndexesAsc.push(
+          storage.getPointIndexAsc(
+            level,
+            levelOffset,
+          ),
+        );
+      }
+    }
+
+    centralIndexesAsc.sort(
+      (left, right) => left - right,
+    );
+
     eventBus.emit(
       SERVER_EVENT.recalculateIndicatorsRequest,
       {

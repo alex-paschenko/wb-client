@@ -1,34 +1,26 @@
 // app/src/server/dao/market-candles.ts
+import { SECONDS } from '../../shared/constants/time.js';
 import type {
   MarketIndicatorValues,
 } from '../../shared/types/market-indicators.js';
-
 import type {
   MarketCandle,
 } from '../../shared/types/market-statistics-storage.js';
-
 import type {
   Sql,
   TransactionSql,
 } from '../db/client.js';
-
-import {
-  q,
-} from '../db/client.js';
-
-import type {
-  SelectParams,
-} from '../types/db.js';
-
+import { q } from '../db/client.js';
+import type { SelectParams } from '../types/db.js';
 import {
   buildUpsertSet,
   dbRow,
-  toJsonObject,
 } from '../utilities/db-helpers.js';
 
 const MAX_INSERT_PARAMETERS = 60_000;
 const MAX_INSERT_BATCH_SIZE = 1_000;
 const INDICATOR_UPDATE_BATCH_SIZE = 2_000;
+const DURATION_TRESHOLD = 100;
 
 type Query =
   | Sql
@@ -265,32 +257,72 @@ export class MarketCandlesDao {
     await this.q.begin(async (trx) => {
       for (const batch of batches) {
         if (batch.toAdd.length > 0) {
+
+          const startInsertMany = Date.now();
           await this.insertMany(
             batch.toAdd,
             trx,
           );
+          this.durationLogging(
+            startInsertMany,
+            'insertMany',
+            { candles: batch.toAdd.length },
+          );
 
+          const startUpsertAddedCandleIndicators = Date.now();
           await this.upsertAddedCandleIndicators(
             batch.toAdd,
             trx,
           );
+          this.durationLogging(
+            startUpsertAddedCandleIndicators,
+            'upsertAddedCandleIndicators',
+            { candles: batch.toAdd.length },
+          );
         }
 
         if (batch.toChange.length > 0) {
+          const startUpdateIndicatorChanges = Date.now();
           await this.updateIndicatorChanges(
             batch.toChange,
             trx,
           );
+          this.durationLogging(
+            startUpdateIndicatorChanges,
+            'updateIndicatorChanges',
+            { indicators: batch.toChange.length },
+          );
         }
 
         if (batch.toRemove.length > 0) {
+          const startDeleteOld = Date.now();
           await this.deleteOld(
             batch.toRemove,
             trx,
           );
+          this.durationLogging(
+            startDeleteOld,
+            'deleteOld',
+            { candles: batch.toRemove.length },
+          );
         }
       }
     });
+  }
+
+  private durationLogging(
+    startTimestamp: number,
+    methodName: string,
+    params: object | null = null,
+  ) {
+    const duration = Date.now() - startTimestamp;
+    if (duration > DURATION_TRESHOLD) {
+      const details = {
+        ...(params ?? {}),
+        duration,
+      };
+      console.log(`Too slow ${methodName}`, details);
+    }
   }
 
   private async upsertAddedCandleIndicators(

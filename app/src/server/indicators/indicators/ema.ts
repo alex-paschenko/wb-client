@@ -1,3 +1,4 @@
+// app/src/server/indicators/indicators/ema.ts
 import type {
   MarketIndicatorRecalculatedItem,
 } from '../../../shared/types/market-indicators.js';

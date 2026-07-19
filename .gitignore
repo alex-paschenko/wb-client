@@ -5,3 +5,4 @@ node_modules/
 w-*/
 
 *.zip
+*.cpuprofile

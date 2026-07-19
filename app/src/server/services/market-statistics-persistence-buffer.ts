@@ -22,6 +22,7 @@ import type {
 } from '../types/events.js';
 
 import { eventBus } from './event-bus.js';
+import { CandleKeyMap } from '../utilities/candle-key-map.js';
 
 const isCpuProfiling =
   process.execArgv.some(
@@ -44,10 +45,10 @@ interface PendingMarketPersistence {
   readonly marketName: string;
 
   readonly toAdd:
-    Map<string, MarketCandleRow>;
+    CandleKeyMap<MarketCandleRow>;
 
   readonly toChange:
-    Map<string, MarketCandleIndicatorsChange>;
+    CandleKeyMap<MarketCandleIndicatorsChange>;
 
   readonly removeBounds:
     Map<number, number>;
@@ -211,7 +212,6 @@ export class MarketStatisticsPersistenceBufferService {
     pending: PendingMarketPersistence,
     event: MarketStatisticsPersistenceChangedEvent,
   ): void {
-
     for (
       const [
         level,
@@ -219,7 +219,6 @@ export class MarketStatisticsPersistenceBufferService {
       ]
       of event.changes.entries()
     ) {
-
       const candle: MarketCandleRow = {
         marketName:
           event.marketName,
@@ -235,9 +234,9 @@ export class MarketStatisticsPersistenceBufferService {
       };
 
       pending.toAdd.set(
-        this.getCandleKey(
-          candle,
-        ),
+        candle.level,
+        candle.startedAt,
+        candle.endedAt,
         candle,
       );
     }
@@ -248,29 +247,46 @@ export class MarketStatisticsPersistenceBufferService {
     event: MarketStatisticsPersistenceChangedEvent,
   ): void {
     for (const change of event.indicatorChanges) {
-      const key = this.getIndicatorChangeKey(
-        change,
-      );
-
       const existing =
-        pending.toChange.get(key);
+        pending.toChange.get(
+          change.level,
+          change.startedAt,
+          change.endedAt,
+        );
 
-      if (!existing) {
-        pending.toChange.set(key, {
-          marketName: event.marketName,
-          ...change,
-        });
+      if (existing) {
+        Object.assign(
+          existing.indicators,
+          change.indicators,
+        );
 
         continue;
       }
 
-      pending.toChange.set(key, {
-        ...existing,
-        indicators: {
-          ...existing.indicators,
-          ...change.indicators,
-        },
-      });
+      const persistenceChange:
+        MarketCandleIndicatorsChange = {
+          marketName:
+            event.marketName,
+
+          level:
+            change.level,
+
+          startedAt:
+            change.startedAt,
+
+          endedAt:
+            change.endedAt,
+
+          indicators:
+            change.indicators,
+        };
+
+      pending.toChange.set(
+        change.level,
+        change.startedAt,
+        change.endedAt,
+        persistenceChange,
+      );
     }
   }
 
@@ -302,30 +318,6 @@ export class MarketStatisticsPersistenceBufferService {
         );
       }
     }
-  }
-
-  private getCandleKey(
-    candle: MarketCandleRow,
-  ): string {
-
-    return [
-      candle.level,
-      candle.startedAt,
-      candle.endedAt,
-    ].join(':');
-  }
-
-  private getIndicatorChangeKey(
-    change: Pick<
-      MarketCandleIndicatorsChange,
-      'level' | 'startedAt' | 'endedAt'
-    >,
-  ): string {
-    return [
-      change.level,
-      change.startedAt,
-      change.endedAt,
-    ].join(':');
   }
 
   private async workerTick(): Promise<void> {
@@ -426,48 +418,64 @@ export class MarketStatisticsPersistenceBufferService {
         );
 
       for (const candle of item.input.toAdd) {
-        const key =
-          this.getCandleKey(candle);
-
         /*
         * A newer queued candle version wins over the failed one.
         */
-        if (!current.toAdd.has(key)) {
-          current.toAdd.set(
-            key,
-            candle,
-          );
+        if (
+          current.toAdd.has(
+            candle.level,
+            candle.startedAt,
+            candle.endedAt,
+          )
+        ) {
+          continue;
         }
+
+        current.toAdd.set(
+          candle.level,
+          candle.startedAt,
+          candle.endedAt,
+          candle,
+        );
       }
 
       for (
         const change
         of item.input.toChange
       ) {
-        const key =
-          this.getIndicatorChangeKey(
-            change,
-          );
-
         const newer =
-          current.toChange.get(key);
+          current.toChange.get(
+            change.level,
+            change.startedAt,
+            change.endedAt,
+          );
 
         if (!newer) {
           current.toChange.set(
-            key,
+            change.level,
+            change.startedAt,
+            change.endedAt,
             change,
           );
 
           continue;
         }
 
-        current.toChange.set(key, {
-          ...change,
-          indicators: {
-            ...change.indicators,
-            ...newer.indicators,
-          },
-        });
+        /*
+        * Restore older indicator values first.
+        * Values queued after the failed batch must win.
+        */
+        Object.assign(
+          change.indicators,
+          newer.indicators,
+        );
+
+        current.toChange.set(
+          change.level,
+          change.startedAt,
+          change.endedAt,
+          change,
+        );
       }
 
       for (
@@ -517,9 +525,16 @@ export class MarketStatisticsPersistenceBufferService {
 
     pending = {
       marketName,
-      toAdd: new Map(),
-      toChange: new Map(),
-      removeBounds: new Map(),
+      toAdd:
+        new CandleKeyMap<MarketCandleRow>(),
+
+      toChange:
+        new CandleKeyMap<
+          MarketCandleIndicatorsChange
+        >(),
+
+      removeBounds:
+        new Map<number, number>(),
     };
 
     this.pendingByMarket.set(
@@ -561,16 +576,12 @@ export class MarketStatisticsPersistenceBufferService {
         indicatorChangesCount;
 
       const toChange =
-        this.takeIndicatorChanges(
-          pending,
+        pending.toChange.drain(
           remainingIndicatorCapacity,
         );
 
-      const toAdd = [
-        ...pending.toAdd.values(),
-      ];
-
-      pending.toAdd.clear();
+      const toAdd =
+        pending.toAdd.drain();
 
       /*
       * Removals are deferred until all currently queued indicator
@@ -628,32 +639,6 @@ export class MarketStatisticsPersistenceBufferService {
     }
 
     return batch;
-  }
-
-  private takeIndicatorChanges(
-    pending: PendingMarketPersistence,
-    limit: number,
-  ): MarketCandleIndicatorsChange[] {
-    if (limit <= 0) {
-      return [];
-    }
-
-    const result:
-      MarketCandleIndicatorsChange[] = [];
-
-    for (
-      const [key, change]
-      of pending.toChange
-    ) {
-      result.push(change);
-      pending.toChange.delete(key);
-
-      if (result.length >= limit) {
-        break;
-      }
-    }
-
-    return result;
   }
 
   private takeRemoveRows(

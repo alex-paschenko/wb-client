@@ -168,6 +168,44 @@
       grid-template-columns: repeat(12, minmax(0, 1fr));
     }
   }
+
+  .app-color-picker .react-colorful {
+    width: 220px;
+    height: 180px;
+  }
+
+  .app-color-picker .react-colorful__saturation {
+    border-radius: 0.5rem;
+  }
+
+  .app-color-picker .react-colorful__hue {
+    height: 14px;
+    margin-top: 0.75rem;
+    border-radius: 9999px;
+  }
+
+  .app-color-picker .react-colorful__pointer {
+    width: 18px;
+    height: 18px;
+    border-width: 2px;
+  }
+
+  .settings-row {
+    @apply grid items-center gap-2;
+  }
+
+  .settings-row-checkbox {
+    grid-template-columns:
+      20px
+      40px
+      1fr;
+  }
+
+  .settings-row-simple {
+    grid-template-columns:
+      1fr
+      40px;
+  }
 }
 
 @layer utilities {

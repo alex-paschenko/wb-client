@@ -1,3 +1,4 @@
+// app/src/shared/i18n/languages.ts
 export const languages = [
   {
     code: 'ru',

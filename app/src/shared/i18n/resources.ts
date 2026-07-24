@@ -1,3 +1,4 @@
+// app/src/shared/i18n/resources.ts
 import type { LanguageCode } from './languages.js';
 
 export const i18nResources = {
@@ -12,6 +13,12 @@ export const i18nResources = {
         theme: 'Тема',
         language: 'Язык',
         placeholder: 'Страница настроек будет здесь.',
+        "indicators": {
+          "title": "Индикаторы",
+          "empty": "Нет доступных индикаторов",
+          "visibilityAriaLabel": "Включить или выключить индикатор {{name}}",
+          "colorAriaLabel": "Выбрать цвет индикатора {{name}}"
+        }
       },
 
       routes: {
@@ -87,6 +94,16 @@ export const i18nResources = {
           days_other: '{{count}} дня',
         },
       },
+
+      "startup": {
+        "started": "Запуск приложения…",
+        "steps": {
+          "getPrimaryData": "Загрузка данных приложения…",
+          "processPrimaryData": "Подготовка данных приложения…"
+        },
+        "completed": "Запуск завершён",
+        "failed": "Не удалось запустить приложение"
+      }
     },
   },
 
@@ -101,6 +118,12 @@ export const i18nResources = {
         theme: 'Theme',
         language: 'Language',
         placeholder: 'Settings page will be here.',
+        "indicators": {
+          "title": "Indicators",
+          "empty": "No indicators available",
+          "visibilityAriaLabel": "Toggle {{name}} indicator",
+          "colorAriaLabel": "Choose color for {{name}}"
+        }
       },
 
       routes: {
@@ -132,6 +155,16 @@ export const i18nResources = {
             marketsUpdated: 'Markets updated message received',
           },
         },
+
+        "startup": {
+          "started": "Starting application…",
+          "steps": {
+            "getPrimaryData": "Loading application data…",
+            "processPrimaryData": "Preparing application data…"
+          },
+          "completed": "Startup completed",
+          "failed": "Startup failed"
+        }
       },
 
       common: {

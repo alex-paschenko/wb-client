@@ -1,4 +1,5 @@
 // app/src/server/indicators/base-indicator.ts
+
 import {
   INDICATOR_NAME_MAX_LENGTH,
   INDICATOR_CODECS,
@@ -14,8 +15,9 @@ import type {
   MarketIndicatorCalculationParams,
 } from '../types/market-indicators.js';
 
-interface IndicatorStorageSettings {
+interface IndicatorDefinition {
   codec: IndicatorValueCodecName;
+  group: string;
 }
 
 export interface IndicatorAffectedRange {
@@ -27,7 +29,7 @@ export abstract class BaseIndicator<TState = never>
   implements MarketIndicator {
   public abstract readonly name: string;
 
-  protected abstract readonly storage: IndicatorStorageSettings;
+  protected abstract readonly definition: IndicatorDefinition;
 
   protected abstract readonly infiniteRange: boolean;
 
@@ -43,12 +45,12 @@ export abstract class BaseIndicator<TState = never>
     this.validateName();
 
     const codecIndex = INDICATOR_CODECS.findIndex(
-      (codec) => codec.name === this.storage.codec,
+      (codec) => codec.name === this.definition.codec,
     );
 
     if (codecIndex < 0) {
       throw new Error(
-        `Unknown indicator codec "${this.storage.codec}" ` +
+        `Unknown indicator codec "${this.definition.codec}" ` +
         `for indicator "${this.name}"`,
       );
     }
@@ -56,6 +58,7 @@ export abstract class BaseIndicator<TState = never>
     return {
       name: this.name,
       codecIndex,
+      group: this.definition.group,
     };
   }
 

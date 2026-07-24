@@ -1,3 +1,4 @@
+// app/src/client/src/hooks/useAppRouter.ts
 import {
   useCallback,
   useEffect,

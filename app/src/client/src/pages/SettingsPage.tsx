@@ -1,4 +1,15 @@
-import { useTranslation } from 'react-i18next';
+// app/src/client/src/pages/SettingsPage.tsx
+
+import {
+  useTranslation,
+} from 'react-i18next';
+
+import {
+  CandlesSettings,
+} from '../components/CandlesSettings';
+import {
+  IndicatorsSettings,
+} from '../components/IndicatorsSettings';
 
 export const SettingsPage = () => {
   const { t } = useTranslation();
@@ -9,9 +20,11 @@ export const SettingsPage = () => {
         {t('settings.title')}
       </h2>
 
-      <p className="mt-2 text-sm text-muted">
-        {t('settings.placeholder')}
-      </p>
+      <div className="mt-5 space-y-6">
+        <CandlesSettings />
+
+        <IndicatorsSettings />
+      </div>
     </section>
   );
 };

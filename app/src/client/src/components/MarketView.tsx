@@ -1,49 +1,36 @@
 // app/src/client/src/components/MarketView.tsx
-import {
-  useMemo,
-} from 'react';
 
-import {
-  useTranslation,
-} from 'react-i18next';
+import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import {
   MARKET_STATISTICS_LEVEL_DURATIONS,
 } from '../../../shared/constants/market-statistics-config';
-
 import type {
   OpenMarketViewState,
 } from '../../../shared/types/frontend-settings';
-
-import {
-  useAppContext,
-} from '../contexts/AppContext';
-
-import {
-  useController,
-} from '../hooks/useController';
-
+import { useAppContext } from '../contexts/AppContext';
+import { useController } from '../hooks/useController';
 import {
   useMarketStatisticsController,
 } from '../hooks/useMarketStatisticsController';
-
-import {
-  DashboardItem,
-} from './DashboardItem';
-
-import {
-  DropdownButton,
-} from './DropdownButton';
-
-import {
-  MarketChart,
-} from './MarketChart';
+import type {
+  ChartPanelData,
+} from '../utilities/chart-panel';
+import type {
+  ChartPanelSeries,
+} from '../utilities/chart-panel-series-manager';
+import { DashboardItem } from './DashboardItem';
+import { DropdownButton } from './DropdownButton';
+import { MarketChart } from './MarketChart';
 
 interface MarketViewProps {
   marketName: string;
   size: OpenMarketViewState;
   index: number;
 }
+
+const PRICE_PANEL_GROUP = 'price';
 
 const defaultDuration = MARKET_STATISTICS_LEVEL_DURATIONS[0];
 
@@ -55,6 +42,8 @@ export const MarketView = ({
   const { t } = useTranslation();
 
   const {
+    indicatorRegistry,
+    settings,
     closeMarket,
     setMarketViewState,
     moveMarket,
@@ -77,6 +66,79 @@ export const MarketView = ({
       }),
     }));
   }, [t]);
+
+  const panels = useMemo<ChartPanelData[]>(() => {
+    const seriesByGroup =
+      new Map<string, ChartPanelSeries[]>();
+
+    if (indicatorRegistry) {
+      const registryByIndicatorName = new Map(
+        indicatorRegistry.map((entry) => [
+          entry.name,
+          entry,
+        ]),
+      );
+
+      for (const indicator of controllerState.indicatorData) {
+        const indicatorSettings =
+          settings.getIndicator(indicator.indicatorName);
+
+        if (!indicatorSettings?.isVisible) {
+          continue;
+        }
+
+        const registryEntry =
+          registryByIndicatorName.get(indicator.indicatorName);
+
+        if (!registryEntry) {
+          throw new Error(
+            `Cannot render indicator ` +
+            `"${indicator.indicatorName}": ` +
+            `registry entry is missing`,
+          );
+        }
+
+        let groupSeries =
+          seriesByGroup.get(registryEntry.group);
+
+        if (!groupSeries) {
+          groupSeries = [];
+          seriesByGroup.set(registryEntry.group, groupSeries);
+        }
+
+        groupSeries.push({
+          indicatorName: indicator.indicatorName,
+          color: indicatorSettings.color,
+          data: indicator.data,
+        });
+      }
+    }
+
+    const priceSeries =
+      seriesByGroup.get(PRICE_PANEL_GROUP) ?? [];
+
+    const secondaryPanels = Array.from(seriesByGroup.entries())
+      .filter(([group]) => group !== PRICE_PANEL_GROUP)
+      .sort(([leftGroup], [rightGroup]) => {
+        return leftGroup.localeCompare(rightGroup);
+      })
+      .map(([group, series]) => ({
+        group,
+        series,
+      }));
+
+    return [
+      {
+        group: PRICE_PANEL_GROUP,
+        series: priceSeries,
+      },
+      ...secondaryPanels,
+    ];
+  }, [
+    controllerState.indicatorData,
+    indicatorRegistry,
+    settings,
+  ]);
 
   return (
     <DashboardItem
@@ -102,10 +164,7 @@ export const MarketView = ({
         const draggedMarketName =
           event.dataTransfer.getData('text/plain');
 
-        if (
-          draggedMarketName &&
-          draggedMarketName !== marketName
-        ) {
+        if (draggedMarketName && draggedMarketName !== marketName) {
           moveMarket(draggedMarketName, index);
         }
       }}
@@ -145,6 +204,8 @@ export const MarketView = ({
           <div className="relative h-full w-full">
             <MarketChart
               candleData={controllerState.candleData}
+              candleLineColor={settings.getCandleColor()}
+              panels={panels}
               chartVersion={controllerState.chartVersion}
               visibleRange={controllerState.visibleRange}
             />

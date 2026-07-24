@@ -15,6 +15,7 @@ export type MarketIndicatorValues = Record<string, number | null>;
 export interface MarketIndicatorStorageConfig {
   name: string;
   codecIndex: IndicatorValueCodecIndex;
+  group: string;
 }
 
 export type MarketIndicatorsRegistry =

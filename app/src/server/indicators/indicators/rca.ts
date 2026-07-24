@@ -1,16 +1,17 @@
 // app/src/server/indicators/indicators/rca.ts
+
 import type {
   MarketIndicatorRecalculatedItem,
 } from '../../../shared/types/market-indicators.js';
-
+import type {
+  MarketCandle,
+} from '../../../shared/types/market-statistics-storage.js';
 import type {
   MarketIndicatorCalculationParams,
 } from '../../types/market-indicators.js';
-
-import {
-  type IndicatorAffectedRange,
+import type {
+  IndicatorAffectedRange,
 } from '../base-indicator.js';
-
 import {
   IncrementalIndicator,
 } from '../incremental-indicator.js';
@@ -20,7 +21,7 @@ interface RcaIndicatorParams {
 }
 
 interface RcaIndicatorState {
-  sum: number;
+  relativeSpeedSum: number;
 }
 
 export class RcaIndicator extends IncrementalIndicator<RcaIndicatorState> {
@@ -28,13 +29,12 @@ export class RcaIndicator extends IncrementalIndicator<RcaIndicatorState> {
 
   protected readonly infiniteRange = false;
 
-  protected readonly storage = {
+  protected readonly definition = {
     codec: 'float32',
+    group: 'rca',
   } as const;
 
-  public constructor(
-    params: RcaIndicatorParams,
-  ) {
+  public constructor(params: RcaIndicatorParams) {
     super(params.period);
 
     this.name = `rca-${params.period}`;
@@ -43,50 +43,84 @@ export class RcaIndicator extends IncrementalIndicator<RcaIndicatorState> {
   protected fullCalculate(
     params: MarketIndicatorCalculationParams,
   ): number | null {
-    if (params.descending.candles.length < this.period) {
+    const candles = params.descending.candles;
+
+    if (candles.length < this.period + 1) {
+      this.stateByMarket.delete(params.marketName);
       return null;
     }
 
-    let sum = 0;
+    let relativeSpeedSum = 0;
 
     for (let index = 0; index < this.period; index += 1) {
-      const candle = params.descending.candles[index];
+      const currentCandle = candles[index];
+      const previousCandle = candles[index + 1];
 
-      if (!candle) {
+      const relativeSpeed = this.calculateRelativeSpeed(
+        previousCandle,
+        currentCandle,
+      );
+
+      if (relativeSpeed === null) {
+        this.stateByMarket.delete(params.marketName);
         return null;
       }
 
-      sum += candle.close;
+      relativeSpeedSum += relativeSpeed;
     }
 
     this.stateByMarket.set(params.marketName, {
-      sum,
+      relativeSpeedSum,
     });
 
-    return this.calculateValue(params, sum);
+    return this.calculateValue(relativeSpeedSum);
   }
 
   protected incrementalCalculate(
     params: MarketIndicatorCalculationParams,
   ): number | null {
     const state = this.stateByMarket.get(params.marketName);
-    const newestCandle = params.descending.candles[0];
-    const removedCandle = params.descending.candles[this.period];
+    const candles = params.descending.candles;
 
-    if (!state || !newestCandle || !removedCandle) {
+    const newestCandle = candles[0];
+    const previousNewestCandle = candles[1];
+    const expiredCurrentCandle = candles[this.period];
+    const expiredPreviousCandle = candles[this.period + 1];
+
+    if (
+      !state ||
+      !newestCandle ||
+      !previousNewestCandle ||
+      !expiredCurrentCandle ||
+      !expiredPreviousCandle
+    ) {
       return this.fullCalculate(params);
     }
 
-    const sum =
-      state.sum +
-      newestCandle.close -
-      removedCandle.close;
+    const addedRelativeSpeed = this.calculateRelativeSpeed(
+      previousNewestCandle,
+      newestCandle,
+    );
+
+    const removedRelativeSpeed = this.calculateRelativeSpeed(
+      expiredPreviousCandle,
+      expiredCurrentCandle,
+    );
+
+    if (addedRelativeSpeed === null || removedRelativeSpeed === null) {
+      return this.fullCalculate(params);
+    }
+
+    const relativeSpeedSum =
+      state.relativeSpeedSum -
+      removedRelativeSpeed +
+      addedRelativeSpeed;
 
     this.stateByMarket.set(params.marketName, {
-      sum,
+      relativeSpeedSum,
     });
 
-    return this.calculateValue(params, sum);
+    return this.calculateValue(relativeSpeedSum);
   }
 
   public rangeCalculate(
@@ -107,33 +141,39 @@ export class RcaIndicator extends IncrementalIndicator<RcaIndicatorState> {
     const values: (number | null)[] = [];
 
     const preloadStartIndex = Math.max(
-      0,
+      1,
       range.startIndexAsc - this.period + 1,
     );
 
-    let sum = 0;
-    let missingCount = 0;
+    let relativeSpeedSum = 0;
+    let invalidRelativeSpeedCount = 0;
 
-    const addCandle = (
-      candle: (typeof candles)[number] | undefined,
-    ): void => {
-      if (!candle) {
-        missingCount += 1;
+    const addRelativeSpeed = (currentIndex: number): void => {
+      const relativeSpeed = this.calculateRelativeSpeed(
+        candles[currentIndex - 1],
+        candles[currentIndex],
+      );
+
+      if (relativeSpeed === null) {
+        invalidRelativeSpeedCount += 1;
         return;
       }
 
-      sum += candle.close;
+      relativeSpeedSum += relativeSpeed;
     };
 
-    const removeCandle = (
-      candle: (typeof candles)[number] | undefined,
-    ): void => {
-      if (!candle) {
-        missingCount -= 1;
+    const removeRelativeSpeed = (currentIndex: number): void => {
+      const relativeSpeed = this.calculateRelativeSpeed(
+        candles[currentIndex - 1],
+        candles[currentIndex],
+      );
+
+      if (relativeSpeed === null) {
+        invalidRelativeSpeedCount -= 1;
         return;
       }
 
-      sum -= candle.close;
+      relativeSpeedSum -= relativeSpeed;
     };
 
     for (
@@ -141,7 +181,7 @@ export class RcaIndicator extends IncrementalIndicator<RcaIndicatorState> {
       index < range.startIndexAsc;
       index += 1
     ) {
-      addCandle(candles[index]);
+      addRelativeSpeed(index);
     }
 
     for (
@@ -149,67 +189,54 @@ export class RcaIndicator extends IncrementalIndicator<RcaIndicatorState> {
       index <= range.endIndexAsc;
       index += 1
     ) {
-      const newestCandle = candles[index];
-
-      addCandle(newestCandle);
-
-      const expiredIndex = index - this.period;
-
-      if (expiredIndex >= preloadStartIndex) {
-        removeCandle(candles[expiredIndex]);
+      if (index > 0) {
+        addRelativeSpeed(index);
       }
 
-      const oldestIndex = index - this.period + 1;
+      const expiredRelativeSpeedIndex = index - this.period;
+
+      if (expiredRelativeSpeedIndex >= preloadStartIndex) {
+        removeRelativeSpeed(expiredRelativeSpeedIndex);
+      }
+
+      const oldestIndex = index - this.period;
 
       if (
         oldestIndex < 0 ||
-        missingCount > 0 ||
-        !newestCandle
+        invalidRelativeSpeedCount > 0 ||
+        !candles[oldestIndex] ||
+        !candles[index]
       ) {
         values.push(null);
         continue;
       }
 
-      const oldestCandle = candles[oldestIndex];
-
-      if (!oldestCandle) {
-        values.push(null);
-        continue;
-      }
-
-      const duration =
-        newestCandle.receivedAt -
-        oldestCandle.receivedAt;
-
-      values.push(
-        duration > 0
-          ? sum / duration
-          : null,
-      );
+      values.push(this.calculateValue(relativeSpeedSum));
     }
 
     return values;
   }
 
-  private calculateValue(
-    params: MarketIndicatorCalculationParams,
-    sum: number,
+  private calculateRelativeSpeed(
+    previousCandle: MarketCandle | undefined,
+    currentCandle: MarketCandle | undefined,
   ): number | null {
-    const newestCandle = params.descending.candles[0];
-    const oldestCandle =
-      params.descending.candles[this.period - 1];
-
-    if (!newestCandle || !oldestCandle) {
+    if (!previousCandle || !currentCandle) {
       return null;
     }
 
-    const duration =
-      newestCandle.receivedAt - oldestCandle.receivedAt;
-
-    if (duration <= 0) {
+    if (
+      previousCandle.close === 0 ||
+      !Number.isFinite(previousCandle.close) ||
+      !Number.isFinite(currentCandle.speed)
+    ) {
       return null;
     }
 
-    return sum / duration;
+    return currentCandle.speed / previousCandle.close;
+  }
+
+  private calculateValue(relativeSpeedSum: number): number {
+    return relativeSpeedSum * 100_000 / this.period;
   }
 }

@@ -1,8 +1,6 @@
 // app/src/client/src/components/MarketChart.tsx
-import {
-  useEffect,
-  useRef,
-} from 'react';
+
+import { useEffect, useRef } from 'react';
 
 import {
   CandlestickSeries,
@@ -17,41 +15,50 @@ import type {
   MarketChartLinePoint,
   MarketChartVisibleRange,
 } from '../controllers/MarketStatisticsView';
+import type {
+  ChartPanelData,
+} from '../utilities/chart-panel';
+import {
+  ChartPanelManager,
+} from '../utilities/chart-panel-manager';
 
 interface MarketChartProps {
   candleData: MarketChartCandlePoint[];
+  candleLineColor: string;
+  panels: ChartPanelData[];
   chartVersion: number;
   visibleRange: MarketChartVisibleRange;
 }
 
 export const MarketChart = ({
   candleData,
+  candleLineColor,
+  panels,
   chartVersion,
   visibleRange,
 }: MarketChartProps) => {
-  const containerRef =
-    useRef<HTMLDivElement | null>(null);
-
-  const chartRef =
-    useRef<IChartApi | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
 
   const candleSeriesRef =
-    useRef<ISeriesApi<'Candlestick'> | null>(
-      null,
-    );
+    useRef<ISeriesApi<'Candlestick'> | null>(null);
 
-  const lineSeriesRef =
-    useRef<ISeriesApi<'Line'> | null>(
-      null,
-    );
+  const candleLineSeriesRef =
+    useRef<ISeriesApi<'Line'> | null>(null);
+
+  const panelManagerRef =
+    useRef<ChartPanelManager | null>(null);
 
   useEffect(() => {
-    const container =
-      containerRef.current;
+    const container = containerRef.current;
 
     if (!container) {
       return;
     }
+
+    const textColor = getComputedStyle(document.documentElement)
+      .getPropertyValue('--color-muted')
+      .trim();
 
     const chart = createChart(container, {
       width: container.clientWidth,
@@ -60,12 +67,7 @@ export const MarketChart = ({
         background: {
           color: 'transparent',
         },
-        textColor:
-          getComputedStyle(
-            document.documentElement,
-          )
-            .getPropertyValue('--color-muted')
-            .trim(),
+        textColor,
       },
       grid: {
         vertLines: {
@@ -87,97 +89,92 @@ export const MarketChart = ({
       },
     });
 
-    const candleSeries =
-      chart.addSeries(
-        CandlestickSeries,
-        {
-          priceLineVisible: false,
-          lastValueVisible: false,
-        },
-      );
+    const candleSeries = chart.addSeries(
+      CandlestickSeries,
+      {
+        priceLineVisible: false,
+        lastValueVisible: false,
+      },
+      0,
+    );
 
-    const lineSeries =
-      chart.addSeries(
-        LineSeries,
-        {
-          lineWidth: 1,
-          priceLineVisible: true,
-          lastValueVisible: true,
-        },
-      );
+    const candleLineSeries = chart.addSeries(
+      LineSeries,
+      {
+        lineWidth: 1,
+        priceLineVisible: true,
+        lastValueVisible: true,
+      },
+      0,
+    );
 
     chartRef.current = chart;
-    candleSeriesRef.current =
-      candleSeries;
-    lineSeriesRef.current =
-      lineSeries;
+    candleSeriesRef.current = candleSeries;
+    candleLineSeriesRef.current = candleLineSeries;
+    panelManagerRef.current = new ChartPanelManager(chart);
 
-    const resizeObserver =
-      new ResizeObserver(() => {
-        chart.applyOptions({
-          width: container.clientWidth,
-          height: container.clientHeight,
-        });
+    const resizeObserver = new ResizeObserver(() => {
+      chart.applyOptions({
+        width: container.clientWidth,
+        height: container.clientHeight,
       });
+    });
 
     resizeObserver.observe(container);
 
     return () => {
       resizeObserver.disconnect();
+
+      panelManagerRef.current?.dispose();
       chart.remove();
 
       chartRef.current = null;
       candleSeriesRef.current = null;
-      lineSeriesRef.current = null;
+      candleLineSeriesRef.current = null;
+      panelManagerRef.current = null;
     };
   }, []);
 
   useEffect(() => {
-    const chart =
-      chartRef.current;
-
-    const candleSeries =
-      candleSeriesRef.current;
-
-    const lineSeries =
-      lineSeriesRef.current;
+    const chart = chartRef.current;
+    const candleSeries = candleSeriesRef.current;
+    const candleLineSeries = candleLineSeriesRef.current;
+    const panelManager = panelManagerRef.current;
 
     if (
       !chart ||
       !candleSeries ||
-      !lineSeries
+      !candleLineSeries ||
+      !panelManager
     ) {
       return;
     }
 
-    candleSeries.setData(
-      candleData,
+    candleSeries.setData(candleData);
+
+    candleLineSeries.applyOptions({
+      color: candleLineColor,
+    });
+
+    candleLineSeries.setData(
+      candleData.map<MarketChartLinePoint>((candle) => ({
+        time: candle.time,
+        value: candle.close,
+      })),
     );
 
-    lineSeries.setData(
-      candleData.map<MarketChartLinePoint>(
-        (candle) => ({
-          time: candle.time,
-          value: candle.close,
-        }),
-      ),
-    );
+    panelManager.sync(panels);
 
     if (candleData.length > 0) {
-      chart.timeScale().setVisibleRange(
-        visibleRange,
-      );
+      chart.timeScale().setVisibleRange(visibleRange);
     }
   }, [
     candleData,
+    candleLineColor,
+    panels,
     chartVersion,
     visibleRange,
   ]);
 
-  return (
-    <div
-      ref={containerRef}
-      className="h-full w-full"
-    />
-  );
+  return <div ref={containerRef} className="h-full w-full" />;
 };

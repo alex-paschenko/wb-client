@@ -1,3 +1,4 @@
+// app/src/client/src/constants/routes.ts
 import type {
   ComponentType,
 } from 'react';

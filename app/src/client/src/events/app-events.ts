@@ -16,14 +16,56 @@ import {
   EventEmitter,
   type EventMapBase,
 } from '../utilities/event-emitter';
+import type {
+  MarketIndicatorsRegistry,
+} from '../../../shared/types/market-indicators';
+import type {
+  MarketsByName,
+} from '../../../shared/types/market';
 
 type AppEventMap = EventMapBase & {
-  settingsChanged: [
+  frontendWsConnectionStateChanged: [
+    isConnected: boolean,
+  ];
+
+  synchronizationStateChanged: [
+    stateKey: string,
+  ];
+
+  requestSettings: [];
+
+  subscribeMarketInfo: [];
+
+  requestMarketIndicatorsRegistry: [];
+
+  synchronizationCompleted: [];
+
+  synchronizationFailed: [
+    error: unknown,
+  ];
+
+  startupSettingsReceived: [
     settings: FrontendSettings,
+  ];
+
+  synchronizationSettingsProcessed: [
+    settings: FrontendSettings,
+  ];
+
+  startupIndicatorRegistryReceived: [
+    registry: MarketIndicatorsRegistry,
   ];
 
   requestMarketStatisticsFullSync: [
     marketName: string,
+  ];
+
+  settingsChanged: [
+    settings: FrontendSettings,
+  ];
+
+  marketsUpdated: [
+    markets: MarketsByName,
   ];
 
   changeMarketStatisticsSubscription: [
@@ -50,5 +92,4 @@ type AppEventMap = EventMapBase & {
   ];
 };
 
-export const appEvents =
-  new EventEmitter<AppEventMap>();
+export const appEvents = new EventEmitter<AppEventMap>();

@@ -1,3 +1,4 @@
+// app/src/client/src/utilities/event-emitter.ts
 export type EventMapBase = Record<string, unknown[]>;
 
 type ConditionType = string | symbol;

@@ -1,11 +1,12 @@
 // app/src/client/src/controllers/FrontendWsController.ts
+
 import { frontendWsClient } from '../api/frontend-ws';
 import type {
   AppContextValue,
 } from '../contexts/AppContext';
 import { appEvents } from '../events/app-events';
 import {
-  FrontendSettings
+  FrontendSettings,
 } from '../../../shared/services/frontend-settings';
 import {
   FRONTEND_WS_BINARY_MESSAGE_TYPES,
@@ -20,9 +21,6 @@ import {
   decodeMarketStatisticsDeltaPayload,
 } from '../../../shared/utilities/market-statistics-payload-codec';
 import {
-  clientStartDataRequestController,
-} from './ClientStartDataRequestController';
-import {
   globalStateService,
 } from '../../../shared/services/global-state';
 
@@ -35,6 +33,12 @@ export class FrontendWsController {
   private unsubscribeConnectionState: (() => void) | null = null;
   private unsubscribeJsonMessage: (() => void) | null = null;
   private unsubscribeBinaryMessage: (() => void) | null = null;
+
+  private unsubscribeRequestSettings: (() => void) | null = null;
+  private unsubscribeSubscribeMarketInfo: (() => void) | null = null;
+  private unsubscribeRequestMarketIndicatorsRegistry:
+    (() => void) | null = null;
+
   private unsubscribeSettingsChanged: (() => void) | null = null;
   private unsubscribeRequestMarketStatisticsFullSync:
     (() => void) | null = null;
@@ -67,100 +71,157 @@ export class FrontendWsController {
         if (!isConnected) {
           globalStateService.clearIndicatorRegistry();
           globalStateService.clearMarkets();
+        }
 
-          clientStartDataRequestController.reset();
+        appEvents.emit(
+          'frontendWsConnectionStateChanged',
+          isConnected,
+        );
+      });
+
+    this.unsubscribeJsonMessage =
+      frontendWsClient.onJsonMessage((message) => {
+        const appContext =
+          this.getCurrentAppContext();
+
+        if (this.shouldLogJsonMessage(message.type)) {
+          appContext.logger.debug(
+            `log.messages.wsJson.${message.type}`,
+          );
+        }
+
+        if (
+          message.type ===
+          FRONTEND_WS_CONTROL_MESSAGE_TYPES.settingsLoaded
+        ) {
+          const settings =
+            FrontendSettings.fromValue(
+              message.params.settings,
+            );
+
+          appContext.logger.debug(
+            'log.messages.settingsLoaded',
+          );
+
+          appEvents.emit(
+            'startupSettingsReceived',
+            settings,
+          );
+
           return;
         }
 
-        clientStartDataRequestController.reset();
-        clientStartDataRequestController.requestPrimaryData();
+        if (
+          message.type ===
+          FRONTEND_WS_CONTROL_MESSAGE_TYPES.settingsAccepted
+        ) {
+          appContext.logger.debug(
+            'log.messages.settingsAccepted',
+          );
+
+          return;
+        }
+
+        if (
+          message.type ===
+          FRONTEND_WS_CONTROL_MESSAGE_TYPES.marketsUpdated
+        ) {
+          globalStateService.setMarkets(
+            message.markets,
+            Object.keys(message.markets),
+          );
+
+          appContext.logger.debug(
+            'log.messages.marketsUpdated',
+          );
+
+          appEvents.emit(
+            'marketsUpdated',
+            message.markets,
+          );
+
+          return;
+        }
+
+        if (
+          message.type ===
+          FRONTEND_WS_CONTROL_MESSAGE_TYPES
+            .marketIndicatorsRegistryLoaded
+        ) {
+          globalStateService.setIndicatorRegistry(
+            message.params.registry,
+          );
+
+          appContext.logger.debug(
+            'log.messages.marketIndicatorsRegistryLoaded',
+          );
+
+          appEvents.emit(
+            'startupIndicatorRegistryReceived',
+            message.params.registry,
+          );
+        }
       });
 
-    this.unsubscribeJsonMessage = frontendWsClient.onJsonMessage((message) => {
-      const appContext = this.getCurrentAppContext();
+    this.unsubscribeBinaryMessage =
+      frontendWsClient.onBinaryMessage(
+        (data) => {
+          this.handleBinaryMessage(data);
+        },
+      );
 
-      if (this.shouldLogJsonMessage(message.type)) {
-        appContext.logger.debug(`log.messages.wsJson.${message.type}`);
-      }
+    this.unsubscribeRequestSettings =
+      appEvents.on(
+        'requestSettings',
+        () => {
+          this.sendRequestSettings();
+        },
+      );
 
-      if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.settingsLoaded) {
-        const settings = FrontendSettings.fromValue(
-          message.params.settings,
-        );
+    this.unsubscribeSubscribeMarketInfo =
+      appEvents.on(
+        'subscribeMarketInfo',
+        () => {
+          this.sendSubscribeMarketInfo();
+        },
+      );
 
-        appContext.applySettingsFromServer(settings);
-        appContext.logger.debug('log.messages.settingsLoaded');
+    this.unsubscribeRequestMarketIndicatorsRegistry =
+      appEvents.on(
+        'requestMarketIndicatorsRegistry',
+        () => {
+          this.sendRequestMarketIndicatorsRegistry();
+        },
+      );
 
-        clientStartDataRequestController.markPrimaryDataReceived('settings');
-        return;
-      }
+    this.unsubscribeSettingsChanged =
+      appEvents.on(
+        'settingsChanged',
+        (settings) => {
+          this.scheduleSettingsSave(settings);
+        },
+      );
 
-      if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.settingsAccepted) {
-        appContext.logger.debug('log.messages.settingsAccepted');
-        return;
-      }
+    this.unsubscribeRequestMarketStatisticsFullSync =
+      appEvents.on(
+        'requestMarketStatisticsFullSync',
+        (marketName) => {
+          this.sendRequestMarketStatisticsFullSync(
+            marketName,
+          );
+        },
+      );
 
-      if (
-        message.type ===
-          FRONTEND_WS_CONTROL_MESSAGE_TYPES.marketsUpdated
-      ) {
-        globalStateService.setMarkets(
-          message.markets,
-          Object.keys(message.markets),
-        );
-
-        appContext.logger.debug(
-          'log.messages.marketsUpdated',
-        );
-
-        clientStartDataRequestController
-          .markPrimaryDataReceived('marketInfo');
-
-        return;
-      }
-
-      if (
-        message.type ===
-          FRONTEND_WS_CONTROL_MESSAGE_TYPES.marketIndicatorsRegistryLoaded
-      ) {
-        globalStateService.setIndicatorRegistry(
-          message.params.registry,
-        );
-
-        clientStartDataRequestController.markPrimaryDataReceived(
-          'marketIndicatorsRegistry',
-        );
-
-        appContext.logger.debug(
-          'log.messages.marketIndicatorsRegistryLoaded',
-        );
-
-        return;
-      }
-    });
-
-    this.unsubscribeBinaryMessage = frontendWsClient.onBinaryMessage(
-      (data) => { this.handleBinaryMessage(data) }
-    );
-
-    this.unsubscribeSettingsChanged = appEvents.on(
-      'settingsChanged',
-      (settings) => { this.scheduleSettingsSave(settings) },
-    );
-
-    this.unsubscribeRequestMarketStatisticsFullSync = appEvents.on(
-      'requestMarketStatisticsFullSync',
-      (marketName) => {
-        this.sendRequestMarketStatisticsFullSync(marketName);
-      },
-    );
-
-    this.unsubscribeChangeMarketStatisticsSubscription = appEvents.on(
-      'changeMarketStatisticsSubscription',
-      (action, markets) => {
-        this.sendChangeMarketStatisticsSubscription(action, markets);
-      },
-    );
+    this.unsubscribeChangeMarketStatisticsSubscription =
+      appEvents.on(
+        'changeMarketStatisticsSubscription',
+        (action, markets) => {
+          this.sendChangeMarketStatisticsSubscription(
+            action,
+            markets,
+          );
+        },
+      );
 
     frontendWsClient.connect();
   }
@@ -169,6 +230,11 @@ export class FrontendWsController {
     this.unsubscribeConnectionState?.();
     this.unsubscribeJsonMessage?.();
     this.unsubscribeBinaryMessage?.();
+
+    this.unsubscribeRequestSettings?.();
+    this.unsubscribeSubscribeMarketInfo?.();
+    this.unsubscribeRequestMarketIndicatorsRegistry?.();
+
     this.unsubscribeSettingsChanged?.();
     this.unsubscribeRequestMarketStatisticsFullSync?.();
     this.unsubscribeChangeMarketStatisticsSubscription?.();
@@ -176,6 +242,11 @@ export class FrontendWsController {
     this.unsubscribeConnectionState = null;
     this.unsubscribeJsonMessage = null;
     this.unsubscribeBinaryMessage = null;
+
+    this.unsubscribeRequestSettings = null;
+    this.unsubscribeSubscribeMarketInfo = null;
+    this.unsubscribeRequestMarketIndicatorsRegistry = null;
+
     this.unsubscribeSettingsChanged = null;
     this.unsubscribeRequestMarketStatisticsFullSync = null;
     this.unsubscribeChangeMarketStatisticsSubscription = null;
@@ -188,20 +259,64 @@ export class FrontendWsController {
     this.getAppContext = null;
   }
 
-  private sendSettingsChanged(settings: FrontendSettings): void {
+  private sendRequestSettings(): void {
     frontendWsClient.sendJson({
-      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.settingsChanged,
-      clientId: frontendWsClient.createClientId(),
+      type:
+        FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestSettings,
+      clientId:
+        frontendWsClient.createClientId(),
+      params: {},
+    });
+  }
+
+  private sendSubscribeMarketInfo(): void {
+    frontendWsClient.sendJson({
+      type:
+        FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription,
+      clientId:
+        frontendWsClient.createClientId(),
       params: {
-        settings: settings.toValue(),
+        entity:
+          FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketInfo,
       },
     });
   }
 
-  private sendRequestMarketStatisticsFullSync(marketName: string): void {
+  private sendRequestMarketIndicatorsRegistry(): void {
     frontendWsClient.sendJson({
-      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestMarketStatisticsFullSync,
-      clientId: frontendWsClient.createClientId(),
+      type:
+        FRONTEND_WS_CONTROL_MESSAGE_TYPES
+          .requestMarketIndicatorsRegistry,
+      clientId:
+        frontendWsClient.createClientId(),
+      params: {},
+    });
+  }
+
+  private sendSettingsChanged(
+    settings: FrontendSettings,
+  ): void {
+    frontendWsClient.sendJson({
+      type:
+        FRONTEND_WS_CONTROL_MESSAGE_TYPES.settingsChanged,
+      clientId:
+        frontendWsClient.createClientId(),
+      params: {
+        settings:
+          settings.toValue(),
+      },
+    });
+  }
+
+  private sendRequestMarketStatisticsFullSync(
+    marketName: string,
+  ): void {
+    frontendWsClient.sendJson({
+      type:
+        FRONTEND_WS_CONTROL_MESSAGE_TYPES
+          .requestMarketStatisticsFullSync,
+      clientId:
+        frontendWsClient.createClientId(),
       params: {
         marketName,
       },
@@ -213,32 +328,41 @@ export class FrontendWsController {
     markets: string[],
   ): void {
     frontendWsClient.sendJson({
-      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.changeSubscription,
-      clientId: frontendWsClient.createClientId(),
+      type:
+        FRONTEND_WS_CONTROL_MESSAGE_TYPES.changeSubscription,
+      clientId:
+        frontendWsClient.createClientId(),
       params: {
-        entity: FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics,
+        entity:
+          FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics,
         action,
         markets,
       },
     });
   }
 
-  private handleBinaryMessage(data: ArrayBuffer): void {
-    const packet = decodeFrontendWsBinaryPacket(data);
+  private handleBinaryMessage(
+    data: ArrayBuffer,
+  ): void {
+    const packet =
+      decodeFrontendWsBinaryPacket(data);
 
     if (
       packet.header.messageType ===
       FRONTEND_WS_BINARY_MESSAGE_TYPES.fullMarketStatistics
     ) {
-      const payload = decodeFullMarketStatisticsPayload(
-        packet.payload,
-        globalStateService.getIndicatorRegistry(),
-      );
+      const payload =
+        decodeFullMarketStatisticsPayload(
+          packet.payload,
+          globalStateService.getIndicatorRegistry(),
+        );
 
       appEvents.emit(
         {
-          eventName: 'marketStatisticsFullSyncReceived',
-          condition: payload.marketName,
+          eventName:
+            'marketStatisticsFullSyncReceived',
+          condition:
+            payload.marketName,
         },
         payload,
       );
@@ -248,29 +372,40 @@ export class FrontendWsController {
 
     if (
       packet.header.messageType ===
-        FRONTEND_WS_BINARY_MESSAGE_TYPES.marketStatisticsDelta
+      FRONTEND_WS_BINARY_MESSAGE_TYPES
+        .marketStatisticsDelta
     ) {
-      const payload = decodeMarketStatisticsDeltaPayload(packet.payload);
+      const payload =
+        decodeMarketStatisticsDeltaPayload(
+          packet.payload,
+        );
 
       appEvents.emit(
         {
-          eventName: 'marketStatisticsDeltaReceived',
-          condition: payload.marketName,
+          eventName:
+            'marketStatisticsDeltaReceived',
+          condition:
+            payload.marketName,
         },
         payload,
       );
     }
   }
 
-  private scheduleSettingsSave(settings: FrontendSettings): void {
+  private scheduleSettingsSave(
+    settings: FrontendSettings,
+  ): void {
     this.lastSettingsToSave =
-      FrontendSettings.fromValue(settings.toValue());
+      FrontendSettings.fromValue(
+        settings.toValue(),
+      );
 
     this.clearSettingsSaveTimeout();
 
-    this.settingsSaveTimeoutId = window.setTimeout(() => {
-      this.flushSettingsSave();
-    }, 300);
+    this.settingsSaveTimeoutId =
+      window.setTimeout(() => {
+        this.flushSettingsSave();
+      }, 300);
   }
 
   private flushSettingsSave(): void {
@@ -278,30 +413,44 @@ export class FrontendWsController {
       return;
     }
 
-    this.sendSettingsChanged(this.lastSettingsToSave);
+    this.sendSettingsChanged(
+      this.lastSettingsToSave,
+    );
+
     this.lastSettingsToSave = null;
 
     this.clearSettingsSaveTimeout();
   }
 
   private clearSettingsSaveTimeout(): void {
-    if (this.settingsSaveTimeoutId !== null) {
-      window.clearTimeout(this.settingsSaveTimeoutId);
+    if (
+      this.settingsSaveTimeoutId !== null
+    ) {
+      window.clearTimeout(
+        this.settingsSaveTimeoutId,
+      );
+
       this.settingsSaveTimeoutId = null;
     }
   }
 
-  private shouldLogJsonMessage(type: string): boolean {
-    return type !== 'market-rolling-updated';
+  private shouldLogJsonMessage(
+    type: string,
+  ): boolean {
+    return type !==
+      'market-rolling-updated';
   }
 
   private getCurrentAppContext(): AppContextValue {
     if (!this.getAppContext) {
-      throw new Error('Frontend WS controller is not started');
+      throw new Error(
+        'Frontend WS controller is not started',
+      );
     }
 
     return this.getAppContext();
   }
 }
 
-export const frontendWsController = new FrontendWsController();
+export const frontendWsController =
+  new FrontendWsController();

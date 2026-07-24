@@ -1,8 +1,13 @@
 // app/src/shared/services/global-state.ts
+
 import type {
   MarketIndicatorsRegistry,
 } from '../types/market-indicators.js';
 import type { MarketsByName } from '../types/market.js';
+
+type IndicatorRegistryListener = (
+  registry: MarketIndicatorsRegistry | null,
+) => void;
 
 type MarketsListener = (
   markets: MarketsByName | null,
@@ -18,6 +23,9 @@ export class GlobalStateService {
 
   private resolveIndicatorRegistry:
     ((registry: MarketIndicatorsRegistry) => void) | null = null;
+
+  private readonly indicatorRegistryListeners =
+    new Set<IndicatorRegistryListener>();
 
   private marketsByName: MarketsByName | null = null;
 
@@ -44,12 +52,12 @@ export class GlobalStateService {
 
     this.indicatorRegistry = storedRegistry;
 
-    this.resolveIndicatorRegistry?.(
-      storedRegistry,
-    );
+    this.resolveIndicatorRegistry?.(storedRegistry);
 
     this.resolveIndicatorRegistry = null;
     this.indicatorRegistryPromise = null;
+
+    this.notifyIndicatorRegistryListeners();
   }
 
   public getIndicatorRegistry(): MarketIndicatorsRegistry {
@@ -74,25 +82,35 @@ export class GlobalStateService {
   public waitForIndicatorRegistry():
     Promise<MarketIndicatorsRegistry> {
     if (this.indicatorRegistry) {
-      return Promise.resolve(
-        this.indicatorRegistry,
-      );
+      return Promise.resolve(this.indicatorRegistry);
     }
 
     if (!this.indicatorRegistryPromise) {
-      this.indicatorRegistryPromise =
-        new Promise((resolve) => {
-          this.resolveIndicatorRegistry = resolve;
-        });
+      this.indicatorRegistryPromise = new Promise((resolve) => {
+        this.resolveIndicatorRegistry = resolve;
+      });
     }
 
     return this.indicatorRegistryPromise;
+  }
+
+  public subscribeIndicatorRegistry(
+    listener: IndicatorRegistryListener,
+  ): () => void {
+    this.indicatorRegistryListeners.add(listener);
+    listener(this.getIndicatorRegistryOrNull());
+
+    return () => {
+      this.indicatorRegistryListeners.delete(listener);
+    };
   }
 
   public clearIndicatorRegistry(): void {
     this.indicatorRegistry = null;
     this.indicatorRegistryPromise = null;
     this.resolveIndicatorRegistry = null;
+
+    this.notifyIndicatorRegistryListeners();
   }
 
   public setMarkets(
@@ -147,10 +165,9 @@ export class GlobalStateService {
     }
 
     if (!this.marketsPromise) {
-      this.marketsPromise =
-        new Promise((resolve) => {
-          this.resolveMarkets = resolve;
-        });
+      this.marketsPromise = new Promise((resolve) => {
+        this.resolveMarkets = resolve;
+      });
     }
 
     return this.marketsPromise;
@@ -179,6 +196,12 @@ export class GlobalStateService {
     this.resolveMarkets = null;
 
     this.notifyMarketsListeners();
+  }
+
+  private notifyIndicatorRegistryListeners(): void {
+    for (const listener of this.indicatorRegistryListeners) {
+      listener(this.getIndicatorRegistryOrNull());
+    }
   }
 
   private notifyMarketsListeners(): void {

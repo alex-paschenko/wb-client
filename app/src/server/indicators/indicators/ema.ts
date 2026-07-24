@@ -28,8 +28,9 @@ export class EmaIndicator extends IncrementalIndicator<EmaIndicatorState> {
 
   protected readonly infiniteRange = true;
 
-  protected readonly storage = {
+  protected readonly definition = {
     codec: 'float32',
+    group: 'price',
   } as const;
 
   public constructor(

@@ -85,10 +85,6 @@ export async function up(
     ],
   );
 
-  pg.dropTable(
-    'market_snapshots',
-  );
-
   pg.sql(`
     analyze market_candles
   `);

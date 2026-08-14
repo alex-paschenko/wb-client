@@ -1,9 +1,6 @@
 // app/src/server/indicators/indicators/rca.ts
 
 import type {
-  MarketIndicatorRecalculatedItem,
-} from '../../../shared/types/market-indicators.js';
-import type {
   MarketCandle,
 } from '../../../shared/types/market-statistics-storage.js';
 import type {
@@ -12,9 +9,7 @@ import type {
 import type {
   IndicatorAffectedRange,
 } from '../base-indicator.js';
-import {
-  IncrementalIndicator,
-} from '../incremental-indicator.js';
+import { IncrementalIndicator } from '../incremental-indicator.js';
 
 interface RcaIndicatorParams {
   period: number;
@@ -32,11 +27,15 @@ export class RcaIndicator extends IncrementalIndicator<RcaIndicatorState> {
   protected readonly definition = {
     codec: 'float32',
     group: 'rca',
+    requiresRemovedValues: false,
   } as const;
+
+  private readonly period: number;
 
   public constructor(params: RcaIndicatorParams) {
     super(params.period);
 
+    this.period = params.period;
     this.name = `rca-${params.period}`;
   }
 
@@ -53,12 +52,9 @@ export class RcaIndicator extends IncrementalIndicator<RcaIndicatorState> {
     let relativeSpeedSum = 0;
 
     for (let index = 0; index < this.period; index += 1) {
-      const currentCandle = candles[index];
-      const previousCandle = candles[index + 1];
-
       const relativeSpeed = this.calculateRelativeSpeed(
-        previousCandle,
-        currentCandle,
+        candles[index + 1],
+        candles[index],
       );
 
       if (relativeSpeed === null) {
@@ -82,20 +78,14 @@ export class RcaIndicator extends IncrementalIndicator<RcaIndicatorState> {
     const state = this.stateByMarket.get(params.marketName);
     const candles = params.descending.candles;
 
+    if (!state || candles.length < this.period + 2) {
+      return this.fullCalculate(params);
+    }
+
     const newestCandle = candles[0];
     const previousNewestCandle = candles[1];
     const expiredCurrentCandle = candles[this.period];
     const expiredPreviousCandle = candles[this.period + 1];
-
-    if (
-      !state ||
-      !newestCandle ||
-      !previousNewestCandle ||
-      !expiredCurrentCandle ||
-      !expiredPreviousCandle
-    ) {
-      return this.fullCalculate(params);
-    }
 
     const addedRelativeSpeed = this.calculateRelativeSpeed(
       previousNewestCandle,
@@ -126,19 +116,33 @@ export class RcaIndicator extends IncrementalIndicator<RcaIndicatorState> {
   public rangeCalculate(
     params: MarketIndicatorCalculationParams,
     affectedRanges: IndicatorAffectedRange[],
-  ): MarketIndicatorRecalculatedItem[] {
-    return affectedRanges.map((range) => ({
-      startIndexAsc: range.startIndexAsc,
-      values: this.calculateRange(params, range),
-    }));
+  ): void {
+    const values = this.getAscendingValues(params);
+
+    for (const range of affectedRanges) {
+      const finalRelativeSpeedSum =
+        this.calculateRange(params, range, values);
+
+      if (range.endIndexAsc !== values.length - 1) {
+        continue;
+      }
+
+      if (finalRelativeSpeedSum === null) {
+        this.stateByMarket.delete(params.marketName);
+      } else {
+        this.stateByMarket.set(params.marketName, {
+          relativeSpeedSum: finalRelativeSpeedSum,
+        });
+      }
+    }
   }
 
   private calculateRange(
     params: MarketIndicatorCalculationParams,
     range: IndicatorAffectedRange,
-  ): (number | null)[] {
+    values: ReturnType<RcaIndicator['getAscendingValues']>,
+  ): number | null {
     const candles = params.ascending.candles;
-    const values: (number | null)[] = [];
 
     const preloadStartIndex = Math.max(
       1,
@@ -147,6 +151,7 @@ export class RcaIndicator extends IncrementalIndicator<RcaIndicatorState> {
 
     let relativeSpeedSum = 0;
     let invalidRelativeSpeedCount = 0;
+    let finalRelativeSpeedSum: number | null = null;
 
     const addRelativeSpeed = (currentIndex: number): void => {
       const relativeSpeed = this.calculateRelativeSpeed(
@@ -203,18 +208,20 @@ export class RcaIndicator extends IncrementalIndicator<RcaIndicatorState> {
 
       if (
         oldestIndex < 0 ||
-        invalidRelativeSpeedCount > 0 ||
-        !candles[oldestIndex] ||
-        !candles[index]
+        invalidRelativeSpeedCount > 0
       ) {
-        values.push(null);
+        values[index] = null;
+        finalRelativeSpeedSum = null;
         continue;
       }
 
-      values.push(this.calculateValue(relativeSpeedSum));
+      const value = this.calculateValue(relativeSpeedSum);
+
+      values[index] = value;
+      finalRelativeSpeedSum = relativeSpeedSum;
     }
 
-    return values;
+    return finalRelativeSpeedSum;
   }
 
   private calculateRelativeSpeed(

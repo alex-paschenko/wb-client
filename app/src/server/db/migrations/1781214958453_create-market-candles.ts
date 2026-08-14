@@ -30,6 +30,11 @@ export async function up(pg: MigrationBuilder): Promise<void> {
       notNull: true,
     },
 
+    acceleration: {
+      type: 'numeric',
+      notNull: true,
+    },
+
     started_at: {
       type: 'bigint',
       notNull: true,

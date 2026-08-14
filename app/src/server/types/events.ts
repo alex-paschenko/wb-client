@@ -1,6 +1,5 @@
 // app/src/server/types/events.ts
 import type {
-  CandleIndicatorsChange,
   ExtendedMarketDataView,
   FullMarketStatisticsLevel,
   MarketCandle,
@@ -10,14 +9,15 @@ import type {
   MarketRollingStatisticsByMarket,
 } from '../../shared/types/market-statistics-rolling.js';
 import type {
-  IndicatorResults,
   MarketIndicatorsRegistry,
-  MarketIndicatorValues,
 } from '../../shared/types/market-indicators.js';
 import type { StrategySignal } from './strategy-signals.js';
 import type { SERVER_EVENT } from '../constants/events.js';
 import { MarketTick } from './market-statistics.js';
 import { MarketsByName } from '../../shared/types/market.js';
+import {
+  MarketCandleIndicatorsChange
+} from '../../shared/types/market-statistic-accessors.js';
 
 export type ServerEventName =
   typeof SERVER_EVENT[keyof typeof SERVER_EVENT];
@@ -42,10 +42,12 @@ export interface MarketStatisticsPersistenceChange {
 }
 
 export interface MarketStatisticsPersistenceChangedEvent {
+  indicatorChanged: MarketCandleIndicatorsChange[];
+}
+
+export interface MarketStatisticsPersistenceAddedRemovedEvent {
   marketName: string;
   changes: MarketStatisticsPersistenceChange[];
-  latestIndicators: MarketIndicatorValues;
-  indicatorChanges: CandleIndicatorsChange[];
 }
 
 export interface MarketTickReceivedEvent {
@@ -58,13 +60,16 @@ export interface MarketStatisticsStorageChangedEvent {
   delta: ArrayBuffer;
 }
 
+export interface MarketStatisticsIndicatorsChangedEvent {
+  marketName: string;
+  changes: ArrayBuffer;
+}
+
 export type RecalculateIndicatorsRequestEvent = ExtendedMarketDataView;
 
-export interface RecalculateIndicatorsResultsEvent {
+export interface IndicatorsRecalculatedEvent {
   marketName: string;
   receivedAt: number;
-  numOfAffectedLevels: number;
-  indicators: IndicatorResults[];
 }
 
 export interface MarketIndicatorsRegistryReadyEvent {
@@ -121,16 +126,21 @@ export interface ServerEventMap {
 
   [SERVER_EVENT.marketStatisticsStorageChanged]:
     MarketStatisticsStorageChangedEvent;
+  [SERVER_EVENT.marketStatisticsIndicatorsChanged]:
+    MarketStatisticsIndicatorsChangedEvent;
 
   [SERVER_EVENT.marketIndicatorsRegistryReady]:
     MarketIndicatorsRegistryReadyEvent;
   [SERVER_EVENT.recalculateIndicatorsRequest]:
     RecalculateIndicatorsRequestEvent;
-  [SERVER_EVENT.recalculateIndicatorsResults]:
-    RecalculateIndicatorsResultsEvent;
+  [SERVER_EVENT.indicatorsRecalculated]:
+    IndicatorsRecalculatedEvent;
 
   [SERVER_EVENT.marketStatisticsRestored]:
     MarketStatisticsRestoredEvent;
+
+  [SERVER_EVENT.marketStatisticsPersistenceAddedRemoved]:
+    MarketStatisticsPersistenceAddedRemovedEvent;
 
   [SERVER_EVENT.marketStatisticsPersistenceChanged]:
     MarketStatisticsPersistenceChangedEvent;

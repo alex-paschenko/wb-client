@@ -1,34 +1,23 @@
 // app/src/server/indicators/indicator-manager.ts
-import {
-  SERVER_EVENT,
-} from '../constants/events.js';
-import {
-  eventBus,
-} from '../services/event-bus.js';
+
+import { SERVER_EVENT } from '../constants/events.js';
+import { eventBus } from '../services/event-bus.js';
 import type {
   RecalculateIndicatorsRequestEvent,
 } from '../types/events.js';
 import type {
   MarketIndicator,
-  MarketIndicatorResultsReader,
 } from '../types/market-indicators.js';
-import type {
-  IndicatorResults,
-} from '../../shared/types/market-indicators.js';
-import {
-  EmaIndicator,
-} from './indicators/ema.js';
-import {
-  RcaIndicator,
-} from './indicators/rca.js';
+import { AdaptiveEmaIndicator } from './indicators/adaptive-ema.js';
+import { ContinuousEmaIndicator } from './indicators/continuous-ema.js';
+import { RcaIndicator } from './indicators/rca.js';
+import { SECONDS } from '../../shared/constants/time.js';
 
 export class IndicatorManager {
   private readonly indicators: MarketIndicator[];
 
   public constructor() {
-    this.indicators = this.sortIndicators(
-      this.createIndicators(),
-    );
+    this.indicators = this.sortIndicators(this.createIndicators());
   }
 
   public start(): void {
@@ -50,48 +39,22 @@ export class IndicatorManager {
 
     eventBus.on(
       SERVER_EVENT.marketRemoved,
-      (event) => {
-        this.handleMarketRemoved(event.marketName);
-      },
+      (event) => { this.handleMarketRemoved(event.marketName); },
     );
   }
 
   private handleRecalculateIndicatorsRequest(
     event: RecalculateIndicatorsRequestEvent,
   ): void {
-    const resultsByName = new Map<string, IndicatorResults>();
-
-    const resultsReader: MarketIndicatorResultsReader = {
-      getLast: (name) =>
-        resultsByName.get(name)?.lastResult ?? null,
-
-      getRecalculated: (name) =>
-        resultsByName.get(name)?.recalculatedValues ?? [],
-    };
-
-    const indicatorResults: IndicatorResults[] = [];
-
     for (const indicator of this.indicators) {
-      const result = indicator.calculate({
-        ...event,
-        results: resultsReader,
-      });
-
-      resultsByName.set(
-        indicator.name,
-        result,
-      );
-
-      indicatorResults.push(result);
+      indicator.calculate(event);
     }
 
     eventBus.emit(
-      SERVER_EVENT.recalculateIndicatorsResults,
+      SERVER_EVENT.indicatorsRecalculated,
       {
         marketName: event.marketName,
         receivedAt: event.receivedAt,
-        numOfAffectedLevels: event.numOfAffectedLevels,
-        indicators: indicatorResults,
       },
     );
   }
@@ -105,14 +68,26 @@ export class IndicatorManager {
   }
 
   private createIndicators(): MarketIndicator[] {
-    const periods = [20, 50, 90, 200];
+    const rcaPeriods = [20, 50, 90, 200];
+
+    const filterTaus = [
+      20 * SECONDS,
+      50 * SECONDS,
+      90 * SECONDS,
+      180 * SECONDS,
+    ];
 
     return [
-      ...periods.map(
-        (period) => new RcaIndicator({ period }),
-      ),
-      ...periods.map(
-        (period) => new EmaIndicator({ period }),
+      ...rcaPeriods.map((period) => new RcaIndicator({ period })),
+
+      ...filterTaus.map((tau) => new ContinuousEmaIndicator({ tau })),
+
+      ...filterTaus.map(
+        (tau) => new AdaptiveEmaIndicator({
+          tau,
+          minTau: tau / 10,
+          sensitivity: 1,
+        }),
       ),
     ];
   }
@@ -125,10 +100,7 @@ export class IndicatorManager {
     const temporary = new Set<string>();
 
     const byName = new Map(
-      indicators.map((indicator) => [
-        indicator.name,
-        indicator,
-      ]),
+      indicators.map((indicator) => [indicator.name, indicator]),
     );
 
     const visit = (
@@ -147,8 +119,7 @@ export class IndicatorManager {
       temporary.add(indicator.name);
 
       for (const dependency of indicator.dependencies) {
-        const dependencyIndicator =
-          byName.get(dependency);
+        const dependencyIndicator = byName.get(dependency);
 
         if (!dependencyIndicator) {
           throw new Error(
@@ -175,4 +146,3 @@ export class IndicatorManager {
 
 export const indicatorManager =
   new IndicatorManager();
-

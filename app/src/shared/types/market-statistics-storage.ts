@@ -7,8 +7,11 @@ export interface MarketStatisticsLevelConfig {
 
 export interface MarketCandle {
   receivedAt: number;
+
   price: number;
   speed: number;
+  acceleration: number;
+
   startedAt: number;
   endedAt: number;
 
@@ -27,22 +30,26 @@ export type MarketCandlesDirection =
   | 'reverse';
 
 import type {
-  ChangedIndicatorChunk,
+  IndicatorValue,
   MarketIndicatorValues,
 } from './market-indicators.js';
 
 export interface MarketDataArray<T> {
   readonly length: number;
-  readonly [index: number]: T | undefined;
+  [index: number]: T;
 }
 
 export type MarketDataProjectionDirection =
   | 'ascending'
   | 'descending';
 
+
+export type IndicatorProjection =
+  Record<string, MarketDataArray<IndicatorValue>>;
+
 export interface MarketDataProjection {
   readonly candles: MarketDataArray<MarketCandle>;
-  readonly indicators: MarketDataArray<MarketIndicatorValues>;
+  readonly indicators: IndicatorProjection;
 }
 
 export interface MarketDataProjectionSnapshot {
@@ -57,9 +64,16 @@ export interface MarketDataView {
   readonly descending: MarketDataProjection;
 }
 
+export type AggregatedIndicators = Record<string, IndicatorValue[]>;
+
+export interface AggregatedItemDescriptor {
+  indexAsc: number;
+  removedCandles: MarketCandle[];
+  removedIndicators: AggregatedIndicators;
+}
+
 export interface ExtendedMarketDataView extends MarketDataView {
-  centralIndexesAsc: number[];
-  numOfAffectedLevels: number;
+  aggregatedItemDescriptors: AggregatedItemDescriptor[];
 }
 
 export interface MarketStatisticsChunk {
@@ -89,7 +103,10 @@ export interface CandleIndicatorsChange {
   indicators: MarketIndicatorValues;
 }
 
-export interface AppliedIndicatorResults {
-  changedChunks: ChangedIndicatorChunk[];
-  persistenceChanges: CandleIndicatorsChange[];
+export interface ResolvedIndex {
+  level: number;
+  levelOffset: number;
+  chunk: MarketStatisticsChunk;
+  chunkIndex: number;
+  itemIndex: number;
 }

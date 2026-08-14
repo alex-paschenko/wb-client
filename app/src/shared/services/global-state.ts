@@ -18,6 +18,10 @@ export class GlobalStateService {
   private indicatorRegistry:
     MarketIndicatorsRegistry | null = null;
 
+  private allIndicatorNames: string[] = [];
+
+  private indicatorsWithPreservedHistory: string[] = [];
+
   private indicatorRegistryPromise:
     Promise<MarketIndicatorsRegistry> | null = null;
 
@@ -43,10 +47,8 @@ export class GlobalStateService {
     registry: MarketIndicatorsRegistry,
   ): void {
     const storedRegistry = Object.freeze(
-      registry.map((entry) =>
-        Object.freeze({
-          ...entry,
-        }),
+      registry.map(
+        (entry) => Object.freeze({ ...entry })
       ),
     );
 
@@ -56,6 +58,13 @@ export class GlobalStateService {
 
     this.resolveIndicatorRegistry = null;
     this.indicatorRegistryPromise = null;
+
+    this.allIndicatorNames = storedRegistry
+      .map((indicator) => indicator.name);
+
+    this.indicatorsWithPreservedHistory = storedRegistry
+     .filter((indicator) => indicator.requiresRemovedValues)
+     .map((indicator) => indicator.name);
 
     this.notifyIndicatorRegistryListeners();
   }
@@ -77,6 +86,14 @@ export class GlobalStateService {
 
   public hasIndicatorRegistry(): boolean {
     return this.indicatorRegistry !== null;
+  }
+
+  public getAllIndicatorNames(): readonly string[] {
+    return this.allIndicatorNames;
+  }
+
+  public getIndicatorsWithPreservedHistory(): readonly string[] {
+    return this.indicatorsWithPreservedHistory;
   }
 
   public waitForIndicatorRegistry():
@@ -108,6 +125,8 @@ export class GlobalStateService {
   public clearIndicatorRegistry(): void {
     this.indicatorRegistry = null;
     this.indicatorRegistryPromise = null;
+    this.allIndicatorNames = [];
+    this.indicatorsWithPreservedHistory = [];
     this.resolveIndicatorRegistry = null;
 
     this.notifyIndicatorRegistryListeners();

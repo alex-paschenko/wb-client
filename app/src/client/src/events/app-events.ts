@@ -10,7 +10,7 @@ import type {
 } from '../../../shared/types/market-statistics-rolling';
 import type {
   FullMarketStatisticsPayload,
-  MarketStatisticsDeltaPayload,
+  MarketStatisticsBinaryPayload,
 } from '../../../shared/utilities/market-statistics-payload-codec';
 import {
   EventEmitter,
@@ -88,7 +88,11 @@ type AppEventMap = EventMapBase & {
   ];
 
   marketStatisticsDeltaReceived: [
-    payload: MarketStatisticsDeltaPayload,
+    payload: MarketStatisticsBinaryPayload,
+  ];
+
+  marketStatisticsIndicatorChangesReceived: [
+    payload: MarketStatisticsBinaryPayload,
   ];
 };
 

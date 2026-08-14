@@ -22,7 +22,7 @@ import type {
 } from '../../../shared/types/market-statistics-storage';
 import type {
   FullMarketStatisticsPayload,
-  MarketStatisticsDeltaPayload,
+  MarketStatisticsBinaryPayload,
 } from '../../../shared/utilities/market-statistics-payload-codec';
 
 export type MarketChartLinePoint = LineData | WhitespaceData;
@@ -102,15 +102,9 @@ export class MarketStatisticsView {
   public applyFullSync(
     payload: FullMarketStatisticsPayload,
   ): MarketStatisticsViewState {
-    if (payload.marketName !== this.marketName) {
-      throw new Error(
-        `Cannot apply full sync for market ` +
-        `"${payload.marketName}" to view "${this.marketName}"`,
-      );
-    }
+    this.checkPayloadMarketName(payload.marketName);
 
-    const storage =
-      new MarketStatisticsStorageService(this.marketName);
+    const storage = new MarketStatisticsStorageService(this.marketName);
 
     storage.restoreAllItemsByLevel(payload.levels);
 
@@ -120,20 +114,29 @@ export class MarketStatisticsView {
   }
 
   public applyDelta(
-    payload: MarketStatisticsDeltaPayload,
+    payload: MarketStatisticsBinaryPayload,
   ): MarketStatisticsViewState {
-    if (payload.marketName !== this.marketName) {
-      throw new Error(
-        `Cannot apply delta for market ` +
-        `"${payload.marketName}" to view "${this.marketName}"`,
-      );
-    }
+    this.checkPayloadMarketName(payload.marketName);
 
     if (!this.storage) {
       return this.refresh();
     }
 
-    this.storage.applyDelta(payload.delta);
+    this.storage.applyDelta(payload.payload);
+
+    return this.refresh();
+  }
+
+  public applyIndicatorChanges(
+    payload: MarketStatisticsBinaryPayload,
+  ): MarketStatisticsViewState {
+    this.checkPayloadMarketName(payload.marketName);
+
+    if (!this.storage) {
+      return this.refresh();
+    }
+
+    this.storage.applyIndicatorChanges(payload.payload);
 
     return this.refresh();
   }
@@ -182,6 +185,15 @@ export class MarketStatisticsView {
     };
 
     return this.state;
+  }
+
+  private checkPayloadMarketName(marketName: string): void {
+    if (marketName !== this.marketName) {
+      throw new Error(
+        `Cannot apply market statistics for market ` +
+        `"${marketName}" to view "${this.marketName}"`,
+      );
+    }
   }
 
   private createCandleData(

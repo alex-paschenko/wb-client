@@ -4,8 +4,14 @@ import {
   INDICATOR_CODECS,
 } from '../constants/market-indicators.js';
 import type {
+  IndicatorValue,
   IndicatorValueCodecIndex,
 } from '../types/market-indicators.js';
+
+export interface WriteIndicatorResults {
+  offset: number;
+  value: IndicatorValue;
+}
 
 const getCodec = (
   codecIndex: IndicatorValueCodecIndex,
@@ -30,12 +36,12 @@ export const writeIndicatorValue = (
   offset: number,
   codecIndex: IndicatorValueCodecIndex,
   value: number | null,
-): number => {
+): WriteIndicatorResults => {
   const codec = getCodec(codecIndex);
 
-  codec.write(view, offset, value);
+  const writedValue = codec.write(view, offset, value);
 
-  return offset + codec.size;
+  return { offset: offset + codec.size, value: writedValue };
 };
 
 export const readIndicatorValue = (

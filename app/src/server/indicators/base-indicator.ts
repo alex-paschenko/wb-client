@@ -5,11 +5,14 @@ import {
   INDICATOR_CODECS,
 } from '../../shared/constants/market-indicators.js';
 import type {
-  IndicatorResults,
+  IndicatorValue,
   IndicatorValueCodecName,
-  MarketIndicatorRecalculatedItem,
   MarketIndicatorStorageConfig,
 } from '../../shared/types/market-indicators.js';
+import type {
+  AggregatedItemDescriptor,
+  MarketDataArray,
+} from '../../shared/types/market-statistics-storage.js';
 import type {
   MarketIndicator,
   MarketIndicatorCalculationParams,
@@ -18,11 +21,13 @@ import type {
 interface IndicatorDefinition {
   codec: IndicatorValueCodecName;
   group: string;
+  requiresRemovedValues: boolean;
 }
 
 export interface IndicatorAffectedRange {
   startIndexAsc: number;
   endIndexAsc: number;
+  aggregatedCandles: AggregatedItemDescriptor[];
 }
 
 export abstract class BaseIndicator<TState = never>
@@ -30,7 +35,6 @@ export abstract class BaseIndicator<TState = never>
   public abstract readonly name: string;
 
   protected abstract readonly definition: IndicatorDefinition;
-
   protected abstract readonly infiniteRange: boolean;
 
   public readonly dependencies: readonly string[] = [];
@@ -38,7 +42,7 @@ export abstract class BaseIndicator<TState = never>
   protected readonly stateByMarket = new Map<string, TState>();
 
   protected constructor(
-    protected readonly period: number,
+    protected readonly affectedValuesCount: number,
   ) {}
 
   public getStorageConfig(): MarketIndicatorStorageConfig {
@@ -59,59 +63,84 @@ export abstract class BaseIndicator<TState = never>
       name: this.name,
       codecIndex,
       group: this.definition.group,
+      requiresRemovedValues: this.definition.requiresRemovedValues,
     };
   }
 
-  public calculate(
-    params: MarketIndicatorCalculationParams,
-  ): IndicatorResults {
+  public calculate(params: MarketIndicatorCalculationParams): void {
+    const values = this.getAscendingValues(params);
+
+    if (values.length === 0) {
+      return;
+    }
+
     const rangesBuilder = this.infiniteRange
       ? this.buildAffectedInfiniteRange.bind(this)
       : this.buildAffectedFiniteRanges.bind(this);
 
     const affectedRanges =
-      params.centralIndexesAsc.length === 0
+      params.aggregatedItemDescriptors.length === 0
         ? []
         : rangesBuilder(
-            params.centralIndexesAsc,
+            params.aggregatedItemDescriptors,
             params.ascending.candles.length,
           );
 
-    return {
-      indicatorName: this.name,
-      lastResult: this.singleCalculate(params),
-      recalculatedValues:
-        affectedRanges.length > 0
-          ? this.rangeCalculate(
-              params,
-              affectedRanges,
-            )
-          : [],
-    };
+    values[values.length - 1] = this.singleCalculate(params);
+
+    if (affectedRanges.length > 0) {
+      this.rangeCalculate(params, affectedRanges);
+    }
   }
 
   public abstract singleCalculate(
     params: MarketIndicatorCalculationParams,
-  ): number | null;
+  ): IndicatorValue;
 
   public abstract rangeCalculate(
     params: MarketIndicatorCalculationParams,
     affectedRanges: IndicatorAffectedRange[],
-  ): MarketIndicatorRecalculatedItem[];
+  ): void;
 
-  public removeMarket(
-    marketName: string,
-  ): void {
+  public removeMarket(marketName: string): void {
     this.stateByMarket.delete(marketName);
   }
 
+  protected getAscendingValues(
+    params: MarketIndicatorCalculationParams,
+  ): MarketDataArray<IndicatorValue> {
+    const values = params.ascending.indicators[this.name];
+
+    if (!values) {
+      throw new Error(
+        `Ascending projection for indicator "${this.name}" not found`,
+      );
+    }
+
+    return values;
+  }
+
+  protected getDescendingValues(
+    params: MarketIndicatorCalculationParams,
+  ): MarketDataArray<IndicatorValue> {
+    const values = params.descending.indicators[this.name];
+
+    if (!values) {
+      throw new Error(
+        `Descending projection for indicator "${this.name}" not found`,
+      );
+    }
+
+    return values;
+  }
+
   protected buildAffectedFiniteRanges(
-    indexesAsc: readonly number[],
+    descriptors: readonly AggregatedItemDescriptor[],
     length: number,
   ): IndicatorAffectedRange[] {
     if (
-      indexesAsc.length === 0 ||
-      this.period <= 0 ||
+      descriptors.length === 0 ||
+      this.affectedValuesCount <= 0 ||
       length <= 0
     ) {
       return [];
@@ -119,22 +148,20 @@ export abstract class BaseIndicator<TState = never>
 
     const ranges: IndicatorAffectedRange[] = [];
 
-    for (const indexAsc of indexesAsc) {
-      const startIndexAsc = indexAsc;
+    for (const descriptor of descriptors) {
+      const startIndexAsc = descriptor.indexAsc;
       const endIndexAsc = Math.min(
         length - 1,
-        indexAsc + this.period - 1,
+        startIndexAsc + this.affectedValuesCount - 1,
       );
 
       const lastRange = ranges.at(-1);
 
-      if (
-        !lastRange ||
-        startIndexAsc > lastRange.endIndexAsc
-      ) {
+      if (!lastRange || startIndexAsc > lastRange.endIndexAsc) {
         ranges.push({
           startIndexAsc,
           endIndexAsc,
+          aggregatedCandles: [descriptor],
         });
 
         continue;
@@ -144,25 +171,25 @@ export abstract class BaseIndicator<TState = never>
         lastRange.endIndexAsc,
         endIndexAsc,
       );
+
+      lastRange.aggregatedCandles.push(descriptor);
     }
 
     return ranges;
   }
 
   protected buildAffectedInfiniteRange(
-    indexesAsc: readonly number[],
+    descriptors: readonly AggregatedItemDescriptor[],
     length: number,
   ): IndicatorAffectedRange[] {
-    if (
-      indexesAsc.length === 0 ||
-      length <= 0
-    ) {
+    if (descriptors.length === 0 || length <= 0) {
       return [];
     }
 
     return [{
-      startIndexAsc: indexesAsc[0],
+      startIndexAsc: descriptors[0].indexAsc,
       endIndexAsc: length - 1,
+      aggregatedCandles: [...descriptors],
     }];
   }
 

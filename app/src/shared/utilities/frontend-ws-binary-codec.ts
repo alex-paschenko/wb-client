@@ -1,4 +1,5 @@
 // app/src/shared/utilities/frontend-ws-binary-codec.ts
+
 import {
   FRONTEND_WS_BINARY_HEADER_LENGTH_BYTES,
   FRONTEND_WS_BINARY_HEADER_OFFSETS,
@@ -36,7 +37,10 @@ export const encodeFrontendWsBinaryPacket = (
     true,
   );
 
-  bytes.set(new Uint8Array(payload), FRONTEND_WS_BINARY_HEADER_LENGTH_BYTES);
+  bytes.set(
+    new Uint8Array(payload),
+    FRONTEND_WS_BINARY_HEADER_LENGTH_BYTES,
+  );
 
   return buffer;
 };
@@ -44,7 +48,14 @@ export const encodeFrontendWsBinaryPacket = (
 export const decodeFrontendWsBinaryPacket = (
   buffer: ArrayBuffer,
 ): FrontendWsBinaryPacket => {
+  if (buffer.byteLength < FRONTEND_WS_BINARY_HEADER_LENGTH_BYTES) {
+    throw new Error(
+      `Frontend WS binary packet is too short: ${buffer.byteLength} bytes`,
+    );
+  }
+
   const view = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
 
   return {
     header: {
@@ -60,6 +71,6 @@ export const decodeFrontendWsBinaryPacket = (
         true,
       ),
     },
-    payload: buffer.slice(FRONTEND_WS_BINARY_HEADER_LENGTH_BYTES),
+    payload: bytes.subarray(FRONTEND_WS_BINARY_HEADER_LENGTH_BYTES),
   };
 };

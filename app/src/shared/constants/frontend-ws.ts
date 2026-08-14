@@ -20,6 +20,7 @@ export const FRONTEND_WS_BINARY_HEADER_OFFSETS = {
 export const FRONTEND_WS_BINARY_MESSAGE_TYPES = {
   fullMarketStatistics: 1,
   marketStatisticsDelta: 2,
+  marketStatisticsIndicatorChanges: 3,
 } as const;
 
 export const FRONTEND_WS_CONTROL_MESSAGE_TYPES = {

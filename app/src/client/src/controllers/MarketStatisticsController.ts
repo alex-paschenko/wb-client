@@ -10,7 +10,7 @@ import type {
 } from '../../../shared/types/market-statistics-rolling';
 import type {
   FullMarketStatisticsPayload,
-  MarketStatisticsDeltaPayload,
+  MarketStatisticsBinaryPayload,
 } from '../../../shared/utilities/market-statistics-payload-codec';
 import { appEvents } from '../events/app-events';
 import {
@@ -57,7 +57,11 @@ export class MarketStatisticsController
   private readonly view: MarketStatisticsView;
 
   private unsubscribeFullSync: (() => void) | null = null;
+
   private unsubscribeDelta: (() => void) | null = null;
+
+  private unsubscribeIndicatorChanges: (() => void) | null = null;
+
   private unsubscribeRolling: (() => void) | null = null;
 
   private windowTimer: ReturnType<typeof setInterval> | null = null;
@@ -95,6 +99,12 @@ export class MarketStatisticsController
       this.marketName,
     );
 
+    this.unsubscribeIndicatorChanges = appEvents.on(
+      'marketStatisticsIndicatorChangesReceived',
+      (payload) => this.handleIndicatorChanges(payload),
+      this.marketName,
+    );
+
     this.unsubscribeRolling = appEvents.on(
       'marketRollingUpdated',
       (_marketName, rollingStatistics) => {
@@ -124,10 +134,12 @@ export class MarketStatisticsController
   protected override onLastSubscriber(): void {
     this.unsubscribeFullSync?.();
     this.unsubscribeDelta?.();
+    this.unsubscribeIndicatorChanges?.();
     this.unsubscribeRolling?.();
 
     this.unsubscribeFullSync = null;
     this.unsubscribeDelta = null;
+    this.unsubscribeIndicatorChanges = null;
     this.unsubscribeRolling = null;
 
     if (this.windowTimer) {
@@ -169,10 +181,18 @@ export class MarketStatisticsController
   }
 
   private handleDelta(
-    payload: MarketStatisticsDeltaPayload,
+    payload: MarketStatisticsBinaryPayload,
   ): void {
     this.patchViewState(
       this.view.applyDelta(payload),
+    );
+  }
+
+  private handleIndicatorChanges(
+    payload: MarketStatisticsBinaryPayload,
+  ): void {
+    this.patchViewState(
+      this.view.applyIndicatorChanges(payload),
     );
   }
 

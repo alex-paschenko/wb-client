@@ -1,4 +1,3 @@
-// app/src/shared/utilities/market-statistics-payload-codec.ts
 import type {
   MarketIndicatorsRegistry,
   MarketIndicatorValues,
@@ -21,26 +20,31 @@ import {
 const encoder = new globalThis.TextEncoder();
 const decoder = new globalThis.TextDecoder();
 
-export type FullMarketStatisticsPayload = {
+export interface FullMarketStatisticsPayload {
   marketName: string;
   levels: FullMarketStatisticsLevel[];
-};
+}
 
-export type MarketStatisticsDeltaPayload = {
+export interface MarketStatisticsBinaryPayload {
   marketName: string;
-  delta: ArrayBuffer;
-};
+  payload: Uint8Array;
+}
 
-export const encodeMarketStatisticsDeltaPayload = (
+export const encodeMarketStatisticsBinaryPayload = (
   marketName: string,
-  delta: ArrayBuffer,
+  payload: ArrayBuffer,
 ): ArrayBuffer => {
   const marketNameBytes = encoder.encode(marketName);
 
+  if (marketNameBytes.byteLength > 0xffff) {
+    throw new Error(
+      `Market name is too long to encode: ` +
+      `${marketNameBytes.byteLength} bytes`,
+    );
+  }
+
   const byteLength =
-    2 +
-    marketNameBytes.byteLength +
-    delta.byteLength;
+    2 + marketNameBytes.byteLength + payload.byteLength;
 
   const buffer = new ArrayBuffer(byteLength);
   const view = new DataView(buffer);
@@ -54,30 +58,47 @@ export const encodeMarketStatisticsDeltaPayload = (
   bytes.set(marketNameBytes, offset);
   offset += marketNameBytes.byteLength;
 
-  bytes.set(new Uint8Array(delta), offset);
+  bytes.set(new Uint8Array(payload), offset);
 
   return buffer;
 };
 
-export const decodeMarketStatisticsDeltaPayload = (
-  payload: ArrayBuffer,
-): MarketStatisticsDeltaPayload => {
-  const view = new DataView(payload);
-  const bytes = new Uint8Array(payload);
+export const decodeMarketStatisticsBinaryPayload = (
+  payload: Uint8Array,
+): MarketStatisticsBinaryPayload => {
+  if (payload.byteLength < 2) {
+    throw new Error(
+      `Market statistics binary payload is too short: ` +
+      `${payload.byteLength} bytes`,
+    );
+  }
+
+  const view = new DataView(
+    payload.buffer,
+    payload.byteOffset,
+    payload.byteLength,
+  );
 
   let offset = 0;
 
   const marketNameByteLength = view.getUint16(offset, true);
   offset += 2;
 
+  if (offset + marketNameByteLength > payload.byteLength) {
+    throw new Error(
+      `Market statistics binary payload contains invalid market name length: ` +
+      `${marketNameByteLength}`,
+    );
+  }
+
   const marketName = decoder.decode(
-    bytes.slice(offset, offset + marketNameByteLength),
+    payload.subarray(offset, offset + marketNameByteLength),
   );
   offset += marketNameByteLength;
 
   return {
     marketName,
-    delta: payload.slice(offset),
+    payload: payload.subarray(offset),
   };
 };
 
@@ -90,7 +111,8 @@ export const encodeFullMarketStatisticsPayload = (
 
   if (marketNameBytes.byteLength > 0xffff) {
     throw new Error(
-      `Market name is too long to encode: ${marketNameBytes.byteLength} bytes`,
+      `Market name is too long to encode: ` +
+      `${marketNameBytes.byteLength} bytes`,
     );
   }
 
@@ -100,17 +122,13 @@ export const encodeFullMarketStatisticsPayload = (
     );
   }
 
-  const payloadByteLength =
-    getFullMarketStatisticsPayloadByteLength(
-      levels,
-      indicatorRegistry,
-    );
+  const payloadByteLength = getFullMarketStatisticsPayloadByteLength(
+    levels,
+    indicatorRegistry,
+  );
 
   const byteLength =
-    2 +
-    marketNameBytes.byteLength +
-    1 +
-    payloadByteLength;
+    2 + marketNameBytes.byteLength + 1 + payloadByteLength;
 
   const buffer = new ArrayBuffer(byteLength);
   const view = new DataView(buffer);
@@ -147,22 +165,19 @@ export const encodeFullMarketStatisticsPayload = (
     offset += 2;
 
     for (const candle of data.candles) {
-      offset = writeMarketCandleToDataView(
-        view,
-        offset,
-        level,
-        candle,
-      );
+      offset = writeMarketCandleToDataView(view, offset, candle);
     }
 
     for (const indicatorConfig of indicatorRegistry) {
       for (const indicators of data.indicators) {
-        offset = writeIndicatorValue(
+        const result = writeIndicatorValue(
           view,
           offset,
           indicatorConfig.codecIndex,
           indicators[indicatorConfig.name] ?? null,
         );
+
+        offset = result.offset;
       }
     }
   }
@@ -171,11 +186,14 @@ export const encodeFullMarketStatisticsPayload = (
 };
 
 export const decodeFullMarketStatisticsPayload = (
-  payload: ArrayBuffer,
+  payload: Uint8Array,
   indicatorRegistry: MarketIndicatorsRegistry,
 ): FullMarketStatisticsPayload => {
-  const view = new DataView(payload);
-  const bytes = new Uint8Array(payload);
+  const view = new DataView(
+    payload.buffer,
+    payload.byteOffset,
+    payload.byteLength,
+  );
 
   let offset = 0;
 
@@ -183,7 +201,7 @@ export const decodeFullMarketStatisticsPayload = (
   offset += 2;
 
   const marketName = decoder.decode(
-    bytes.slice(offset, offset + marketNameByteLength),
+    payload.subarray(offset, offset + marketNameByteLength),
   );
   offset += marketNameByteLength;
 
@@ -198,50 +216,32 @@ export const decodeFullMarketStatisticsPayload = (
 
     const candles: MarketCandle[] = [];
 
-    for (
-      let itemIndex = 0;
-      itemIndex < itemsLength;
-      itemIndex += 1
-    ) {
-      const result = readMarketCandleFromDataView(
-        view,
-        offset,
-        level,
-      );
+    for (let itemIndex = 0; itemIndex < itemsLength; itemIndex += 1) {
+      const result = readMarketCandleFromDataView(view, offset);
 
       candles.push(result.item);
       offset = result.nextOffset;
     }
 
-    const indicators: MarketIndicatorValues[] =
-      Array.from(
-        { length: itemsLength },
-        () => ({}),
-      );
+    const indicators: MarketIndicatorValues[] = Array.from(
+      { length: itemsLength },
+      () => ({}),
+    );
 
     for (const indicatorConfig of indicatorRegistry) {
-      for (
-        let itemIndex = 0;
-        itemIndex < itemsLength;
-        itemIndex += 1
-      ) {
+      for (let itemIndex = 0; itemIndex < itemsLength; itemIndex += 1) {
         const result = readIndicatorValue(
           view,
           offset,
           indicatorConfig.codecIndex,
         );
 
-        indicators[itemIndex][indicatorConfig.name] =
-          result.value;
-
+        indicators[itemIndex][indicatorConfig.name] = result.value;
         offset = result.nextOffset;
       }
     }
 
-    levels.push({
-      candles,
-      indicators,
-    });
+    levels.push({ candles, indicators });
   }
 
   if (offset !== payload.byteLength) {
@@ -251,25 +251,18 @@ export const decodeFullMarketStatisticsPayload = (
     );
   }
 
-  return {
-    marketName,
-    levels,
-  };
+  return { marketName, levels };
 };
 
 const getFullMarketStatisticsPayloadByteLength = (
   levels: readonly FullMarketStatisticsLevel[],
   indicatorRegistry: MarketIndicatorsRegistry,
 ): number => {
-  const indicatorItemByteLength =
-    indicatorRegistry.reduce(
-      (sum, indicatorConfig) =>
-        sum +
-        getIndicatorValueByteLength(
-          indicatorConfig.codecIndex,
-        ),
-      0,
-    );
+  const indicatorItemByteLength = indicatorRegistry.reduce(
+    (sum, indicatorConfig) =>
+      sum + getIndicatorValueByteLength(indicatorConfig.codecIndex),
+    0,
+  );
 
   return levels.reduce((sum, data, level) => {
     if (data.candles.length !== data.indicators.length) {
@@ -282,10 +275,7 @@ const getFullMarketStatisticsPayloadByteLength = (
 
     const itemsByteLength =
       data.candles.length *
-      (
-        getMarketCandleByteLength(level) +
-        indicatorItemByteLength
-      );
+      (getMarketCandleByteLength() + indicatorItemByteLength);
 
     return sum + 2 + itemsByteLength;
   }, 0);

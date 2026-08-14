@@ -11,12 +11,13 @@ export const MARKET_STATISTICS_LAYOUT = {
   receivedAt: 0,
   price: 1,
   speed: 2,
-  startedAt: 3,
-  endedAt: 4,
-  open: 5,
-  close: 6,
-  high: 7,
-  low: 8,
+  acceleration: 3,
+  startedAt: 4,
+  endedAt: 5,
+  open: 6,
+  close: 7,
+  high: 8,
+  low: 9,
 } as const satisfies Record<keyof MarketCandle, number>;
 
 export const MARKET_STATISTICS_CANDLE_FIELDS_PER_ITEM =
@@ -35,28 +36,15 @@ const buildMarketStatisticsFieldOffsets = (
   ) as Record<keyof MarketCandle, number>;
 
 const MARKET_STATISTICS_FIELD_OFFSETS =
-  buildMarketStatisticsFieldOffsets(
-    MARKET_STATISTICS_LAYOUT,
-  );
+  buildMarketStatisticsFieldOffsets(MARKET_STATISTICS_LAYOUT);
 
-export const getMarketStatisticsFieldsPerItem = (
-  level: number,
-): number => {
-  void level;
-
-  return MARKET_STATISTICS_CANDLE_FIELDS_PER_ITEM;
-};
-
-export const getMarketCandleByteLength = (
-  level: number,
-): number =>
-  getMarketStatisticsFieldsPerItem(level) *
+export const getMarketCandleByteLength = (): number =>
+  MARKET_STATISTICS_CANDLE_FIELDS_PER_ITEM *
   MARKET_STATISTICS_FIELD_BYTES;
 
 export const writeMarketCandleToDataView = (
   view: DataView,
   offset: number,
-  level: number,
   item: MarketCandle,
 ): number => {
   view.setFloat64(
@@ -76,6 +64,12 @@ export const writeMarketCandleToDataView = (
     item.speed,
     true,
   );
+
+  view.setFloat64(
+    offset + MARKET_STATISTICS_FIELD_OFFSETS.acceleration,
+    item.acceleration,
+    true,
+  )
 
   view.setFloat64(
     offset + MARKET_STATISTICS_FIELD_OFFSETS.startedAt,
@@ -113,13 +107,12 @@ export const writeMarketCandleToDataView = (
     true,
   );
 
-  return offset + getMarketCandleByteLength(level);
+  return offset + getMarketCandleByteLength();
 };
 
 export const readMarketCandleFromDataView = (
   view: DataView,
   offset: number,
-  level: number,
 ): {
   item: MarketCandle;
   nextOffset: number;
@@ -135,6 +128,10 @@ export const readMarketCandleFromDataView = (
     ),
     speed: view.getFloat64(
       offset + MARKET_STATISTICS_FIELD_OFFSETS.speed,
+      true,
+    ),
+    acceleration: view.getFloat64(
+      offset + MARKET_STATISTICS_FIELD_OFFSETS.acceleration,
       true,
     ),
     startedAt: view.getFloat64(
@@ -162,100 +159,67 @@ export const readMarketCandleFromDataView = (
       true,
     ),
   },
-  nextOffset: offset + getMarketCandleByteLength(level),
+  nextOffset: offset + getMarketCandleByteLength(),
 });
 
 export const writeMarketCandleToFloat64Array = (
   data: Float64Array,
   itemIndex: number,
-  level: number,
   item: MarketCandle,
 ): void => {
   const offset =
-    itemIndex * getMarketStatisticsFieldsPerItem(level);
+    itemIndex * MARKET_STATISTICS_CANDLE_FIELDS_PER_ITEM;
 
-  data[
-    offset + MARKET_STATISTICS_LAYOUT.receivedAt
-  ] = item.receivedAt;
+  data[offset + MARKET_STATISTICS_LAYOUT.receivedAt] = item.receivedAt;
 
-  data[
-    offset + MARKET_STATISTICS_LAYOUT.price
-  ] = item.price;
+  data[offset + MARKET_STATISTICS_LAYOUT.price] = item.price;
 
-  data[
-    offset + MARKET_STATISTICS_LAYOUT.speed
-  ] = item.speed;
+  data[offset + MARKET_STATISTICS_LAYOUT.speed] = item.speed;
 
-  data[
-    offset + MARKET_STATISTICS_LAYOUT.startedAt
-  ] = item.startedAt;
+  data[offset + MARKET_STATISTICS_LAYOUT.acceleration] =
+    item.acceleration;
 
-  data[
-    offset + MARKET_STATISTICS_LAYOUT.endedAt
-  ] = item.endedAt;
+  data[offset + MARKET_STATISTICS_LAYOUT.startedAt] = item.startedAt;
 
-  data[
-    offset + MARKET_STATISTICS_LAYOUT.open
-  ] = item.open;
+  data[offset + MARKET_STATISTICS_LAYOUT.endedAt] = item.endedAt;
 
-  data[
-    offset + MARKET_STATISTICS_LAYOUT.close
-  ] = item.close;
+  data[offset + MARKET_STATISTICS_LAYOUT.open] = item.open;
 
-  data[
-    offset + MARKET_STATISTICS_LAYOUT.high
-  ] = item.high;
+  data[offset + MARKET_STATISTICS_LAYOUT.close] = item.close;
 
-  data[
-    offset + MARKET_STATISTICS_LAYOUT.low
-  ] = item.low;
+  data[offset + MARKET_STATISTICS_LAYOUT.high] = item.high;
+
+  data[offset + MARKET_STATISTICS_LAYOUT.low] = item.low;
 };
 
 export const readMarketCandleFromFloat64Array = (
   data: Float64Array,
   itemIndex: number,
-  level: number,
 ): MarketCandle => {
   const offset =
-    itemIndex * getMarketStatisticsFieldsPerItem(level);
+    itemIndex * MARKET_STATISTICS_CANDLE_FIELDS_PER_ITEM;
 
   return {
     receivedAt:
-      data[
-        offset + MARKET_STATISTICS_LAYOUT.receivedAt
-      ],
+      data[offset + MARKET_STATISTICS_LAYOUT.receivedAt],
     price:
-      data[
-        offset + MARKET_STATISTICS_LAYOUT.price
-      ],
+      data[offset + MARKET_STATISTICS_LAYOUT.price],
     speed:
-      data[
-        offset + MARKET_STATISTICS_LAYOUT.speed
-      ],
+      data[offset + MARKET_STATISTICS_LAYOUT.speed],
+    acceleration:
+      data[offset + MARKET_STATISTICS_LAYOUT.acceleration],
     startedAt:
-      data[
-        offset + MARKET_STATISTICS_LAYOUT.startedAt
-      ],
+      data[offset + MARKET_STATISTICS_LAYOUT.startedAt],
     endedAt:
-      data[
-        offset + MARKET_STATISTICS_LAYOUT.endedAt
-      ],
+      data[offset + MARKET_STATISTICS_LAYOUT.endedAt],
     open:
-      data[
-        offset + MARKET_STATISTICS_LAYOUT.open
-      ],
+      data[offset + MARKET_STATISTICS_LAYOUT.open],
     close:
-      data[
-        offset + MARKET_STATISTICS_LAYOUT.close
-      ],
+      data[offset + MARKET_STATISTICS_LAYOUT.close],
     high:
-      data[
-        offset + MARKET_STATISTICS_LAYOUT.high
-      ],
+      data[offset + MARKET_STATISTICS_LAYOUT.high],
     low:
-      data[
-        offset + MARKET_STATISTICS_LAYOUT.low
-      ],
+      data[offset + MARKET_STATISTICS_LAYOUT.low],
   };
 };
 
@@ -264,11 +228,10 @@ export const readMarketCandleField = <
 >(
   data: Float64Array,
   itemIndex: number,
-  level: number,
   fieldName: TFieldName,
 ): MarketCandle[TFieldName] => {
   const offset =
-    itemIndex * getMarketStatisticsFieldsPerItem(level);
+    itemIndex * MARKET_STATISTICS_CANDLE_FIELDS_PER_ITEM;
 
   return data[
     offset + MARKET_STATISTICS_LAYOUT[fieldName]
@@ -280,19 +243,16 @@ export const readMarketCandleFields = <
 >(
   data: Float64Array,
   itemIndex: number,
-  level: number,
   ...fieldNames: TFieldNames
 ): Pick<MarketCandle, TFieldNames[number]> => {
   const offset =
-    itemIndex * getMarketStatisticsFieldsPerItem(level);
+    itemIndex * MARKET_STATISTICS_CANDLE_FIELDS_PER_ITEM;
 
   const result: Partial<MarketCandle> = {};
 
   for (const fieldName of fieldNames) {
     result[fieldName] =
-      data[
-        offset + MARKET_STATISTICS_LAYOUT[fieldName]
-      ];
+      data[offset + MARKET_STATISTICS_LAYOUT[fieldName]];
   }
 
   return result as Pick<

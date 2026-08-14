@@ -7,5 +7,5 @@ export type FrontendWsBinaryHeader = {
 
 export type FrontendWsBinaryPacket = {
   header: FrontendWsBinaryHeader;
-  payload: ArrayBuffer;
+  payload: Uint8Array;
 };

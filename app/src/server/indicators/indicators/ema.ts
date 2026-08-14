@@ -1,19 +1,11 @@
 // app/src/server/indicators/indicators/ema.ts
 import type {
-  MarketIndicatorRecalculatedItem,
-} from '../../../shared/types/market-indicators.js';
-
-import type {
   MarketIndicatorCalculationParams,
 } from '../../types/market-indicators.js';
-
-import {
-  type IndicatorAffectedRange,
+import type {
+  IndicatorAffectedRange,
 } from '../base-indicator.js';
-
-import {
-  IncrementalIndicator,
-} from '../incremental-indicator.js';
+import { IncrementalIndicator } from '../incremental-indicator.js';
 
 interface EmaIndicatorParams {
   period: number;
@@ -31,20 +23,18 @@ export class EmaIndicator extends IncrementalIndicator<EmaIndicatorState> {
   protected readonly definition = {
     codec: 'float32',
     group: 'price',
+    requiresRemovedValues: false,
   } as const;
 
-  public constructor(
-    params: EmaIndicatorParams,
-  ) {
+  public constructor(params: EmaIndicatorParams) {
     super(params.period);
-
     this.name = `ema-${params.period}`;
   }
 
   protected fullCalculate(
     params: MarketIndicatorCalculationParams,
   ): number | null {
-    if (params.descending.candles.length < this.period) {
+    if (params.descending.candles.length < this.affectedValuesCount) {
       return null;
     }
 
@@ -57,9 +47,7 @@ export class EmaIndicator extends IncrementalIndicator<EmaIndicatorState> {
       return null;
     }
 
-    this.stateByMarket.set(params.marketName, {
-      value,
-    });
+    this.stateByMarket.set(params.marketName, { value });
 
     return value;
   }
@@ -68,19 +56,19 @@ export class EmaIndicator extends IncrementalIndicator<EmaIndicatorState> {
     params: MarketIndicatorCalculationParams,
   ): number | null {
     const state = this.stateByMarket.get(params.marketName);
-    const newestCandle = params.descending.candles[0];
+    const candles = params.descending.candles;
 
-    if (!state || !newestCandle) {
+    if (!state || candles.length === 0) {
       return this.fullCalculate(params);
     }
 
+    const newestCandle = candles[0];
     const alpha = this.getAlpha();
+
     const value =
       state.value + alpha * (newestCandle.close - state.value);
 
-    this.stateByMarket.set(params.marketName, {
-      value,
-    });
+    this.stateByMarket.set(params.marketName, { value });
 
     return value;
   }
@@ -88,24 +76,32 @@ export class EmaIndicator extends IncrementalIndicator<EmaIndicatorState> {
   public rangeCalculate(
     params: MarketIndicatorCalculationParams,
     affectedRanges: IndicatorAffectedRange[],
-  ): MarketIndicatorRecalculatedItem[] {
-    const result: MarketIndicatorRecalculatedItem[] = [];
+  ): void {
+    const values = this.getAscendingValues(params);
 
     for (const range of affectedRanges) {
-      result.push({
-        startIndexAsc: range.startIndexAsc,
-        values: this.calculateRange(params, range),
-      });
-    }
+      const lastValue = this.calculateRange(params, range, values);
 
-    return result;
+      if (range.endIndexAsc !== values.length - 1) {
+        continue;
+      }
+
+      if (lastValue === null) {
+        this.stateByMarket.delete(params.marketName);
+      } else {
+        this.stateByMarket.set(params.marketName, {
+          value: lastValue,
+        });
+      }
+    }
   }
 
   private calculateRange(
     params: MarketIndicatorCalculationParams,
     range: IndicatorAffectedRange,
-  ): (number | null)[] {
-    const values: (number | null)[] = [];
+    values: ReturnType<EmaIndicator['getAscendingValues']>,
+  ): number | null {
+    const candles = params.ascending.candles;
     const alpha = this.getAlpha();
 
     let previousValue =
@@ -116,28 +112,22 @@ export class EmaIndicator extends IncrementalIndicator<EmaIndicatorState> {
       index <= range.endIndexAsc;
       index += 1
     ) {
-      const candle = params.ascending.candles[index];
-
-      if (!candle) {
-        values.push(null);
-        previousValue = null;
-        continue;
-      }
+      const candle = candles[index];
 
       if (previousValue === null) {
         previousValue = this.calculateSeedAt(params, index);
-        values.push(previousValue);
+        values[index] = previousValue;
         continue;
       }
 
       const value =
         previousValue + alpha * (candle.close - previousValue);
 
-      values.push(value);
+      values[index] = value;
       previousValue = value;
     }
 
-    return values;
+    return previousValue;
   }
 
   private getPreviousStoredValue(
@@ -148,14 +138,14 @@ export class EmaIndicator extends IncrementalIndicator<EmaIndicatorState> {
       return null;
     }
 
-    return params.ascending.indicators[startIndexAsc - 1]?.[this.name] ?? null;
+    return this.getAscendingValues(params)[startIndexAsc - 1] ?? null;
   }
 
   private calculateSeedAt(
     params: MarketIndicatorCalculationParams,
     indexAsc: number,
   ): number | null {
-    const firstIndexAsc = indexAsc - this.period + 1;
+    const firstIndexAsc = indexAsc - this.affectedValuesCount + 1;
 
     if (firstIndexAsc < 0) {
       return null;
@@ -164,19 +154,13 @@ export class EmaIndicator extends IncrementalIndicator<EmaIndicatorState> {
     let sum = 0;
 
     for (let index = firstIndexAsc; index <= indexAsc; index += 1) {
-      const candle = params.ascending.candles[index];
-
-      if (!candle) {
-        return null;
-      }
-
-      sum += candle.close;
+      sum += params.ascending.candles[index].close;
     }
 
-    return sum / this.period;
+    return sum / this.affectedValuesCount;
   }
 
   private getAlpha(): number {
-    return 2 / (this.period + 1);
+    return 2 / (this.affectedValuesCount + 1);
   }
 }

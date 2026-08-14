@@ -18,7 +18,7 @@ import {
 } from '../../../shared/utilities/frontend-ws-binary-codec';
 import {
   decodeFullMarketStatisticsPayload,
-  decodeMarketStatisticsDeltaPayload,
+  decodeMarketStatisticsBinaryPayload,
 } from '../../../shared/utilities/market-statistics-payload-codec';
 import {
   globalStateService,
@@ -341,28 +341,22 @@ export class FrontendWsController {
     });
   }
 
-  private handleBinaryMessage(
-    data: ArrayBuffer,
-  ): void {
-    const packet =
-      decodeFrontendWsBinaryPacket(data);
+  private handleBinaryMessage(data: ArrayBuffer): void {
+    const packet = decodeFrontendWsBinaryPacket(data);
 
     if (
       packet.header.messageType ===
       FRONTEND_WS_BINARY_MESSAGE_TYPES.fullMarketStatistics
     ) {
-      const payload =
-        decodeFullMarketStatisticsPayload(
-          packet.payload,
-          globalStateService.getIndicatorRegistry(),
-        );
+      const payload = decodeFullMarketStatisticsPayload(
+        packet.payload,
+        globalStateService.getIndicatorRegistry(),
+      );
 
       appEvents.emit(
         {
-          eventName:
-            'marketStatisticsFullSyncReceived',
-          condition:
-            payload.marketName,
+          eventName: 'marketStatisticsFullSyncReceived',
+          condition: payload.marketName,
         },
         payload,
       );
@@ -372,24 +366,42 @@ export class FrontendWsController {
 
     if (
       packet.header.messageType ===
-      FRONTEND_WS_BINARY_MESSAGE_TYPES
-        .marketStatisticsDelta
+      FRONTEND_WS_BINARY_MESSAGE_TYPES.marketStatisticsDelta
     ) {
-      const payload =
-        decodeMarketStatisticsDeltaPayload(
-          packet.payload,
-        );
+      const payload = decodeMarketStatisticsBinaryPayload(packet.payload);
 
       appEvents.emit(
         {
-          eventName:
-            'marketStatisticsDeltaReceived',
-          condition:
-            payload.marketName,
+          eventName: 'marketStatisticsDeltaReceived',
+          condition: payload.marketName,
         },
         payload,
       );
+
+      return;
     }
+
+    if (
+      packet.header.messageType ===
+      FRONTEND_WS_BINARY_MESSAGE_TYPES.marketStatisticsIndicatorChanges
+    ) {
+      const payload = decodeMarketStatisticsBinaryPayload(packet.payload);
+
+      appEvents.emit(
+        {
+          eventName: 'marketStatisticsIndicatorChangesReceived',
+          condition: payload.marketName,
+        },
+        payload,
+      );
+
+      return;
+    }
+
+    throw new Error(
+      `Unknown frontend WS binary message type: ` +
+      `${packet.header.messageType}`,
+    );
   }
 
   private scheduleSettingsSave(

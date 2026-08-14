@@ -1,13 +1,6 @@
-import { SECOND } from "../../shared/constants/time";
+// app/src/server/utilities/price.ts
 
-export function calculateCandlePrice(
-  open: number,
-  close: number,
-  high: number,
-  low: number,
-): number {
-  return (open + close + high + low) / 4;
-}
+import { TIME_DERIVATIVES_SCALE } from "../../shared/constants/market-statistics-storage";
 
 export function calculateSpeed(
   startedAt: number | undefined,
@@ -15,15 +8,20 @@ export function calculateSpeed(
   endedAt: number,
   endPrice: number,
 ): number {
-  if (!startedAt || !startPrice) {
+  if (
+    startedAt === undefined ||
+    startPrice === undefined ||
+    startPrice === 0
+  ) {
     return 0;
   }
 
-  const seconds = (endedAt - startedAt) / SECOND;
+  const duration = endedAt - startedAt;
 
-  if (seconds <= 0) {
+  if (duration <= 0) {
     return 0;
   }
 
-  return (endPrice - startPrice) / seconds;
+  return TIME_DERIVATIVES_SCALE *
+    (endPrice - startPrice) / startPrice / duration;
 }

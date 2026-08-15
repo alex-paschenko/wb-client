@@ -14,10 +14,7 @@ import type {
 } from '../../shared/types/market-statistics-storage.js';
 import { SERVER_EVENT } from '../constants/events.js';
 import {
-  MarketCandleAddRow,
-  MarketCandlesAddedRemovedInput,
   marketCandlesDao,
-  type MarketCandleRemoveRow,
   type MarketCandleRow,
 } from '../dao/market-candles.js';
 import type {
@@ -39,20 +36,18 @@ import {
 } from '../utilities/derivative-integral.js';
 import { Freezing } from '../utilities/freezing.js';
 import { Awaiters } from '../../shared/utilities/awaiters.js';
-import {
-  MarketCandleIndicatorsChange
-} from '../../shared/types/market-statistic-accessors.js';
 import { MarketStatisticAccessors } from './market-statistic-accessors.js';
+import type {
+  MarketCandleAddRow,
+  MarketCandleIndicatorsChange,
+  MarketCandleRemoveRow,
+  MarketStatisticsPersistenceChanges
+} from '../types/persistence.js';
 
 interface StartupLevelPromotionResult {
   addedRows: MarketCandleAddRow[];
   removal: MarketCandleRemoveRow;
   aggregatedLevel: AggregatedLevelResult;
-}
-
-interface StartupPersistenceResult {
-  addedRemoved: MarketCandlesAddedRemovedInput;
-  indicatorChanges: MarketCandleIndicatorsChange[];
 }
 
 interface AggregatedLevelResult {
@@ -70,8 +65,6 @@ interface StartupAggregationResult {
   removedCandles: MarketCandle[];
   removedIndicators: AggregatedIndicators;
 }
-
-const STARTUP_PERSISTENCE_MARKETS_PER_BATCH = 20;
 
 export class MarketStatisticsAggregationService {
   private readonly storagesByMarket = new Map<
@@ -222,7 +215,13 @@ export class MarketStatisticsAggregationService {
 
       const aggregatedLevels = this.aggregate(storage);
 
-      this.publishStructuralChanges(storage, aggregatedLevels);
+      const structuralPersistenceChanges =
+        this.createStructuralPersistenceChanges(
+          storage,
+          aggregatedLevels,
+        );
+
+      this.publishStructuralChanges(storage);
 
       const accessors = new MarketStatisticAccessors(storage);
 
@@ -237,17 +236,16 @@ export class MarketStatisticsAggregationService {
 
       const result = await indicatorPromise;
 
-      const indicatorPersistenceChanges =
+      const indicatorChanged =
         accessors.createPersistenceChanges(result.receivedAt);
 
-      if (indicatorPersistenceChanges.length > 0) {
-        eventBus.emit(
-          SERVER_EVENT.marketStatisticsPersistenceChanged,
-          {
-            indicatorChanged: indicatorPersistenceChanges,
-          },
-        );
-      }
+      eventBus.emit(
+        SERVER_EVENT.marketStatisticsPersistenceChanged,
+        {
+          ...structuralPersistenceChanges,
+          indicatorChanged,
+        },
+      );
 
       const binaryChanges =
         accessors.createBinaryChanges(result.receivedAt);
@@ -331,32 +329,18 @@ export class MarketStatisticsAggregationService {
 
   private publishStructuralChanges(
     storage: MarketStatisticsStorageService,
-    aggregatedLevels: readonly AggregatedLevelResult[],
   ): void {
-    const marketName = storage.getMarketName();
-
-    const numOfAffectedLevels = Math.max(
-      1,
-      ...aggregatedLevels.map(({ level }) => level + 1),
-    );
-
     const delta = storage.commitDelta();
 
-    if (delta) {
-      eventBus.emit(
-        SERVER_EVENT.marketStatisticsStorageChanged,
-        { marketName, delta },
-      );
+    if (!delta) {
+      return;
     }
 
     eventBus.emit(
-      SERVER_EVENT.marketStatisticsPersistenceAddedRemoved,
+      SERVER_EVENT.marketStatisticsStorageChanged,
       {
-        marketName,
-        changes: this.toPersistenceChanges(
-          storage,
-          numOfAffectedLevels,
-        ),
+        marketName: storage.getMarketName(),
+        delta,
       },
     );
   }
@@ -370,34 +354,56 @@ export class MarketStatisticsAggregationService {
     );
   }
 
-  private toPersistenceChanges(
+  private createStructuralPersistenceChanges(
     storage: MarketStatisticsStorageService,
-    numOfAffectedLevels: number,
-  ): MarketStatisticsPersistenceChange[] {
-    return Array.from(
-      { length: numOfAffectedLevels },
-      (_, level) => {
-        const item = storage.getLastItem(level);
-        const deleteBefore = storage.getStartedAt(level);
+    aggregatedLevels: readonly AggregatedLevelResult[],
+  ): Pick<
+    MarketStatisticsPersistenceChanges,
+    'newCandles' | 'deleteBefore'
+  > {
+    const marketName = storage.getMarketName();
 
-        if (!item) {
-          throw new Error(
-            `Market statistics level ${level} has no latest item.`,
-          );
-        }
-
-        if (deleteBefore === null) {
-          throw new Error(
-            `Market statistics level ${level} is empty after adding item.`,
-          );
-        }
-
-        return {
-          item,
-          deleteBefore,
-        };
-      },
+    const numOfAffectedLevels = Math.max(
+      1,
+      ...aggregatedLevels.map(({ level }) => level + 1),
     );
+
+    const newCandles: MarketCandleAddRow[] = [];
+    const deleteBefore: MarketCandleRemoveRow[] = [];
+
+    for (let level = 0; level < numOfAffectedLevels; level += 1) {
+      const item = storage.getLastItem(level);
+      const timeThreshold = storage.getStartedAt(level);
+
+      if (!item) {
+        throw new Error(
+          `Market statistics level ${level} has no latest item.`,
+        );
+      }
+
+      if (timeThreshold === null) {
+        throw new Error(
+          `Market statistics level ${level} is empty after adding item.`,
+        );
+      }
+
+      newCandles.push({
+        marketName,
+        level,
+        ...item,
+      });
+
+      deleteBefore.push({
+        marketName,
+        level,
+        timeThreshold,
+      });
+    }
+
+    return {
+      newCandles,
+      deleteBefore,
+    };
   }
 
   private aggregateCandles(
@@ -460,39 +466,12 @@ export class MarketStatisticsAggregationService {
     };
   }
 
-  private async persistStartupBatch(
-    batch: readonly StartupPersistenceResult[],
-  ): Promise<void> {
-    if (batch.length === 0) {
-      return;
-    }
-
-    const addedRemoved = batch
-      .map((item) => item.addedRemoved)
-      .filter(
-        (item) => item.toAdd.length > 0 || item.toRemove.length > 0,
-      );
-
-    if (addedRemoved.length > 0) {
-      await marketCandlesDao.applyAddedRemovedBatch(addedRemoved);
-    }
-
-    const indicatorChanges = batch.flatMap(
-      (item) => item.indicatorChanges,
-    );
-
-    if (indicatorChanges.length > 0) {
-      await marketCandlesDao.upsertIndicatorChanges(indicatorChanges);
-    }
-  }
-
   private async startupPrepareStorages(): Promise<void> {
     const now = Date.now();
 
     const cumulativeCutoffs = getCumulativeCutoffs(now);
 
     const maxLevel = MARKET_STATISTICS_LEVEL_CONFIGS.length - 1;
-
     const maxLevelCutoff = cumulativeCutoffs[maxLevel];
 
     const marketNames = await marketCandlesDao.getMarketNames();
@@ -500,8 +479,6 @@ export class MarketStatisticsAggregationService {
     const activeMarketNames = new Set(
       globalStateService.getMarketNames(),
     );
-
-    const persistenceBatch: StartupPersistenceResult[] = [];
 
     console.log(
       'Market statistics startup aggregation started',
@@ -513,7 +490,7 @@ export class MarketStatisticsAggregationService {
     let decile = '0';
 
     for (const [index, marketName] of marketNames.entries()) {
-      const persistenceInput =
+      const persistenceChanges =
         await this.startupPrepareMarketStorage(
           marketName,
           cumulativeCutoffs,
@@ -521,33 +498,24 @@ export class MarketStatisticsAggregationService {
           maxLevelCutoff,
         );
 
-      if (persistenceInput) {
-        persistenceBatch.push(persistenceInput);
-      }
-
-      if (
-        persistenceBatch.length >=
-        STARTUP_PERSISTENCE_MARKETS_PER_BATCH
-      ) {
-        await this.persistStartupBatch(persistenceBatch);
-        persistenceBatch.length = 0;
+      if (persistenceChanges) {
+        eventBus.emit(
+          SERVER_EVENT.marketStatisticsPersistenceChanged,
+          persistenceChanges,
+        );
       }
 
       if (!activeMarketNames.has(marketName)) {
         this.removeMarketStorage(marketName);
       }
 
-      const currentDecile = (index * 10 / maxMarketIndex).toFixed();
+      const currentDecile =
+        (index * 10 / maxMarketIndex).toFixed();
 
       if (currentDecile !== decile) {
         decile = currentDecile;
-
         console.log(`processed: ${currentDecile}/10`);
       }
-    }
-
-    if (persistenceBatch.length > 0) {
-      await this.persistStartupBatch(persistenceBatch);
     }
 
     console.log(
@@ -561,7 +529,7 @@ export class MarketStatisticsAggregationService {
     cumulativeCutoffs: readonly number[],
     maxLevel: number,
     maxLevelCutoff: number,
-  ): Promise<StartupPersistenceResult | null> {
+  ): Promise<MarketStatisticsPersistenceChanges | null> {
     const rows = await marketCandlesDao.getForStartup(
       marketName,
       maxLevel,
@@ -648,11 +616,9 @@ export class MarketStatisticsAggregationService {
     storage.clearDelta();
 
     return {
-      addedRemoved: {
-        toAdd: Array.from(addedRowsByKey.values()),
-        toRemove: removals,
-      },
-      indicatorChanges: Array.from(indicatorChangesByKey.values()),
+      newCandles: Array.from(addedRowsByKey.values()),
+      deleteBefore: removals,
+      indicatorChanged: Array.from(indicatorChangesByKey.values()),
     };
   }
 

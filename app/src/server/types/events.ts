@@ -1,4 +1,5 @@
 // app/src/server/types/events.ts
+
 import type {
   ExtendedMarketDataView,
   FullMarketStatisticsLevel,
@@ -13,11 +14,14 @@ import type {
 } from '../../shared/types/market-indicators.js';
 import type { StrategySignal } from './strategy-signals.js';
 import type { SERVER_EVENT } from '../constants/events.js';
-import { MarketTick } from './market-statistics.js';
-import { MarketsByName } from '../../shared/types/market.js';
-import {
-  MarketCandleIndicatorsChange
-} from '../../shared/types/market-statistic-accessors.js';
+import type { MarketTick } from './market-statistics.js';
+import type { MarketsByName } from '../../shared/types/market.js';
+import type {
+  MarketCandleAddRow,
+  MarketCandleIndicatorsChange,
+  MarketCandleRemoveRow,
+  MarketStatisticsPersistenceChanges,
+} from './persistence.js';
 
 export type ServerEventName =
   typeof SERVER_EVENT[keyof typeof SERVER_EVENT];
@@ -39,15 +43,6 @@ export interface MarketRollingUpdatedEvent {
 export interface MarketStatisticsPersistenceChange {
   item: MarketCandle;
   deleteBefore: number;
-}
-
-export interface MarketStatisticsPersistenceChangedEvent {
-  indicatorChanged: MarketCandleIndicatorsChange[];
-}
-
-export interface MarketStatisticsPersistenceAddedRemovedEvent {
-  marketName: string;
-  changes: MarketStatisticsPersistenceChange[];
 }
 
 export interface MarketTickReceivedEvent {
@@ -139,11 +134,8 @@ export interface ServerEventMap {
   [SERVER_EVENT.marketStatisticsRestored]:
     MarketStatisticsRestoredEvent;
 
-  [SERVER_EVENT.marketStatisticsPersistenceAddedRemoved]:
-    MarketStatisticsPersistenceAddedRemovedEvent;
-
   [SERVER_EVENT.marketStatisticsPersistenceChanged]:
-    MarketStatisticsPersistenceChangedEvent;
+    MarketStatisticsPersistenceChanges;
 
   [SERVER_EVENT.marketStatisticsApproximated]:
     MarketStatisticsApproximatedEvent;

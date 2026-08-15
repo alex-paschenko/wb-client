@@ -8,7 +8,9 @@ import { startScheduler } from './scheduler/index.js';
 import { syncMarketFees } from './services/sync-market-fees.js';
 import { initWsServer } from './frontend/index.js';
 import { temporaryUserId } from '../shared/constants/users.js';
-import { invalidateAndRefreshUserBalance } from './services/sync-user-balance.js';
+import {
+  invalidateAndRefreshUserBalance
+} from './services/sync-user-balance.js';
 import { marketsService } from './services/markets.js';
 import { waitForDatabase } from './db/wait-for-start.js';
 import { whitebitWsService } from './services/whitebit-ws.js';
@@ -16,16 +18,14 @@ import {
   marketStatisticsAggregationService
 } from './services/market-statistics-aggregation.js';
 import {
-  marketStatisticsPersistenceBufferService
-} from './services/market-statistics-persistence-buffer.js';
-import {
   marketStatisticsRollingService
 } from './services/market-statistics-rolling.js';
 import { frontendWsService } from './services/frontend-ws.js';
-import {
-  indicatorManager,
-} from './indicators/indicator-manager.js';
+import { indicatorManager } from './indicators/indicator-manager.js';
 import { serverGlobalStateService } from './services/global-state.js';
+import {
+  marketStatisticsPersistenceQueueService
+} from './services/market-statistics-persistence-queue.js';
 
 const port = Number(process.env.PORT ?? 3000);
 const app = createApp();
@@ -46,7 +46,7 @@ const shutdown = async (signal: string): Promise<void> => {
     whitebitWsService.stop();
 
     await Promise.all([
-      marketStatisticsPersistenceBufferService.stop(),
+      marketStatisticsPersistenceQueueService.stop(),
       marketStatisticsRollingService.stop(),
     ]);
 
@@ -89,14 +89,14 @@ const start = async (): Promise<void> => {
    * start() synchronously registers the registry listener
    * before reaching its first await.
    */
+  marketStatisticsPersistenceQueueService.start();
+
   const aggregationStart =
     marketStatisticsAggregationService.start();
 
   indicatorManager.start();
 
   await aggregationStart;
-
-  marketStatisticsPersistenceBufferService.start();
 
   await marketStatisticsRollingService.start();
 
@@ -115,10 +115,6 @@ const start = async (): Promise<void> => {
 
 void start();
 
-process.on('SIGINT', () => {
-  void shutdown('SIGINT');
-});
+process.on('SIGINT', () => { void shutdown('SIGINT'); });
 
-process.on('SIGTERM', () => {
-  void shutdown('SIGTERM');
-});
+process.on('SIGTERM', () => { void shutdown('SIGTERM'); });

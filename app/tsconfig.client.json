@@ -8,5 +8,5 @@
   "include": [
     "src/client/**/*",
     "src/shared/**/*"
-  ]
+, "src/server/types/persistence.ts"  ]
 }

@@ -10,7 +10,6 @@ import type {
 import type {
   ChangedIndicatorInterval,
   ChangedIndicatorIntervalsByName,
-  MarketCandleIndicatorsChange,
 } from '../../shared/types/market-statistic-accessors.js';
 import type {
   IndicatorProjection,
@@ -22,6 +21,9 @@ import { LazyArray } from '../../shared/utilities/lazy-array.js';
 import {
   encodeMarketStatisticsIndicatorChanges,
 } from '../../shared/utilities/market-statistics-indicator-changes-codec.js';
+import type {
+  MarketCandleIndicatorsChange
+} from '../types/persistence.js';
 
 interface ExtendedResolvedIndex extends ResolvedIndex {
   startedAt: number;

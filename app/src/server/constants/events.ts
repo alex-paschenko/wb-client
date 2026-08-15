@@ -14,11 +14,8 @@ export const SERVER_EVENT = {
   marketStatisticsIndicatorsChanged:
     'market statistics indicators changed',
 
-  marketStatisticsViewUpdated: 'market statistics view updated',
   marketStatisticsRestored: 'market statistics restored',
 
-  marketStatisticsPersistenceAddedRemoved:
-    'market statistics added and removed',
   marketStatisticsPersistenceChanged:
     'market statistics persistence changed',
   marketStatisticsApproximated: 'market statistics approximated',

@@ -3,14 +3,17 @@
 import type {
   MarketIndicatorValues,
 } from '../../shared/types/market-indicators.js';
-import {
-  MarketCandleIndicatorsChange
-} from '../../shared/types/market-statistic-accessors.js';
 import type {
   MarketCandle,
 } from '../../shared/types/market-statistics-storage.js';
 import { q, type Sql, type TransactionSql } from '../db/client.js';
 import type { SelectParams } from '../types/db.js';
+import type {
+  MarketCandleAddRow,
+  MarketCandleIndicatorsChange,
+  MarketCandleRemoveRow,
+  MarketStatisticsPersistenceChanges
+} from '../types/persistence.js';
 import { buildUpsertSet, dbRow } from '../utilities/db-helpers.js';
 
 const MAX_INSERT_PARAMETERS = 60_000;
@@ -24,22 +27,6 @@ export interface MarketCandleRow extends MarketCandle {
   marketName: string;
   level: number;
   indicators: MarketIndicatorValues;
-}
-
-export interface MarketCandleAddRow extends MarketCandle {
-  marketName: string;
-  level: number;
-}
-
-export interface MarketCandleRemoveRow {
-  marketName: string;
-  level: number;
-  timeThreshold: number;
-}
-
-export interface MarketCandlesAddedRemovedInput {
-  toAdd: MarketCandleAddRow[];
-  toRemove: MarketCandleRemoveRow[];
 }
 
 export class MarketCandlesDao {
@@ -234,44 +221,65 @@ export class MarketCandlesDao {
     );
   }
 
-  public async applyAddedRemovedBatch(
-    batches: readonly MarketCandlesAddedRemovedInput[],
+  public async applyPersistenceChanges(
+    changes: MarketStatisticsPersistenceChanges,
   ): Promise<void> {
-    if (batches.length === 0) {
+    if (
+      changes.newCandles.length === 0 &&
+      changes.deleteBefore.length === 0 &&
+      changes.indicatorChanged.length === 0
+    ) {
       return;
     }
 
     await this.q.begin(async (trx) => {
-      for (const batch of batches) {
-        if (batch.toAdd.length > 0) {
-          const startedAt = Date.now();
+      if (changes.newCandles.length > 0) {
+        const startedAt = Date.now();
 
-          await this.upsertCandles(batch.toAdd, trx);
+        await this.upsertCandles(changes.newCandles, trx);
 
-          this.durationLogging(
-            startedAt,
-            'insertMany',
-            { candles: batch.toAdd.length },
-          );
-        }
+        this.durationLogging(
+          startedAt,
+          'upsertCandles',
+          { candles: changes.newCandles.length },
+        );
+      }
 
-        if (batch.toRemove.length > 0) {
-          const startedAt = Date.now();
+      if (changes.deleteBefore.length > 0) {
+        const startedAt = Date.now();
 
-          await this.deleteCandlesBefore(batch.toRemove, trx);
+        await this.deleteCandlesBefore(
+          changes.deleteBefore,
+          trx,
+        );
 
-          this.durationLogging(
-            startedAt,
-            'deleteOld',
-            { candles: batch.toRemove.length },
-          );
-        }
+        this.durationLogging(
+          startedAt,
+          'deleteCandlesBefore',
+          { removals: changes.deleteBefore.length },
+        );
+      }
+
+      if (changes.indicatorChanged.length > 0) {
+        const startedAt = Date.now();
+
+        await this.upsertIndicatorChanges(
+          changes.indicatorChanged,
+          trx,
+        );
+
+        this.durationLogging(
+          startedAt,
+          'upsertIndicatorChanges',
+          { changes: changes.indicatorChanged.length },
+        );
       }
     });
   }
 
-  public async upsertIndicatorChanges(
+  private async upsertIndicatorChanges(
     changes: readonly MarketCandleIndicatorsChange[],
+    query: Query,
   ): Promise<void> {
     if (changes.length === 0) {
       return;
@@ -289,7 +297,7 @@ export class MarketCandlesDao {
 
       const payload = JSON.stringify(batch);
 
-      await this.q`
+      await query`
         insert into market_candle_indicators (
           market_name,
           level,

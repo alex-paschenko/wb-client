@@ -14,7 +14,11 @@ import type {
   MarketCandleRemoveRow,
   MarketStatisticsPersistenceChanges
 } from '../types/persistence.js';
-import { buildUpsertSet, dbRow } from '../utilities/db-helpers.js';
+import {
+  buildUpsertSet,
+  dbRow,
+  toJsonObject
+} from '../utilities/db-helpers.js';
 
 const MAX_INSERT_PARAMETERS = 60_000;
 const MAX_INSERT_BATCH_SIZE = 1_000;
@@ -285,41 +289,23 @@ export class MarketCandlesDao {
       return;
     }
 
+    const insertData = changes.map((change) => dbRow({
+      marketName: change.marketName,
+      level: change.level,
+      startedAt: change.startedAt,
+      endedAt: change.endedAt,
+      indicators: toJsonObject(change.indicators),
+    }));
+
     for (
       let offset = 0;
-      offset < changes.length;
+      offset < insertData.length;
       offset += INDICATOR_UPDATE_BATCH_SIZE
     ) {
-      const batch = changes.slice(
-        offset,
-        offset + INDICATOR_UPDATE_BATCH_SIZE,
-      );
-
-      const payload = JSON.stringify(batch);
-
       await query`
-        insert into market_candle_indicators (
-          market_name,
-          level,
-          started_at,
-          ended_at,
-          indicators
-        )
-        select
-          changes_data."marketName",
-          changes_data.level,
-          changes_data."startedAt",
-          changes_data."endedAt",
-          changes_data.indicators
-        from jsonb_to_recordset(
-          (${payload}::text)::jsonb
-        ) as changes_data(
-          "marketName" text,
-          level smallint,
-          "startedAt" bigint,
-          "endedAt" bigint,
-          indicators jsonb
-        )
+        insert into market_candle_indicators
+        ${query(insertData.slice(offset, offset + INDICATOR_UPDATE_BATCH_SIZE))}
+
         on conflict (
           market_name,
           level,

@@ -43,6 +43,7 @@ import type {
   MarketCandleRemoveRow,
   MarketStatisticsPersistenceChanges
 } from '../types/persistence.js';
+import { IndicatorValue } from '../../shared/types/market-indicators.js';
 
 interface StartupLevelPromotionResult {
   addedRows: MarketCandleAddRow[];
@@ -75,6 +76,8 @@ export class MarketStatisticsAggregationService {
   private readonly freezingByMarket: Freezing;
 
   private readonly tickBuffersByMarket = new Map<string, MarketTick[]>();
+
+  private indicatorCalculationCounter = 0;
 
   public constructor(
     private indicatorsRecalculatedAwaiters =
@@ -223,6 +226,12 @@ export class MarketStatisticsAggregationService {
 
       this.publishStructuralChanges(storage);
 
+      const shouldLogIndicators = this.shouldLogIndicatorCalculation();
+
+      const indicatorsBefore = shouldLogIndicators
+        ? storage.getAllIndicatorsAscending()
+        : null;
+
       const accessors = new MarketStatisticAccessors(storage);
 
       const indicatorPromise =
@@ -235,6 +244,14 @@ export class MarketStatisticsAggregationService {
       );
 
       const result = await indicatorPromise;
+
+      if (indicatorsBefore) {
+        this.logIndicatorChanges(
+          marketName,
+          indicatorsBefore,
+          accessors.getIndicatorResults(),
+        );
+      }
 
       const indicatorChanged =
         accessors.createPersistenceChanges(result.receivedAt);
@@ -509,8 +526,7 @@ export class MarketStatisticsAggregationService {
         this.removeMarketStorage(marketName);
       }
 
-      const currentDecile =
-        (index * 10 / maxMarketIndex).toFixed();
+      const currentDecile = (index * 10 / maxMarketIndex).toFixed();
 
       if (currentDecile !== decile) {
         decile = currentDecile;
@@ -584,6 +600,12 @@ export class MarketStatisticsAggregationService {
 
       removals.push(promotion.removal);
 
+      const shouldLogIndicators = this.shouldLogIndicatorCalculation();
+
+      const indicatorsBefore = shouldLogIndicators
+        ? storage.getAllIndicatorsAscending()
+        : null;
+
       const accessors = new MarketStatisticAccessors(storage);
 
       const indicatorPromise =
@@ -596,6 +618,14 @@ export class MarketStatisticsAggregationService {
       );
 
       const result = await indicatorPromise;
+
+      if (indicatorsBefore) {
+        this.logIndicatorChanges(
+          marketName,
+          indicatorsBefore,
+          accessors.getIndicatorResults(),
+        );
+      }
 
       this.mergeStartupIndicatorChanges(
         indicatorChangesByKey,
@@ -923,6 +953,64 @@ export class MarketStatisticsAggregationService {
     }
 
     return buffer;
+  }
+
+  private shouldLogIndicatorCalculation(): boolean {
+    this.indicatorCalculationCounter += 1;
+
+    return false; // this.indicatorCalculationCounter % 10_000 === 0;
+  }
+
+  private logIndicatorChanges(
+    marketName: string,
+    indicatorsBefore: Record<string, IndicatorValue[]>,
+    indicatorResults: ReturnType<
+      MarketStatisticAccessors['getIndicatorResults']
+    >,
+  ): void {
+    console.log(
+      `Indicator recalculation sample #${this.indicatorCalculationCounter} ` +
+      `for ${marketName}`,
+    );
+
+    for (const [indicatorName, result] of Object.entries(indicatorResults)) {
+      const previousValues = indicatorsBefore[indicatorName];
+
+      if (!previousValues) {
+        throw new Error(
+          `Missing previous values for indicator "${indicatorName}"`,
+        );
+      }
+
+      let cachedItems = 0;
+      let actuallyChangedItems = 0;
+
+      for (const [startFlatAscIndex, count] of result.changedIntervals) {
+        cachedItems += count;
+
+        const endFlatAscIndex = startFlatAscIndex + count;
+
+        for (
+          let index = startFlatAscIndex;
+          index < endFlatAscIndex;
+          index += 1
+        ) {
+          if (!Object.is(previousValues[index], result.cache[index])) {
+            actuallyChangedItems += 1;
+          }
+        }
+      }
+
+      const changedPercent = cachedItems === 0
+        ? '0.00'
+        : (actuallyChangedItems * 100 / cachedItems).toFixed(2);
+
+      console.log(
+        `${indicatorName}: cached=${cachedItems}, ` +
+        `actuallyChanged=${actuallyChangedItems}, ` +
+        `changed=${changedPercent}%`,
+      );
+    }
   }
 
   private emitRecalculateIndicatorsRequest(

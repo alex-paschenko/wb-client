@@ -121,6 +121,41 @@ export class CandleKeyMap<T> {
     return true;
   }
 
+  public deleteBefore(
+    level: number,
+    timeThreshold: number,
+  ): number {
+    const valuesByStartedAt = this.valuesByLevel.get(level);
+
+    if (!valuesByStartedAt) {
+      return 0;
+    }
+
+    let deletedCount = 0;
+
+    for (const [startedAt, valuesByEndedAt] of valuesByStartedAt) {
+      for (const endedAt of valuesByEndedAt.keys()) {
+        if (endedAt >= timeThreshold) {
+          continue;
+        }
+
+        valuesByEndedAt.delete(endedAt);
+        this.valuesCount -= 1;
+        deletedCount += 1;
+      }
+
+      if (valuesByEndedAt.size === 0) {
+        valuesByStartedAt.delete(startedAt);
+      }
+    }
+
+    if (valuesByStartedAt.size === 0) {
+      this.valuesByLevel.delete(level);
+    }
+
+    return deletedCount;
+  }
+
   public clear(): void {
     this.valuesByLevel.clear();
     this.valuesCount = 0;

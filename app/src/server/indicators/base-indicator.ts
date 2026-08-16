@@ -86,11 +86,12 @@ export abstract class BaseIndicator<TState = never>
             params.ascending.candles.length,
           );
 
-    values[values.length - 1] = this.singleCalculate(params);
-
     if (affectedRanges.length > 0) {
       this.rangeCalculate(params, affectedRanges);
+      return;
     }
+
+    values[values.length - 1] = this.singleCalculate(params);
   }
 
   public abstract singleCalculate(

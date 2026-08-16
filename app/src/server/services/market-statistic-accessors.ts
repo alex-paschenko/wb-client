@@ -1,3 +1,4 @@
+// app/src/server/services/market-statistic-accessors.ts
 import type {
   MarketStatisticsStorageService,
 } from '../../shared/services/market-statistics-storage.js';
@@ -24,11 +25,14 @@ import {
 import type {
   MarketCandleIndicatorsChange
 } from '../types/persistence.js';
+import type { LazyArrayResults } from '../../shared/types/lazy-array.js';
 
 interface ExtendedResolvedIndex extends ResolvedIndex {
   startedAt: number;
   endedAt: number;
 }
+
+type IndicatorResults = Record<string, LazyArrayResults<IndicatorValue>>;
 
 export class MarketStatisticAccessors {
   private readonly receivedAt: number;
@@ -206,6 +210,14 @@ export class MarketStatisticAccessors {
     return this.binaryChanges;
   }
 
+  public getIndicatorResults(): IndicatorResults {
+    return Object.entries(this.indicatorLazyArrays)
+      .reduce<IndicatorResults>((result, [name, lazyArray]) => {
+        result[name] = lazyArray.getCachedResults();
+        return result;
+      }, {});
+
+  }
   private getChangedIndicatorIntervals():
     ChangedIndicatorIntervalsByName {
     if (this.changedIndicatorIntervals) {

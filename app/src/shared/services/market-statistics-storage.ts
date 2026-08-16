@@ -19,10 +19,12 @@ import type {
   ResolvedIndex,
   MarketDataProjectionSnapshot,
 } from '../types/market-statistics-storage.js';
+import type { LazyArraySetResult } from '../types/lazy-array.js';
 import {
   getIndicatorValueByteLength,
   readIndicatorValue,
   writeIndicatorValue,
+  writeTrackedIndicatorValue,
 } from '../utilities/market-indicators-codec.js';
 import {
   MARKET_STATISTICS_CANDLE_FIELDS_PER_ITEM,
@@ -224,6 +226,45 @@ export class MarketStatisticsStorageService {
       this.indicatorRegistry,
       this.indicatorChunkAccessor,
     );
+  }
+
+  getAllIndicatorsAscending(): Record<string, IndicatorValue[]> {
+    const result: Record<string, IndicatorValue[]> = {};
+
+    for (const indicatorConfig of this.indicatorRegistry) {
+      result[indicatorConfig.name] = [];
+    }
+
+    for (let level = this.levels.length - 1; level >= 0; level -= 1) {
+      const levelStorage = this.levels[level];
+
+      for (
+        let chunkIndex = 0;
+        chunkIndex < levelStorage.chunks.length;
+        chunkIndex += 1
+      ) {
+        const chunk = levelStorage.chunks[chunkIndex];
+
+        for (
+          let itemIndex = chunk.start;
+          itemIndex < chunk.end;
+          itemIndex += 1
+        ) {
+          for (const indicatorConfig of this.indicatorRegistry) {
+            result[indicatorConfig.name].push(
+              this.readIndicatorByResolvedIndex(
+                level,
+                chunkIndex,
+                itemIndex,
+                indicatorConfig.name,
+              ),
+            );
+          }
+        }
+      }
+    }
+
+    return result;
   }
 
   getAllItemsByLevel(): FullMarketStatisticsLevel[] {
@@ -632,16 +673,16 @@ export class MarketStatisticsStorageService {
     name: string,
     index: number,
     value: IndicatorValue,
-  ): IndicatorValue {
+  ): LazyArraySetResult<IndicatorValue> {
     const { level, chunkIndex, itemIndex } =
       this.resolveFlatAscIndex(index);
 
-    return this.writeIndicatorByResolvedIndex(
+    return this.writeTrackedIndicatorByResolvedIndex(
       level,
       chunkIndex,
       itemIndex,
       name,
-      value
+      value,
     );
   }
 
@@ -837,6 +878,53 @@ export class MarketStatisticsStorageService {
     );
 
     return result.value;
+  }
+
+  private writeTrackedIndicatorByResolvedIndex(
+    level: number,
+    chunkIndex: number,
+    itemIndex: number,
+    indicatorName: string,
+    value: IndicatorValue,
+  ): LazyArraySetResult<IndicatorValue> {
+    const indicatorStorage =
+      this.indicatorStorageByLevel[level]?.get(indicatorName);
+
+    if (!indicatorStorage) {
+      console.error(
+        'Cannot write unknown indicator',
+        {
+          marketName: this.marketName,
+          indicatorName,
+        },
+      );
+
+      return {
+        value: null,
+        changed: false,
+      };
+    }
+
+    const chunk = indicatorStorage.chunks[chunkIndex];
+
+    if (!chunk) {
+      throw new Error(
+        `Indicator chunk "${indicatorName}" not found ` +
+        `for level ${level}, chunk ${chunkIndex}`,
+      );
+    }
+
+    const result = writeTrackedIndicatorValue(
+      chunk.view,
+      itemIndex * indicatorStorage.valueByteLength,
+      indicatorStorage.codecIndex,
+      value,
+    );
+
+    return {
+      value: result.value,
+      changed: result.changed,
+    };
   }
 
   private readCandleByResolvedIndex(

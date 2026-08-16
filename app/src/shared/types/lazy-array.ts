@@ -15,3 +15,8 @@ export interface LazyArrayResults<T> {
 }
 
 export type Boundaries = [startedAt: number, endedAt: number];
+
+export interface LazyArraySetResult<T> {
+  value: T;
+  changed: boolean;
+}

@@ -2,6 +2,7 @@
 
 import {
   changedIntervalIndexes,
+  type LazyArraySetResult,
   type ChangedInterval,
   type LazyArrayResults,
 } from '../types/lazy-array';
@@ -9,6 +10,7 @@ import type {
   MarketDataArray,
   MarketDataProjectionDirection
 } from '../types/market-statistics-storage';
+import { Bitmap } from './bitmap';
 
 const missingInterval: ChangedInterval = [-1, -1];
 
@@ -29,9 +31,12 @@ function isArrayIndexProperty(property: string): boolean {
 export class LazyArray<T> {
   private readonly cache: T[];
 
+  private readonly changedItems: Bitmap;
+
   private readonly getItem: (index: number) => T;
 
-  private readonly setItem: ((index: number, value: T) => T) | null;
+  private readonly setItem:
+    ((index: number, value: T) => LazyArraySetResult<T>) | null;
 
   private readonly name: string;
 
@@ -41,20 +46,24 @@ export class LazyArray<T> {
 
   constructor(params: {
     readonly getItem: (index: number) => T,
-    readonly setItem: ((index: number, value: T) => T) | null,
+    readonly setItem:
+      ((index: number, value: T) => LazyArraySetResult<T>) | null,
     readonly name: string,
     readonly size: number,
   }) {
+    const size = params.size;
+
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new TypeError(`Invalid LazyArray size: ${size}`);
+    }
+
     this.getItem = params.getItem;
     this.setItem = params.setItem;
     this.name = params.name;
-    this.size = params.size;
+    this.size = size;
 
-    if (!Number.isSafeInteger(this.size) || this.size < 0) {
-      throw new TypeError(`Invalid LazyArray size: ${this.size}`);
-    }
-
-    this.cache = new Array<T>(this.size);
+    this.cache = new Array<T>(size);
+    this.changedItems = new Bitmap(size);
   }
 
   getProxy(
@@ -123,9 +132,14 @@ export class LazyArray<T> {
 
         const index = normalizeIndex(Number(property));
 
-        const storedValue = lazyArray.setItem(index, value as T);
+        const result = lazyArray.setItem(index, value as T);
 
-        lazyArray.cache[index] = storedValue;
+        lazyArray.cache[index] = result.value;
+
+        if (result.changed) {
+          lazyArray.changedItems.set(index, true);
+          lazyArray.cachedResults = null;
+        }
 
         return true;
       },
@@ -152,7 +166,7 @@ export class LazyArray<T> {
     const intervals: ChangedInterval[] = [];
 
     for (let index = 0; index < this.cache.length; index++) {
-      if (index in this.cache) {
+      if (this.changedItems.get(index)) {
         const lastInterval =
           intervals[intervals.length - 1] ?? missingInterval;
         const [startFlatAscIndex, count] = lastInterval;
@@ -165,18 +179,12 @@ export class LazyArray<T> {
       }
     }
 
-    const results = {
-      name: this.name,
-      changedIntervals: intervals,
-      cache: this.cache,
-    }
-
     this.cachedResults = {
       name: this.name,
       changedIntervals: intervals,
       cache: this.cache,
     };
 
-    return results;
+    return this.cachedResults;
   }
 }

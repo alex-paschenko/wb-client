@@ -122,6 +122,9 @@ export class MarketStatisticsStorageService {
       chunk.end,
     );
 
+    chunk.startedAt ??= item.startedAt;
+    chunk.endedAt = item.endedAt;
+
     levelStorage.startedAt ??= item.startedAt;
     levelStorage.endedAt = item.endedAt;
 
@@ -178,7 +181,14 @@ export class MarketStatisticsStorageService {
       if (chunk.size === 0) {
         levelStorage.chunks.shift();
         this.removeFirstIndicatorChunk(level);
+        continue;
       }
+
+      chunk.startedAt = readMarketCandleField(
+        chunk.data,
+        chunk.start,
+        'startedAt',
+      );
     }
 
     this.refreshLevelBounds(level);
@@ -415,6 +425,9 @@ export class MarketStatisticsStorageService {
         continue;
       }
 
+      const wholeChunkIsBeforeCutoff =
+        chunk.endedAt !== null && chunk.endedAt < cutoff;
+
       for (
         let itemIndex = chunk.start;
         itemIndex < chunk.end;
@@ -425,17 +438,14 @@ export class MarketStatisticsStorageService {
           itemIndex,
         );
 
-        if (candle.endedAt >= cutoff) {
+        if (!wholeChunkIsBeforeCutoff && candle.endedAt >= cutoff) {
           this.checkIndicatorsConsistence(indicators, candles.length);
-
           return { candles, indicators, previousCandle };
         }
 
         candles.push(candle);
 
-        for (
-          const indicatorName of this.indicatorsWithPreservedHistory
-        ) {
+        for (const indicatorName of this.indicatorsWithPreservedHistory) {
           indicators[indicatorName].push(
             this.readIndicatorByResolvedIndex(
               level,
@@ -639,17 +649,38 @@ export class MarketStatisticsStorageService {
 
   setCandleByFlatAscIndex(
     index: number,
-    candle: MarketCandle
+    candle: MarketCandle,
   ): MarketCandle {
     const { level, chunkIndex, itemIndex } =
       this.resolveFlatAscIndex(index);
 
-    const chunk = this.levels[level]?.chunks[chunkIndex]?.data;
-    if (!chunk) {
+    const levelStorage = this.levels[level];
+    const chunk = levelStorage?.chunks[chunkIndex];
+
+    if (!levelStorage || !chunk) {
       throw new Error(`Chunk not found`);
     }
 
-    writeMarketCandleToFloat64Array(chunk, itemIndex, candle);
+    writeMarketCandleToFloat64Array(chunk.data, itemIndex, candle);
+
+    if (itemIndex === chunk.start) {
+      chunk.startedAt = candle.startedAt;
+    }
+
+    if (itemIndex === chunk.end - 1) {
+      chunk.endedAt = candle.endedAt;
+    }
+
+    if (chunkIndex === 0 && itemIndex === chunk.start) {
+      levelStorage.startedAt = candle.startedAt;
+    }
+
+    if (
+      chunkIndex === levelStorage.chunks.length - 1 &&
+      itemIndex === chunk.end - 1
+    ) {
+      levelStorage.endedAt = candle.endedAt;
+    }
 
     return candle;
   }
@@ -1002,6 +1033,8 @@ export class MarketStatisticsStorageService {
       start: 0,
       end: 0,
       size: 0,
+      startedAt: null,
+      endedAt: null,
     };
   }
 
@@ -1154,23 +1187,19 @@ export class MarketStatisticsStorageService {
 
     if (!firstChunk || !lastChunk) {
       throw new Error(
-        `Market statistics level ${level} has size ${
-          levelStorage.size
-        } but has no chunks`,
+        `Market statistics level ${level} has size ` +
+        `${levelStorage.size} but has no chunks`,
       );
     }
 
-    levelStorage.startedAt = readMarketCandleField(
-      firstChunk.data,
-      firstChunk.start,
-      'startedAt',
-    );
+    if (firstChunk.startedAt === null || lastChunk.endedAt === null) {
+      throw new Error(
+        `Market statistics level ${level} has invalid chunk boundaries`,
+      );
+    }
 
-    levelStorage.endedAt = readMarketCandleField(
-      lastChunk.data,
-      lastChunk.end - 1,
-      'endedAt',
-    );
+    levelStorage.startedAt = firstChunk.startedAt;
+    levelStorage.endedAt = lastChunk.endedAt;
   }
 
   private readIndicatorsByResolvedIndex(

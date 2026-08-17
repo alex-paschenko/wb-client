@@ -81,6 +81,8 @@ export interface MarketStatisticsChunk {
   start: number;
   end: number;
   size: number;
+  startedAt: number | null;
+  endedAt: number | null;
 }
 
 export interface MarketStatisticsLevel {

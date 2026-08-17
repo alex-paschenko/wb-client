@@ -1,5 +1,7 @@
 // app/src/server/dao/market-candles.ts
 
+import { writeFile } from 'node:fs/promises';
+
 import type {
   MarketIndicatorValues,
 } from '../../shared/types/market-indicators.js';
@@ -31,6 +33,23 @@ export interface MarketCandleRow extends MarketCandle {
   marketName: string;
   level: number;
   indicators: MarketIndicatorValues;
+}
+
+interface UpdateIndicatorsData {
+    marketName: string[];
+    level: number[];
+    startedAt: number[];
+    endedAt: number[];
+    indicators: string[];
+}
+
+const isAggregation = (
+  changes: MarketCandleIndicatorsChange[]
+): boolean => {
+    const { marketName: firstMarketName } = changes[0];
+    return changes
+      .filter((ch) => ch.marketName === firstMarketName).length >= 10
+      && changes.length > 2000;
 }
 
 export class MarketCandlesDao {
@@ -267,10 +286,7 @@ export class MarketCandlesDao {
       if (changes.indicatorChanged.length > 0) {
         const startedAt = Date.now();
 
-        await this.upsertIndicatorChanges(
-          changes.indicatorChanged,
-          trx,
-        );
+        await this.upsertIndicatorChanges(changes.indicatorChanged, trx);
 
         this.durationLogging(
           startedAt,
@@ -289,35 +305,241 @@ export class MarketCandlesDao {
       return;
     }
 
-    const insertData = changes.map((change) => dbRow({
-      marketName: change.marketName,
-      level: change.level,
-      startedAt: change.startedAt,
-      endedAt: change.endedAt,
-      indicators: toJsonObject(change.indicators),
-    }));
+    const data: UpdateIndicatorsData =
+      changes.reduce<UpdateIndicatorsData>(
+        (acc, item) => {
+          acc.marketName.push(item.marketName);
+          acc.level.push(item.level);
+          acc.startedAt.push(item.startedAt);
+          acc.endedAt.push(item.endedAt);
+          acc.indicators.push(JSON.stringify(item.indicators));
 
-    for (
-      let offset = 0;
-      offset < insertData.length;
-      offset += INDICATOR_UPDATE_BATCH_SIZE
-    ) {
-      await query`
-        insert into market_candle_indicators
-        ${query(insertData.slice(offset, offset + INDICATOR_UPDATE_BATCH_SIZE))}
+          return acc;
+        },
+        {
+          marketName: [],
+          level: [],
+          startedAt: [],
+          endedAt: [],
+          indicators: []
+        },
+      );
 
-        on conflict (
+    await query`
+      MERGE INTO market_candle_indicators AS m
+      USING (
+        SELECT
+          t.market_name,
+          t.level,
+          t.started_at,
+          t.ended_at,
+          t.indicators::jsonb AS indicators
+        FROM unnest(
+          ${data.marketName}::text[],
+          ${data.level}::smallint[],
+          ${data.startedAt}::bigint[],
+          ${data.endedAt}::bigint[],
+          ${data.indicators}::text[]
+        ) AS t(
           market_name,
           level,
           started_at,
-          ended_at
+          ended_at,
+          indicators
         )
-        do update set
-          indicators =
-            market_candle_indicators.indicators ||
-            excluded.indicators
-      `;
+      ) AS i
+      ON (
+        m.market_name = i.market_name
+        AND m.level = i.level
+        AND m.started_at = i.started_at
+        AND m.ended_at = i.ended_at
+      )
+
+      WHEN MATCHED THEN
+        UPDATE SET
+          indicators = m.indicators || i.indicators
+
+      WHEN NOT MATCHED THEN
+        INSERT (
+          market_name,
+          level,
+          started_at,
+          ended_at,
+          indicators
+        )
+        VALUES (
+          i.market_name,
+          i.level,
+          i.started_at,
+          i.ended_at,
+          i.indicators
+        );
+    `;
+  }
+
+  private async explainUpsertIndicatorChanges(
+    changes: readonly MarketCandleIndicatorsChange[],
+    query: Query,
+  ): Promise<void> {
+    if (changes.length === 0) {
+      return;
     }
+
+    const enterTime = Date.now();
+
+    let logData = '';
+
+    const data: UpdateIndicatorsData =
+      changes.reduce<UpdateIndicatorsData>(
+        (acc, item) => {
+          acc.marketName.push(item.marketName);
+          acc.level.push(item.level);
+          acc.startedAt.push(item.startedAt);
+          acc.endedAt.push(item.endedAt);
+          acc.indicators.push(JSON.stringify(item.indicators));
+
+          return acc;
+        },
+        { marketName: [], level: [], startedAt: [], endedAt: [], indicators: [] },
+      );
+
+    const queryMStartTime = Date.now();
+
+    const [resultM] = await query`
+      EXPLAIN (
+        ANALYZE,
+        BUFFERS,
+        WAL,
+        VERBOSE,
+        FORMAT JSON
+      )
+MERGE INTO market_candle_indicators AS m
+USING (
+  SELECT
+    t.market_name,
+    t.level,
+    t.started_at,
+    t.ended_at,
+    t.indicators::jsonb AS indicators
+  FROM unnest(
+    ${data.marketName}::text[],
+    ${data.level}::smallint[],
+    ${data.startedAt}::bigint[],
+    ${data.endedAt}::bigint[],
+    ${data.indicators}::text[]
+  ) AS t(
+    market_name,
+    level,
+    started_at,
+    ended_at,
+    indicators
+  )
+) AS i
+ON (
+  m.market_name = i.market_name
+  AND m.level = i.level
+  AND m.started_at = i.started_at
+  AND m.ended_at = i.ended_at
+)
+
+WHEN MATCHED THEN
+  UPDATE SET
+    indicators = m.indicators || i.indicators
+
+WHEN NOT MATCHED THEN
+  INSERT (
+    market_name,
+    level,
+    started_at,
+    ended_at,
+    indicators
+  )
+  VALUES (
+    i.market_name,
+    i.level,
+    i.started_at,
+    i.ended_at,
+    i.indicators
+  );
+    `;
+
+    const queryIStartTime = Date.now();
+
+    const [resultI] = await query`
+      EXPLAIN (
+        ANALYZE,
+        BUFFERS,
+        WAL,
+        VERBOSE,
+        FORMAT JSON
+      )
+  WITH incoming AS (
+    SELECT
+      t.market_name,
+      t.level,
+      t.started_at,
+      t.ended_at,
+      t.indicators::jsonb AS indicators
+    FROM unnest (
+      ${data.marketName}::text[],
+      ${data.level}::smallint[],
+      ${data.startedAt}::bigint[],
+      ${data.endedAt}::bigint[],
+      ${data.indicators}::text[]
+    ) AS t (market_name, level, started_at, ended_at, indicators)
+  ),
+
+  upd AS (
+    UPDATE market_candle_indicators m
+    SET indicators = m.indicators || i.indicators
+    FROM incoming i
+    WHERE m.market_name = i.market_name
+      AND m.level = i.level
+      AND m.started_at = i.started_at
+      AND m.ended_at = i.ended_at
+    RETURNING m.market_name, m.level, m.started_at, m.ended_at
+  )
+
+  INSERT INTO market_candle_indicators
+    (market_name, level, started_at, ended_at, indicators)
+  SELECT
+    i.market_name, i.level, i.started_at, i.ended_at, i.indicators
+  FROM incoming i
+  LEFT JOIN upd u ON
+    u.market_name = i.market_name
+    AND u.level = i.level
+    AND u.started_at = i.started_at
+    AND u.ended_at = i.ended_at
+  WHERE u.market_name IS NULL
+  ON CONFLICT (market_name, level, started_at, ended_at) DO NOTHING;
+
+    `;
+    const queryEndTime = Date.now();
+
+    logData += '--- MERGE QUERY ---\n\n' + JSON.stringify(resultM, null, 4) +
+      '\n\n--- INSERT QUERY ---\n\n' + JSON.stringify(resultI, null, 4);
+
+
+      logData += `\n\n------------ STATISTICS: -----------------` +
+        `\n Num of items: ${changes.length}, ` +
+        `Query MERGE time: ${queryIStartTime - queryMStartTime}, ` +
+        `Query INSERT time: ${queryEndTime - queryIStartTime}, ` +
+        `Full time: ${queryEndTime - enterTime}\n`
+
+      writeFile(
+        `./logs/explain-upsert-indicators.txt-` +
+            (new Intl.DateTimeFormat(
+              'ru-RU',
+              { day: '2-digit', month: '2-digit', year: '2-digit' }).format(Date.now())
+            ) + '_' +
+            (new Intl.DateTimeFormat(
+              'ru-RU',
+              { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(Date.now())
+            ),
+        logData,
+        { encoding: 'utf8' },
+      );
+
   }
 
   private durationLogging(

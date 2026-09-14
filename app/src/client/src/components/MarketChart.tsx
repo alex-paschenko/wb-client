@@ -70,13 +70,9 @@ export const MarketChart = ({
     const seriesByGroup =
       new Map<string, ChartPanelSeries[]>();
 
-    for (
-      const [entityIndex, descriptor]
-      of entities.entries()
-    ) {
-      for (const dataKind of descriptor.dataKind) {
-        const handler =
-          ENTITY_DATA_KIND_HANDLERS[dataKind];
+    for (const [entityIndex, descriptor] of entities.entries()) {
+      for (const { kind: dataKind, group } of descriptor.data) {
+        const handler = ENTITY_DATA_KIND_HANDLERS[dataKind];
 
         const handlerSettings =
           handler.getSettings(
@@ -89,22 +85,19 @@ export const MarketChart = ({
           continue;
         }
 
-        let groupSeries =
-          seriesByGroup.get(descriptor.group);
+        let groupSeries = seriesByGroup.get(group);
 
         if (!groupSeries) {
           groupSeries = [];
-          seriesByGroup.set(
-            descriptor.group,
-            groupSeries,
-          );
+          seriesByGroup.set(group, groupSeries);
         }
 
         groupSeries.push({
           key:
             `${descriptor.kind}:` +
             `${descriptor.name}:` +
-            `${dataKind}`,
+            `${dataKind}:` +
+            `${group}`,
           descriptor,
           entityIndex,
           handler,

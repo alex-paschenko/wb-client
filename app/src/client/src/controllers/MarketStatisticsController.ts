@@ -100,8 +100,8 @@ export class MarketStatisticsController
 
     this.unsubscribeRolling = appEvents.on(
       'marketRollingUpdated',
-      (_marketName, rollingStatistics) => {
-        this.handleRollingUpdated(rollingStatistics);
+      (clientId, rollingStatistics) => {
+        this.handleRollingUpdated(clientId, rollingStatistics);
       },
       this.marketName,
     );
@@ -109,12 +109,6 @@ export class MarketStatisticsController
     this.windowTimer = setInterval(() => {
       this.refreshChartData();
     }, 30 * SECONDS);
-
-    appEvents.emit(
-      'changeMarketRollingSubscription',
-      FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
-      [this.marketName],
-    );
 
     const fullSyncClientId = this.getOnlyClientId(
       appEvents.emit(
@@ -186,7 +180,7 @@ export class MarketStatisticsController
       storage,
     });
 
-    const subscriptionClientId = this.getOnlyClientId(
+    const statisticsSubscriptionClientId = this.getOnlyClientId(
       appEvents.emit(
         'changeMarketStatisticsSubscription',
         FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
@@ -195,13 +189,17 @@ export class MarketStatisticsController
       'changeMarketStatisticsSubscription',
     );
 
-    this.pendingSubscriptions.add(subscriptionClientId);
-
-    appEvents.emit(
-      'changeMarketStatisticsSubscription',
-      FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
-      [this.marketName],
+    const rollingSubscriptionClientId = this.getOnlyClientId(
+      appEvents.emit(
+        'changeMarketRollingSubscription',
+        FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
+        [this.marketName],
+      ),
+      'changeMarketRollingSubscription',
     );
+
+    this.pendingSubscriptions.add(statisticsSubscriptionClientId);
+    this.pendingSubscriptions.add(rollingSubscriptionClientId);
   }
 
   private handleDelta(clientId: number, delta: PredecodedBinary): void {
@@ -229,8 +227,13 @@ export class MarketStatisticsController
   }
 
   private handleRollingUpdated(
+    clientId: number,
     rollingStatistics: MarketRollingStatistics,
   ): void {
+    if (!this.isPendingRequest(clientId)) {
+      return;
+    }
+
     this.patchState({
       rollingStatistics,
     });

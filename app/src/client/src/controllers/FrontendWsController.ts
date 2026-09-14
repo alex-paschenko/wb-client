@@ -11,8 +11,10 @@ import {
 } from '../../../shared/constants/frontend-ws';
 import { FRONTEND_WS_CODEC } from '../../../shared/constants/settings';
 import { globalStateService } from '../../../shared/services/global-state';
-import type { FrontendWsSubscriptionAction } from
-  '../../../shared/types/frontend-ws';
+import type {
+  FrontendWsSubscriptionAction,
+} from '../../../shared/types/frontend-ws';
+import { SERVER_WS_EVENT_TYPE } from '../../../shared/types/server-events';
 import { decodeCodec } from
   '../../../shared/utilities/codecs/codecs';
 import {
@@ -138,6 +140,21 @@ export class FrontendWsController {
             'startupStorageEntitiesReceived',
             message.params.entities,
           );
+
+          return;
+        }
+
+        if (message.type === SERVER_WS_EVENT_TYPE.marketRollingUpdated) {
+          appEvents.emit(
+            {
+              eventName: 'marketRollingUpdated',
+              condition: message.payload.marketName,
+            },
+            message.clientId,
+            message.payload.rollingStatistics,
+          );
+
+          return;
         }
       });
 

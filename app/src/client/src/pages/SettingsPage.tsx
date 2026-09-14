@@ -43,16 +43,14 @@ export const SettingsPage = () => {
                       descriptor,
                       entityIndex,
                     }) => {
-                      return descriptor.dataKind.map((dataKind) => {
-                        const handler =
-                          ENTITY_DATA_KIND_HANDLERS[dataKind];
+                      return descriptor.data.map(({ kind: dataKind, group }) => {
+                        const handler = ENTITY_DATA_KIND_HANDLERS[dataKind];
 
-                        const SettingsComponent =
-                          handler.SettingsComponent;
+                        const SettingsComponent = handler.SettingsComponent;
 
                         return (
                           <SettingsComponent
-                            key={`${descriptor.name}:${dataKind}`}
+                            key={`${descriptor.name}:${dataKind}:${group}`}
                             descriptor={descriptor}
                             entityIndex={entityIndex}
                           />

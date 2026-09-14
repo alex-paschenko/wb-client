@@ -1,13 +1,11 @@
 // app/src/shared/types/server-events.ts
-import type {
-  FrontendWsServerControlMessage,
-} from './frontend-ws.js';
+
+import type { FrontendWsServerControlMessage } from './frontend-ws.js';
 import type {
   MarketRollingStatisticsByMarket,
 } from './market-statistics-rolling.js';
-import type {
-  SignalChangedEvent,
-} from './signal.js';
+import type { SignalChangedEvent } from './signal.js';
+import type { MarketRollingStatistics } from './market-statistics-rolling.js';
 
 export const SERVER_WS_EVENT_TYPE = {
   signalChanged: 'signal-changed',
@@ -16,8 +14,10 @@ export const SERVER_WS_EVENT_TYPE = {
 
 export interface MarketRollingUpdatedWsEvent {
   type: typeof SERVER_WS_EVENT_TYPE.marketRollingUpdated;
+  clientId: number;
   payload: {
-    rollingStatisticsByMarket: MarketRollingStatisticsByMarket;
+    marketName: string;
+    rollingStatistics: MarketRollingStatistics;
   };
 }
 

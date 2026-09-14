@@ -55,7 +55,7 @@ type AppEventMap = EventMapBase & {
   ];
 
   marketRollingUpdated: [
-    marketName: string,
+    clientId: number,
     rollingStatistics: MarketRollingStatistics,
   ];
 

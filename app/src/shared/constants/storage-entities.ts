@@ -13,6 +13,8 @@ export const ENTITY_DATA_KIND = [
   'line',
   'ohlc',
   'priceLine',
+  'speedLine',
+  'accelerationLine',
 ] as const;
 
 export type EntityDataKind = typeof ENTITY_DATA_KIND[number];

@@ -180,10 +180,10 @@ export class FrontendWsClient {
   }
 
   private handleJsonMessage(data: string): void {
-    let message: FrontendWsServerControlMessage;
+    let message: FrontendWsJsonMessage;
 
     try {
-      message = JSON.parse(data) as FrontendWsServerControlMessage;
+      message = JSON.parse(data) as FrontendWsJsonMessage;
     } catch {
       return;
     }

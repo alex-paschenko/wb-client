@@ -16,8 +16,12 @@ export class CandleEntity extends BaseEntity<MarketCandle> {
       kind: 'candles',
       name: CANDLE_NAME,
       codec: 'candle v1.0',
-      group: 'candles',
-      dataKind: ['ohlc', 'priceLine'],
+      data: [
+        { kind: 'ohlc', group: 'candles' },
+        { kind: 'priceLine', group: 'price' },
+        { kind: 'speedLine', group: 'speed' },
+        { kind: 'accelerationLine', group: 'speed' },
+      ],
       requiresRemovedValues: true,
       empty: {
         receivedAt: 0,

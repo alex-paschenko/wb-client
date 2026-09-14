@@ -22,6 +22,8 @@ export const i18nResources = {
           line: 'Линия',
           ohlc: 'Свечи',
           priceLine: 'Линия цены',
+          speedLine: 'Линия скорости',
+          accelerationLine: 'Линия ускорения',
         },
 
         entity: {
@@ -138,6 +140,8 @@ export const i18nResources = {
           line: 'Line',
           ohlc: 'Candles',
           priceLine: 'Price line',
+          speedLine: 'Speed line',
+          accelerationLine: 'Acceleration line',
         },
 
         entity: {

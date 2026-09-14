@@ -65,6 +65,10 @@ export class MarketStatisticsController
   private unsubscribeDelta: (() => void) | null = null;
   private unsubscribeRolling: (() => void) | null = null;
 
+  private readonly pendingSingleRequests = new Set<number>();
+
+  private readonly pendingSubscriptions = new Set<number>();
+
   private windowTimer: ReturnType<typeof setInterval> | null = null;
 
   public constructor(
@@ -84,15 +88,15 @@ export class MarketStatisticsController
   protected override onFirstSubscriber(): void {
     this.unsubscribeSnapshot = appEvents.on(
       'storageSnapshotReceived',
-      (snapshot) => this.handleSnapshot(snapshot),
+      (clientId, snapshot) => this.handleSnapshot(clientId, snapshot),
       this.marketName,
     );
 
-    this.unsubscribeDelta = appEvents.on(
-      'storageDeltaReceived',
-      (delta) => this.handleDelta(delta),
-      this.marketName,
-    );
+  this.unsubscribeDelta = appEvents.on(
+    'storageDeltaReceived',
+    (clientId, delta) => this.handleDelta(clientId, delta),
+    this.marketName,
+  );
 
     this.unsubscribeRolling = appEvents.on(
       'marketRollingUpdated',
@@ -112,10 +116,15 @@ export class MarketStatisticsController
       [this.marketName],
     );
 
-    appEvents.emit(
+    const fullSyncClientId = this.getOnlyClientId(
+      appEvents.emit(
+        'requestMarketStatisticsFullSync',
+        this.marketName,
+      ),
       'requestMarketStatisticsFullSync',
-      this.marketName,
     );
+
+    this.pendingSingleRequests.add(fullSyncClientId);
 
     this.notify();
   }
@@ -147,6 +156,9 @@ export class MarketStatisticsController
     );
 
     this.storage = null;
+
+    this.pendingSingleRequests.clear();
+    this.pendingSubscriptions.clear();
   }
 
   public setInterval(interval: number): void {
@@ -155,7 +167,14 @@ export class MarketStatisticsController
     );
   }
 
-  private handleSnapshot(snapshot: PredecodedBinary): void {
+  private handleSnapshot(
+    clientId: number,
+    snapshot: PredecodedBinary,
+  ): void {
+    if (!this.isPendingRequest(clientId)) {
+      return;
+    }
+
     const storage = new Storage(this.marketName);
 
     storage.applySnapshot(snapshot);
@@ -167,6 +186,17 @@ export class MarketStatisticsController
       storage,
     });
 
+    const subscriptionClientId = this.getOnlyClientId(
+      appEvents.emit(
+        'changeMarketStatisticsSubscription',
+        FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
+        [this.marketName],
+      ),
+      'changeMarketStatisticsSubscription',
+    );
+
+    this.pendingSubscriptions.add(subscriptionClientId);
+
     appEvents.emit(
       'changeMarketStatisticsSubscription',
       FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
@@ -174,7 +204,11 @@ export class MarketStatisticsController
     );
   }
 
-  private handleDelta(delta: PredecodedBinary): void {
+  private handleDelta(clientId: number, delta: PredecodedBinary): void {
+    if (!this.isPendingRequest(clientId)) {
+      return;
+    }
+
     if (!this.storage) {
       /*
        * A delta without a snapshot cannot be applied safely.
@@ -212,5 +246,27 @@ export class MarketStatisticsController
     viewState: MarketStatisticsViewState,
   ): void {
     this.patchState(viewState);
+  }
+
+  private getOnlyClientId(
+    results: readonly number[],
+    eventName: string,
+  ): number {
+    if (results.length !== 1) {
+      throw new Error(
+        `Expected exactly one listener result for "${eventName}", ` +
+        `got ${results.length}`,
+      );
+    }
+
+    return results[0];
+  }
+
+  private isPendingRequest(clientId: number): boolean {
+    if (this.pendingSingleRequests.delete(clientId)) {
+      return true;
+    }
+
+    return this.pendingSubscriptions.has(clientId);
   }
 }

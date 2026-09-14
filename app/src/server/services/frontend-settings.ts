@@ -10,11 +10,12 @@ import {
 import {
   STORAGE_ENTITY_KINDS,
 } from '../../shared/constants/storage-entities.js';
-import type {
-  EntitiesSettings,
-  EntityDataKindSettings,
-  FrontendSettingsValue,
-  MarketViewStateItem,
+import {
+  isMarketViewState,
+  type EntitiesSettings,
+  type EntityDataKindSettings,
+  type FrontendSettingsValue,
+  type MarketViewStateItem,
 } from '../../shared/types/frontend-settings.js';
 import type {
   WritableStorageStructure,
@@ -136,5 +137,4 @@ export class FrontendSettingsService {
   }
 }
 
-export const frontendSettingsService =
-  new FrontendSettingsService();
+export const frontendSettingsService = new FrontendSettingsService();

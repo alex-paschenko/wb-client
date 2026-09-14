@@ -143,23 +143,41 @@ export class FrontendWsController {
 
     this.unsubscribeBinaryMessage =
       frontendWsClient.onBinaryMessage((data) => {
-        this.handleBinaryMessage(data);
+        try {
+          this.handleBinaryMessage(data);
+        } catch (error) {
+          const appContext = this.getCurrentAppContext();
+
+          const message = error instanceof Error
+            ? error.stack ?? error.message
+            : String(error);
+
+          appContext.logger.error(
+            `Binary WS processing failed: ${message}`,
+          );
+
+          this.lastServerId = 0;
+          frontendWsClient.reconnect();
+        }
       });
 
     this.unsubscribeRequestSettings =
-      appEvents.on('requestSettings', () => {
-        this.sendRequestSettings();
-      });
+      appEvents.on(
+        'requestSettings',
+        () => this.sendRequestSettings(),
+      );
 
     this.unsubscribeSubscribeMarketInfo =
-      appEvents.on('subscribeMarketInfo', () => {
-        this.sendSubscribeMarketInfo();
-      });
+      appEvents.on(
+        'subscribeMarketInfo',
+        () => this.sendSubscribeMarketInfo(),
+      );
 
     this.unsubscribeRequestStorageEntities =
-      appEvents.on('requestStorageEntities', () => {
-        this.sendRequestStorageEntities();
-      });
+      appEvents.on(
+        'requestStorageEntities',
+        () => this.sendRequestStorageEntities(),
+      );
 
     this.unsubscribeSettingsChanged =
       appEvents.on('settingsChanged', (settings) => {
@@ -169,25 +187,21 @@ export class FrontendWsController {
     this.unsubscribeRequestMarketStatisticsFullSync =
       appEvents.on(
         'requestMarketStatisticsFullSync',
-        (marketName) => {
-          this.sendRequestMarketStatisticsFullSync(marketName);
-        },
+        (marketName) => this.sendRequestMarketStatisticsFullSync(marketName),
       );
 
     this.unsubscribeChangeMarketStatisticsSubscription =
       appEvents.on(
         'changeMarketStatisticsSubscription',
-        (action, markets) => {
-          this.sendChangeMarketStatisticsSubscription(action, markets);
-        },
+        (action, markets) =>
+          this.sendChangeMarketStatisticsSubscription(action, markets),
       );
 
     this.unsubscribeChangeMarketRollingSubscription =
       appEvents.on(
         'changeMarketRollingSubscription',
-        (action, markets) => {
-          this.sendChangeMarketRollingSubscription(action, markets);
-        },
+        (action, markets) =>
+          this.sendChangeMarketRollingSubscription(action, markets),
       );
 
     frontendWsClient.connect();
@@ -228,30 +242,42 @@ export class FrontendWsController {
     this.getAppContext = null;
   }
 
-  private sendRequestSettings(): void {
+  private sendRequestSettings(): number {
+    const clientId = frontendWsClient.createClientId();
+
     frontendWsClient.sendJson({
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestSettings,
-      clientId: frontendWsClient.createClientId(),
+      clientId,
       params: {},
     });
+
+    return clientId;
   }
 
-  private sendSubscribeMarketInfo(): void {
+  private sendSubscribeMarketInfo(): number {
+    const clientId =  frontendWsClient.createClientId();
+
     frontendWsClient.sendJson({
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription,
-      clientId: frontendWsClient.createClientId(),
+      clientId,
       params: {
         entity: FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketInfo,
       },
     });
+
+    return clientId;
   }
 
-  private sendRequestStorageEntities(): void {
+  private sendRequestStorageEntities(): number {
+    const clientId = frontendWsClient.createClientId();
+
     frontendWsClient.sendJson({
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestStorageEntities,
-      clientId: frontendWsClient.createClientId(),
+      clientId,
       params: {},
     });
+
+    return clientId;
   }
 
   private sendSettingsChanged(settings: FrontendSettings): void {
@@ -262,42 +288,54 @@ export class FrontendWsController {
     });
   }
 
-  private sendRequestMarketStatisticsFullSync(marketName: string): void {
+  private sendRequestMarketStatisticsFullSync(marketName: string): number {
+    const clientId = frontendWsClient.createClientId();
+
     frontendWsClient.sendJson({
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestMarketStatisticsFullSync,
-      clientId: frontendWsClient.createClientId(),
+      clientId,
       params: { marketName },
     });
+
+    return clientId;
   }
 
   private sendChangeMarketStatisticsSubscription(
     action: FrontendWsSubscriptionAction,
     markets: string[],
-  ): void {
+  ): number {
+    const clientId = frontendWsClient.createClientId();
+
     frontendWsClient.sendJson({
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.changeSubscription,
-      clientId: frontendWsClient.createClientId(),
+      clientId,
       params: {
         entity: FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics,
         action,
         markets,
       },
     });
+
+    return clientId;
   }
 
   private sendChangeMarketRollingSubscription(
     action: FrontendWsSubscriptionAction,
     markets: string[],
-  ): void {
+  ): number {
+    const clientId = frontendWsClient.createClientId();
+
     frontendWsClient.sendJson({
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.changeSubscription,
-      clientId: frontendWsClient.createClientId(),
+      clientId,
       params: {
         entity: FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketRolling,
         action,
         markets,
       },
     });
+
+    return clientId;
   }
 
   private handleBinaryMessage(data: Uint8Array<ArrayBufferLike>): void {
@@ -329,6 +367,7 @@ export class FrontendWsController {
           eventName: 'storageSnapshotReceived',
           condition: marketName,
         },
+        transport.clientId,
         predecoded,
       );
 
@@ -341,6 +380,7 @@ export class FrontendWsController {
           eventName: 'storageDeltaReceived',
           condition: marketName,
         },
+        transport.clientId,
         predecoded,
       );
 

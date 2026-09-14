@@ -9,7 +9,11 @@ import {
   FRONTEND_WS_SUBSCRIPTION_ENTITIES,
 } from '../../shared/constants/frontend-ws.js';
 import { FRONTEND_WS_CODEC } from '../../shared/constants/settings.js';
-import { MINUTE } from '../../shared/constants/time.js';
+import {
+  MINUTE,
+  SECOND,
+  SECONDS,
+} from '../../shared/constants/time.js';
 import { temporaryUserId } from '../../shared/constants/users.js';
 import { globalStateService } from '../../shared/services/global-state.js';
 import { FrontendSettings } from '../../shared/services/frontend-settings.js';
@@ -41,10 +45,14 @@ import { frontendSettingsService } from './frontend-settings.js';
 import { marketStatisticsRollingService } from './market-statistics-rolling.js';
 
 const SERVER_EVENT_EXPIRATION = 1 * MINUTE;
+const FULL_SYNC_SUBSCRIPTION_TIMEOUT = 10 * SECONDS;
+const FULL_SYNC_WATCHDOG_INTERVAL = 1 * SECOND;
 
 let serverEventId = 0;
 
-type MarketSubscriptionState = Set<string>;
+type MarketStatisticsSubscriptionState = Map<string, number>;
+type MarketRollingSubscriptionState = Set<string>;
+type PendingFullSyncState = Map<string, number>;
 
 interface PendingServerEvent {
   socket: WebSocket;
@@ -66,13 +74,10 @@ type FrontendWsClientState = {
   isReady: boolean;
   settings: FrontendSettings;
   nextServerId: number;
-  marketInfoSubscription: {
-    clientId: number;
-    isSubscribed: boolean;
-  };
-  marketStatisticsSubscription: MarketSubscriptionState;
-  marketRollingSubscription: MarketSubscriptionState;
-  marketsBetweenFullSyncAndSubscription: MarketSubscriptionState;
+  marketInfoSubscription: { clientId: number; isSubscribed: boolean; };
+  marketStatisticsSubscription: MarketStatisticsSubscriptionState;
+  marketRollingSubscription: MarketRollingSubscriptionState;
+  marketsBetweenFullSyncAndSubscription: PendingFullSyncState;
 };
 
 export class FrontendWsService {
@@ -81,6 +86,8 @@ export class FrontendWsService {
   private readonly serverEvents = new Map<number, PendingServerEvent>();
 
   private serverEventExpirationTimer:
+    ReturnType<typeof setInterval> | null = null;
+  private fullSyncWatchdogTimer:
     ReturnType<typeof setInterval> | null = null;
 
   public start(): void {
@@ -125,13 +132,21 @@ export class FrontendWsService {
       () => { this.clearExpiredServerEvents(); },
       SERVER_EVENT_EXPIRATION,
     );
+
+    this.fullSyncWatchdogTimer = setInterval(
+      () => { this.processFullSyncWatchdog(); },
+      FULL_SYNC_WATCHDOG_INTERVAL,
+    );
   }
 
   private handleClientClose(socket: WebSocket): void {
     const state = this.clients.get(socket);
 
     if (state) {
-      for (const marketName of state.marketsBetweenFullSyncAndSubscription) {
+      for (
+        const marketName of
+        state.marketsBetweenFullSyncAndSubscription.keys()
+      ) {
         this.lowerStatisticsStorageFreeze(marketName);
       }
     }
@@ -158,9 +173,9 @@ export class FrontendWsService {
       settings: FrontendSettings.createDefault(),
       nextServerId: 1,
       marketInfoSubscription: { clientId: 0, isSubscribed: false },
-      marketStatisticsSubscription: new Set(),
+      marketStatisticsSubscription: new Map(),
       marketRollingSubscription: new Set(),
-      marketsBetweenFullSyncAndSubscription: new Set(),
+      marketsBetweenFullSyncAndSubscription: new Map(),
     };
   }
 
@@ -364,9 +379,10 @@ export class FrontendWsService {
     const freezeStorage =
       !state.marketsBetweenFullSyncAndSubscription.has(marketName);
 
-    if (freezeStorage) {
-      state.marketsBetweenFullSyncAndSubscription.add(marketName);
-    }
+    state.marketsBetweenFullSyncAndSubscription.set(
+      marketName,
+      Date.now() + FULL_SYNC_SUBSCRIPTION_TIMEOUT,
+    );
 
     this.sendServerEvent(
       SERVER_EVENT.storageFullSyncRequest,
@@ -407,12 +423,18 @@ export class FrontendWsService {
 
   private handleStorageDeltaCreated(event: StorageDeltaCreatedEvent): void {
     for (const [socket, state] of this.clients) {
-      if (!state.isReady ||
-        !state.marketStatisticsSubscription.has(event.marketName)) {
+      if (!state.isReady) {
         continue;
       }
 
-      this.sendBinary(socket, state, 0, event.data);
+      const clientId =
+        state.marketStatisticsSubscription.get(event.marketName);
+
+      if (clientId === undefined) {
+        continue;
+      }
+
+      this.sendBinary(socket, state, clientId, event.data);
     }
   }
 
@@ -439,14 +461,9 @@ export class FrontendWsService {
       return;
     }
 
-    if (
-      message.params.entity !==
-      FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics
-    ) {
-      return;
-    }
-
-    state.marketStatisticsSubscription = new Set(message.params.markets);
+    throw new Error(
+      `Unknown subscription entity: ${message.params.entity}.`,
+    );
   }
 
   private handleChangeSubscription(
@@ -476,7 +493,10 @@ export class FrontendWsService {
 
     if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.add) {
       for (const marketName of message.params.markets) {
-        state.marketStatisticsSubscription.add(marketName);
+        state.marketStatisticsSubscription.set(
+          marketName,
+          message.clientId,
+        );
 
         if (state.marketsBetweenFullSyncAndSubscription.delete(marketName)) {
           this.lowerStatisticsStorageFreeze(marketName);
@@ -488,6 +508,10 @@ export class FrontendWsService {
 
     for (const marketName of message.params.markets) {
       state.marketStatisticsSubscription.delete(marketName);
+
+      if (state.marketsBetweenFullSyncAndSubscription.delete(marketName)) {
+        this.lowerStatisticsStorageFreeze(marketName);
+      }
     }
   }
 
@@ -552,6 +576,32 @@ export class FrontendWsService {
         eventId,
       } as ServerEventMap[K],
     );
+  }
+
+  private processFullSyncWatchdog(): void {
+    const now = Date.now();
+
+    for (const [socket, state] of this.clients) {
+      if (socket.readyState !== WebSocket.OPEN) {
+        continue;
+      }
+
+      for (
+        const validUntil of
+        state.marketsBetweenFullSyncAndSubscription.values()
+      ) {
+        if (validUntil > now) {
+          continue;
+        }
+
+        socket.close(
+          1008,
+          'Full sync subscription timeout',
+        );
+
+        break;
+      }
+    }
   }
 
   private clearExpiredServerEvents(): void {

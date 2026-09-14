@@ -18,13 +18,9 @@ import {
 } from '../utilities/event-emitter';
 
 type AppEventMap = EventMapBase & {
-  frontendWsConnectionStateChanged: [
-    isConnected: boolean,
-  ];
+  frontendWsConnectionStateChanged: [ isConnected: boolean ];
 
-  synchronizationStateChanged: [
-    stateKey: string,
-  ];
+  synchronizationStateChanged: [ stateKey: string ];
 
   requestSettings: [];
 
@@ -34,33 +30,19 @@ type AppEventMap = EventMapBase & {
 
   synchronizationCompleted: [];
 
-  synchronizationFailed: [
-    error: unknown,
-  ];
+  synchronizationFailed: [ error: unknown ];
 
-  startupSettingsReceived: [
-    settings: FrontendSettings,
-  ];
+  startupSettingsReceived: [ settings: FrontendSettings ];
 
-  synchronizationSettingsProcessed: [
-    settings: FrontendSettings,
-  ];
+  synchronizationSettingsProcessed: [ settings: FrontendSettings ];
 
-  startupStorageEntitiesReceived: [
-    entities: EntityDesriptor[],
-  ];
+  startupStorageEntitiesReceived: [ entities: EntityDesriptor[] ];
 
-  requestMarketStatisticsFullSync: [
-    marketName: string,
-  ];
+  requestMarketStatisticsFullSync: [ marketName: string ];
 
-  settingsChanged: [
-    settings: FrontendSettings,
-  ];
+  settingsChanged: [ settings: FrontendSettings ];
 
-  marketsUpdated: [
-    markets: MarketsByName,
-  ];
+  marketsUpdated: [ markets: MarketsByName ];
 
   changeMarketStatisticsSubscription: [
     action: FrontendWsSubscriptionAction,
@@ -78,12 +60,28 @@ type AppEventMap = EventMapBase & {
   ];
 
   storageSnapshotReceived: [
+    clientId: number,
     binary: PredecodedBinary,
   ];
 
   storageDeltaReceived: [
+    clientId: number,
     binary: PredecodedBinary,
   ];
 };
 
-export const appEvents = new EventEmitter<AppEventMap>();
+type AppEventResultMap = {
+  requestSettings: number;
+  subscribeMarketInfo: number;
+  requestStorageEntities: number;
+
+  requestMarketStatisticsFullSync: number;
+
+  changeMarketStatisticsSubscription: number;
+  changeMarketRollingSubscription: number;
+};
+
+export const appEvents = new EventEmitter<
+  AppEventMap,
+  AppEventResultMap
+>();

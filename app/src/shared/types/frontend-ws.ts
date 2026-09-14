@@ -134,19 +134,8 @@ export type FrontendWsRequestMarketStatisticsFullSyncMessage =
     }
   >;
 
-export type FrontendWsSetMarketStatisticsSubscriptionMessage =
-  FrontendWsClientRequest<
-    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription,
-    {
-      entity:
-        typeof FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketStatistics;
-      markets: string[];
-    }
-  >;
-
 export type FrontendWsSetSubscriptionMessage =
-  | FrontendWsSetMarketInfoSubscriptionMessage
-  | FrontendWsSetMarketStatisticsSubscriptionMessage;
+  FrontendWsSetMarketInfoSubscriptionMessage;
 
 export type FrontendWsChangeSubscriptionMessage =
   FrontendWsClientRequest<

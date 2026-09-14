@@ -33,7 +33,7 @@ export class FrontendSettingsDao {
       insert into frontend_settings ${
         this.q({
           user_id: userId,
-          settings: this.q.json(settings),
+          settings: this.q.json(settings as Parameters<Sql['json']>[0]),
         })
       }
       on conflict (user_id)
@@ -47,5 +47,4 @@ export class FrontendSettingsDao {
   }
 }
 
-export const frontendSettingsDao =
-  new FrontendSettingsDao(q);
+export const frontendSettingsDao = new FrontendSettingsDao(q);

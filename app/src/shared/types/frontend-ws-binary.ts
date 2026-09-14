@@ -1,11 +1,7 @@
 // app/src/shared/types/frontend-ws-binary.ts
-export type FrontendWsBinaryHeader = {
-  messageType: number;
+
+export interface FrontendWsTransportData {
   serverId: number;
   clientId: number;
-};
-
-export type FrontendWsBinaryPacket = {
-  header: FrontendWsBinaryHeader;
-  payload: Uint8Array;
-};
+  data: Uint8Array<ArrayBufferLike>;
+}

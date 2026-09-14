@@ -38,10 +38,8 @@ export const FRONTEND_WS_CONTROL_MESSAGE_TYPES = {
   settingsChanged: 'settingsChanged',
   settingsAccepted: 'settingsAccepted',
 
-  requestMarketIndicatorsRegistry:
-    'requestMarketIndicatorsRegistry',
-  marketIndicatorsRegistryLoaded:
-    'marketIndicatorsRegistryLoaded',
+  requestStorageEntities: 'requestStorageEntities',
+  storageEntitiesLoaded: 'storageEntitiesLoaded',
 
   marketsUpdated: 'marketsUpdated',
 

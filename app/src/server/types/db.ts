@@ -1,3 +1,5 @@
+// app/src/server/types/db.ts
+
 import type { QueryFragment } from '../db/client';
 
 export interface SelectParams {

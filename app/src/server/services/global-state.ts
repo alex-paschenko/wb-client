@@ -1,16 +1,11 @@
 // app/src/server/services/global-state.ts
-import {
-  globalStateService,
-} from '../../shared/services/global-state.js';
-import {
-  SERVER_EVENT,
-} from '../constants/events.js';
-import {
-  eventBus,
-} from './event-bus.js';
+
+import { globalStateService } from '../../shared/services/global-state.js';
+import { SERVER_EVENT } from '../constants/events.js';
+import { eventBus } from './event-bus.js';
 
 export class ServerGlobalStateService {
-  private unsubscribeIndicatorRegistry:
+  private unsubscribeStorageEntities:
     (() => void) | null = null;
 
   private unsubscribeMarkets:
@@ -18,7 +13,7 @@ export class ServerGlobalStateService {
 
   public start(): void {
     if (
-      this.unsubscribeIndicatorRegistry ||
+      this.unsubscribeStorageEntities ||
       this.unsubscribeMarkets
     ) {
       return;
@@ -26,26 +21,22 @@ export class ServerGlobalStateService {
 
     this.unsubscribeMarkets = eventBus.on(
       SERVER_EVENT.marketsInfoUpdated,
-      (event) =>
-        globalStateService.setMarkets(event.markets, event.marketNames),
+      (event) => globalStateService.setMarkets(event.markets, event.marketNames),
     );
 
-    this.unsubscribeIndicatorRegistry = eventBus.on(
-      SERVER_EVENT.marketIndicatorsRegistryReady,
-      (event) => {
-        globalStateService.setIndicatorRegistry(event.registry);
-      },
+    this.unsubscribeStorageEntities = eventBus.on(
+      SERVER_EVENT.addStorageEntities,
+      (event) => { globalStateService.addStorageEntities(event.entities); },
     );
   }
 
   public stop(): void {
-    this.unsubscribeIndicatorRegistry?.();
+    this.unsubscribeStorageEntities?.();
     this.unsubscribeMarkets?.();
 
-    this.unsubscribeIndicatorRegistry = null;
+    this.unsubscribeStorageEntities = null;
     this.unsubscribeMarkets = null;
   }
 }
 
-export const serverGlobalStateService =
-  new ServerGlobalStateService();
+export const serverGlobalStateService = new ServerGlobalStateService();

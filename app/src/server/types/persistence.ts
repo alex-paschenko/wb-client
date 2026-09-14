@@ -1,33 +1,39 @@
 // app/src/server/types/persistence.ts
 
 import type {
-  MarketIndicatorValues
-} from '../../shared/types/market-indicators';
+  StorageEntityKind,
+} from '../../shared/constants/storage-entities.js';
 import type {
-  MarketCandle
-} from '../../shared/types/market-statistics-storage';
+  StorageChunk,
+  StorageChunkSet,
+} from '../../shared/types/storage.js';
 
-export interface MarketCandleAddRow extends MarketCandle {
-  marketName: string;
-  level: number;
+export interface StorageChunkRow
+  extends Omit<StorageChunk, 'view'> {
+  chunkSetId: number;
+  kind: StorageEntityKind;
+  name: string;
+  isActive: boolean;
+
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
-export interface MarketCandleRemoveRow {
+export interface StorageChunkSetRow
+  extends Omit<StorageChunkSet, 'chunks'> {
+  serverId: number;
   marketName: string;
-  level: number;
-  timeThreshold: number;
+  isActive: boolean;
+  chunks: StorageChunkRow[];
 }
 
-export interface MarketCandleIndicatorsChange {
+export type ActiveStorageChunkSetPersistenceChange =
+  StorageChunkSetRow & { isActive: true; };
+
+
+export interface StoragePersistenceSnapshot {
   marketName: string;
-  level: number;
   startedAt: number;
   endedAt: number;
-  indicators: MarketIndicatorValues;
-}
-
-export interface MarketStatisticsPersistenceChanges {
-  newCandles: MarketCandleAddRow[];
-  deleteBefore: MarketCandleRemoveRow[];
-  indicatorChanged: MarketCandleIndicatorsChange[];
+  data: Uint8Array;
 }

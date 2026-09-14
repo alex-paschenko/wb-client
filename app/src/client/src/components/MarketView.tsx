@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 
 import {
   MARKET_STATISTICS_LEVEL_DURATIONS,
-} from '../../../shared/constants/market-statistics-config';
+} from '../../../shared/constants/storage-config';
 import type {
   OpenMarketViewState,
 } from '../../../shared/types/frontend-settings';
@@ -14,12 +14,6 @@ import { useController } from '../hooks/useController';
 import {
   useMarketStatisticsController,
 } from '../hooks/useMarketStatisticsController';
-import type {
-  ChartPanelData,
-} from '../utilities/chart-panel';
-import type {
-  ChartPanelSeries,
-} from '../utilities/chart-panel-series-manager';
 import { DashboardItem } from './DashboardItem';
 import { DropdownButton } from './DropdownButton';
 import { MarketChart } from './MarketChart';
@@ -30,9 +24,8 @@ interface MarketViewProps {
   index: number;
 }
 
-const PRICE_PANEL_GROUP = 'price';
-
-const defaultDuration = MARKET_STATISTICS_LEVEL_DURATIONS[0];
+const defaultDuration =
+  MARKET_STATISTICS_LEVEL_DURATIONS[0];
 
 export const MarketView = ({
   marketName,
@@ -42,102 +35,44 @@ export const MarketView = ({
   const { t } = useTranslation();
 
   const {
-    indicatorRegistry,
+    entities,
     settings,
     closeMarket,
     setMarketViewState,
     moveMarket,
   } = useAppContext();
 
-  const controller = useMarketStatisticsController(marketName);
-  const controllerState = useController(controller);
+  const controller =
+    useMarketStatisticsController(marketName);
+
+  const controllerState =
+    useController(controller);
 
   const selectedDuration = useMemo(() => {
     return MARKET_STATISTICS_LEVEL_DURATIONS.find(
-      (item) => item.interval === controllerState.selectedInterval,
+      (item) =>
+        item.interval ===
+        controllerState.selectedInterval,
     ) ?? defaultDuration;
-  }, [controllerState.selectedInterval]);
+  }, [
+    controllerState.selectedInterval,
+  ]);
 
   const durationItems = useMemo(() => {
-    return MARKET_STATISTICS_LEVEL_DURATIONS.map((duration) => ({
-      value: duration.interval,
-      label: t(`time.units.${duration.unit}`, {
-        count: duration.count,
+    return MARKET_STATISTICS_LEVEL_DURATIONS.map(
+      (duration) => ({
+        value: duration.interval,
+
+        label: t(
+          `time.units.${duration.unit}`,
+          {
+            count: duration.count,
+          },
+        ),
       }),
-    }));
-  }, [t]);
-
-  const panels = useMemo<ChartPanelData[]>(() => {
-    const seriesByGroup =
-      new Map<string, ChartPanelSeries[]>();
-
-    if (indicatorRegistry) {
-      const registryByIndicatorName = new Map(
-        indicatorRegistry.map((entry) => [
-          entry.name,
-          entry,
-        ]),
-      );
-
-      for (const indicator of controllerState.indicatorData) {
-        const indicatorSettings =
-          settings.getIndicator(indicator.indicatorName);
-
-        if (!indicatorSettings?.isVisible) {
-          continue;
-        }
-
-        const registryEntry =
-          registryByIndicatorName.get(indicator.indicatorName);
-
-        if (!registryEntry) {
-          throw new Error(
-            `Cannot render indicator ` +
-            `"${indicator.indicatorName}": ` +
-            `registry entry is missing`,
-          );
-        }
-
-        let groupSeries =
-          seriesByGroup.get(registryEntry.group);
-
-        if (!groupSeries) {
-          groupSeries = [];
-          seriesByGroup.set(registryEntry.group, groupSeries);
-        }
-
-        groupSeries.push({
-          indicatorName: indicator.indicatorName,
-          color: indicatorSettings.color,
-          data: indicator.data,
-        });
-      }
-    }
-
-    const priceSeries =
-      seriesByGroup.get(PRICE_PANEL_GROUP) ?? [];
-
-    const secondaryPanels = Array.from(seriesByGroup.entries())
-      .filter(([group]) => group !== PRICE_PANEL_GROUP)
-      .sort(([leftGroup], [rightGroup]) => {
-        return leftGroup.localeCompare(rightGroup);
-      })
-      .map(([group, series]) => ({
-        group,
-        series,
-      }));
-
-    return [
-      {
-        group: PRICE_PANEL_GROUP,
-        series: priceSeries,
-      },
-      ...secondaryPanels,
-    ];
+    );
   }, [
-    controllerState.indicatorData,
-    indicatorRegistry,
-    settings,
+    t,
   ]);
 
   return (
@@ -147,25 +82,42 @@ export const MarketView = ({
       controlsVisibility="hover"
       onClose={() => closeMarket(marketName)}
       onSizeChange={(nextSize) => {
-        setMarketViewState(marketName, nextSize);
+        setMarketViewState(
+          marketName,
+          nextSize,
+        );
       }}
       draggable
       onDragStart={(event) => {
-        event.dataTransfer.setData('text/plain', marketName);
-        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData(
+          'text/plain',
+          marketName,
+        );
+
+        event.dataTransfer.effectAllowed =
+          'move';
       }}
       onDragOver={(event) => {
         event.preventDefault();
-        event.dataTransfer.dropEffect = 'move';
+        event.dataTransfer.dropEffect =
+          'move';
       }}
       onDrop={(event) => {
         event.preventDefault();
 
         const draggedMarketName =
-          event.dataTransfer.getData('text/plain');
+          event.dataTransfer.getData(
+            'text/plain',
+          );
 
-        if (draggedMarketName && draggedMarketName !== marketName) {
-          moveMarket(draggedMarketName, index);
+        if (
+          draggedMarketName &&
+          draggedMarketName !== marketName
+        ) {
+          moveMarket(
+            draggedMarketName,
+            index,
+          );
         }
       }}
     >
@@ -203,11 +155,20 @@ export const MarketView = ({
         <div className="min-h-0 flex-1">
           <div className="relative h-full w-full">
             <MarketChart
-              candleData={controllerState.candleData}
-              candleLineColor={settings.getCandleColor()}
-              panels={panels}
-              chartVersion={controllerState.chartVersion}
-              visibleRange={controllerState.visibleRange}
+              storage={controllerState.storage}
+              entities={entities}
+              settings={settings}
+              startIndex={controllerState.startIndex}
+              endIndex={controllerState.endIndex}
+              updateMode={
+                controllerState.chartUpdateMode
+              }
+              chartVersion={
+                controllerState.chartVersion
+              }
+              visibleRange={
+                controllerState.visibleRange
+              }
             />
 
             <div className="absolute left-2 top-2 z-30 flex items-center gap-2 rounded-md bg-panel/45 px-2 py-1 text-xs text-muted opacity-45 transition hover:bg-panel/90 hover:opacity-100">
@@ -216,9 +177,13 @@ export const MarketView = ({
               </span>
 
               <DropdownButton
-                label={t(`time.units.${selectedDuration.unit}`, {
-                  count: selectedDuration.count,
-                })}
+                label={t(
+                  `time.units.${selectedDuration.unit}`,
+                  {
+                    count:
+                      selectedDuration.count,
+                  },
+                )}
                 items={durationItems}
                 onSelect={(interval) => {
                   controller.setInterval(interval);

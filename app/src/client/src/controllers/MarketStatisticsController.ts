@@ -1,32 +1,34 @@
 // app/src/client/src/controllers/MarketStatisticsController.ts
+
 import {
   FRONTEND_WS_SUBSCRIPTION_ACTIONS,
 } from '../../../shared/constants/frontend-ws';
 import {
   MARKET_STATISTICS_LEVEL_DURATIONS,
-} from '../../../shared/constants/market-statistics-config';
+} from '../../../shared/constants/storage-config';
+import { SECONDS } from '../../../shared/constants/time';
+import { Storage } from '../../../shared/services/storage';
 import type {
   MarketRollingStatistics,
 } from '../../../shared/types/market-statistics-rolling';
 import type {
-  FullMarketStatisticsPayload,
-  MarketStatisticsBinaryPayload,
-} from '../../../shared/utilities/market-statistics-payload-codec';
+  PredecodedBinary,
+} from '../../../shared/utilities/codecs/entire-binary-codec';
 import { appEvents } from '../events/app-events';
 import {
   BaseController,
-  type ControllerUnusedCallback
+  type ControllerUnusedCallback,
 } from './BaseController';
 import {
   createInitialMarketStatisticsViewState,
   MarketStatisticsView,
   type MarketStatisticsViewState,
 } from './MarketStatisticsView';
-import { SECONDS } from '../../../shared/constants/time';
 
 export interface MarketStatisticsControllerState
   extends MarketStatisticsViewState {
   rollingStatistics: MarketRollingStatistics | null;
+  storage: Storage | null;
 }
 
 export type MarketStatisticsChartMode = {
@@ -45,6 +47,7 @@ export const createInitialMarketStatisticsControllerState = (
 ): MarketStatisticsControllerState => ({
   ...createInitialMarketStatisticsViewState(interval),
   rollingStatistics: null,
+  storage: null,
 });
 
 export interface MarketStatisticsControllerOptions {
@@ -56,12 +59,10 @@ export class MarketStatisticsController
   extends BaseController<MarketStatisticsControllerState> {
   private readonly view: MarketStatisticsView;
 
-  private unsubscribeFullSync: (() => void) | null = null;
+  private storage: Storage | null = null;
 
+  private unsubscribeSnapshot: (() => void) | null = null;
   private unsubscribeDelta: (() => void) | null = null;
-
-  private unsubscribeIndicatorChanges: (() => void) | null = null;
-
   private unsubscribeRolling: (() => void) | null = null;
 
   private windowTimer: ReturnType<typeof setInterval> | null = null;
@@ -70,38 +71,26 @@ export class MarketStatisticsController
     private readonly marketName: string,
     options: MarketStatisticsControllerOptions = {},
   ) {
-    const chartMode =
-      options.chartMode ?? defaultChartMode;
+    const chartMode = options.chartMode ?? defaultChartMode;
 
     super(
-      createInitialMarketStatisticsControllerState(
-        chartMode.interval,
-      ),
+      createInitialMarketStatisticsControllerState(chartMode.interval),
       options.onUnused,
     );
 
-    this.view = new MarketStatisticsView(
-      marketName,
-      chartMode.interval,
-    );
+    this.view = new MarketStatisticsView(chartMode.interval);
   }
 
   protected override onFirstSubscriber(): void {
-    this.unsubscribeFullSync = appEvents.on(
-      'marketStatisticsFullSyncReceived',
-      (payload) => this.handleFullSync(payload),
+    this.unsubscribeSnapshot = appEvents.on(
+      'storageSnapshotReceived',
+      (snapshot) => this.handleSnapshot(snapshot),
       this.marketName,
     );
 
     this.unsubscribeDelta = appEvents.on(
-      'marketStatisticsDeltaReceived',
-      (payload) => this.handleDelta(payload),
-      this.marketName,
-    );
-
-    this.unsubscribeIndicatorChanges = appEvents.on(
-      'marketStatisticsIndicatorChangesReceived',
-      (payload) => this.handleIndicatorChanges(payload),
+      'storageDeltaReceived',
+      (delta) => this.handleDelta(delta),
       this.marketName,
     );
 
@@ -132,14 +121,12 @@ export class MarketStatisticsController
   }
 
   protected override onLastSubscriber(): void {
-    this.unsubscribeFullSync?.();
+    this.unsubscribeSnapshot?.();
     this.unsubscribeDelta?.();
-    this.unsubscribeIndicatorChanges?.();
     this.unsubscribeRolling?.();
 
-    this.unsubscribeFullSync = null;
+    this.unsubscribeSnapshot = null;
     this.unsubscribeDelta = null;
-    this.unsubscribeIndicatorChanges = null;
     this.unsubscribeRolling = null;
 
     if (this.windowTimer) {
@@ -158,20 +145,27 @@ export class MarketStatisticsController
       FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove,
       [this.marketName],
     );
+
+    this.storage = null;
   }
 
   public setInterval(interval: number): void {
     this.patchViewState(
-      this.view.setInterval(interval),
+      this.view.setInterval(this.storage, interval),
     );
   }
 
-  private handleFullSync(
-    payload: FullMarketStatisticsPayload,
-  ): void {
-    this.patchViewState(
-      this.view.applyFullSync(payload),
-    );
+  private handleSnapshot(snapshot: PredecodedBinary): void {
+    const storage = new Storage(this.marketName);
+
+    storage.applySnapshot(snapshot);
+
+    this.storage = storage;
+
+    this.patchState({
+      ...this.view.refresh(storage, 'replace'),
+      storage,
+    });
 
     appEvents.emit(
       'changeMarketStatisticsSubscription',
@@ -180,19 +174,23 @@ export class MarketStatisticsController
     );
   }
 
-  private handleDelta(
-    payload: MarketStatisticsBinaryPayload,
-  ): void {
-    this.patchViewState(
-      this.view.applyDelta(payload),
-    );
-  }
+  private handleDelta(delta: PredecodedBinary): void {
+    if (!this.storage) {
+      /*
+       * A delta without a snapshot cannot be applied safely.
+       * Reconnect logic above the controller will eventually request
+       * another full sync.
+       */
+      return;
+    }
 
-  private handleIndicatorChanges(
-    payload: MarketStatisticsBinaryPayload,
-  ): void {
+    const { appendOnly } = this.storage.applyDelta(delta);
+
     this.patchViewState(
-      this.view.applyIndicatorChanges(payload),
+      this.view.refresh(
+        this.storage,
+        appendOnly ? 'append' : 'replace',
+      ),
     );
   }
 
@@ -206,7 +204,7 @@ export class MarketStatisticsController
 
   private refreshChartData(): void {
     this.patchViewState(
-      this.view.refresh(),
+      this.view.refresh(this.storage, 'replace'),
     );
   }
 

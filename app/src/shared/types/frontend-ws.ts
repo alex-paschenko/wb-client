@@ -4,15 +4,9 @@ import {
   FRONTEND_WS_SUBSCRIPTION_ACTIONS,
   FRONTEND_WS_SUBSCRIPTION_ENTITIES,
 } from '../constants/frontend-ws.js';
-import type {
-  FrontendSettingsValue,
-} from './frontend-settings.js';
-import type {
-  MarketIndicatorsRegistry,
-} from './market-indicators.js';
-import type {
-  MarketsByName,
-} from './market.js';
+import type { FrontendSettingsValue } from './frontend-settings.js';
+import type { EntityDesriptor } from './storage-entities.js';
+import type { MarketsByName } from './market.js';
 
 export type FrontendWsClientRequest<
   Type extends string,
@@ -105,20 +99,16 @@ export type FrontendWsSettingsAcceptedMessage =
     Record<string, never>
   >;
 
-export type FrontendWsRequestMarketIndicatorsRegistryMessage =
+export type FrontendWsRequestStorageEntitiesMessage =
   FrontendWsClientRequest<
-    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES
-      .requestMarketIndicatorsRegistry,
+    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestStorageEntities,
     Record<string, never>
   >;
 
-export type FrontendWsMarketIndicatorsRegistryLoadedMessage =
+export type FrontendWsStorageEntitiesLoadedMessage =
   FrontendWsServerResponse<
-    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES
-      .marketIndicatorsRegistryLoaded,
-    {
-      registry: MarketIndicatorsRegistry;
-    }
+    typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.storageEntitiesLoaded,
+    { entities: EntityDesriptor[]; }
   >;
 
 export type FrontendWsMarketsUpdatedMessage = {
@@ -176,7 +166,7 @@ export type FrontendWsClientControlMessage =
   | FrontendWsClientPongMessage
   | FrontendWsRequestSettingsMessage
   | FrontendWsSettingsChangedMessage
-  | FrontendWsRequestMarketIndicatorsRegistryMessage
+  | FrontendWsRequestStorageEntitiesMessage
   | FrontendWsRequestMarketStatisticsFullSyncMessage
   | FrontendWsSetSubscriptionMessage
   | FrontendWsChangeSubscriptionMessage;
@@ -187,5 +177,5 @@ export type FrontendWsServerControlMessage =
   | FrontendWsServerPingMessage
   | FrontendWsSettingsLoadedMessage
   | FrontendWsSettingsAcceptedMessage
-  | FrontendWsMarketIndicatorsRegistryLoadedMessage
+  | FrontendWsStorageEntitiesLoadedMessage
   | FrontendWsMarketsUpdatedMessage;

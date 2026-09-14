@@ -5,7 +5,7 @@ import type {
 import type {
   FullMarketStatisticsLevel,
   MarketCandle,
-} from '../types/market-statistics-storage.js';
+} from '../types/storage-old.js';
 import {
   getIndicatorValueByteLength,
   readIndicatorValue,

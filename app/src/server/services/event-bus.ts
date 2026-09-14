@@ -1,11 +1,8 @@
 // app/src/server/services/event-bus.ts
-import type {
-  ServerEventMap,
-} from '../types/events.js';
 
-type EventHandler<TPayload> = (
-  payload: TPayload,
-) => void | Promise<void>;
+import type { ServerEventMap } from '../types/events.js';
+
+type EventHandler<TPayload> = (payload: TPayload) => void | Promise<void>;
 
 export class EventBusService {
   private readonly handlers = new Map<

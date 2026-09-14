@@ -1,29 +1,44 @@
 // app/src/client/src/utilities/chart-panel-series-manager.ts
 
-import {
-  type IChartApi,
-  type IPriceLine,
-  type ISeriesApi,
-  LineSeries,
+import type {
+  IChartApi,
+  ISeriesApi,
+  SeriesType,
 } from 'lightweight-charts';
 
+import type { StorageAccessors } from '../../../shared/types/storage';
 import type {
-  MarketChartLinePoint,
+  EntityDesriptor,
+} from '../../../shared/types/storage-entities';
+import type {
+  MarketChartUpdateMode,
 } from '../controllers/MarketStatisticsView';
+import type {
+  AnyEntityDataKindHandler,
+} from '../entity-data-kinds/types';
 
 export interface ChartPanelSeries {
-  indicatorName: string;
-  color: string;
-  data: MarketChartLinePoint[];
+  key: string;
+  descriptor: EntityDesriptor;
+  entityIndex: number;
+  handler: AnyEntityDataKindHandler;
+  settings: unknown;
+}
+
+export interface ChartPanelSeriesSyncContext {
+  accessors: StorageAccessors;
+  startIndex: number;
+  endIndex: number;
+  updateMode: MarketChartUpdateMode;
 }
 
 interface ManagedChartPanelSeries {
-  series: ISeriesApi<'Line'>;
-  priceLine: IPriceLine | null;
+  series: ISeriesApi<SeriesType>;
+  isInitialized: boolean;
 }
 
 export class ChartPanelSeriesManager {
-  private readonly seriesByIndicatorName =
+  private readonly seriesByKey =
     new Map<string, ManagedChartPanelSeries>();
 
   public constructor(
@@ -31,26 +46,41 @@ export class ChartPanelSeriesManager {
     private panelIndex: number,
   ) {}
 
-  public sync(panelSeries: readonly ChartPanelSeries[]): void {
-    const activeIndicatorNames = new Set(
-      panelSeries.map((series) => series.indicatorName),
+  public sync(
+    panelSeries: readonly ChartPanelSeries[],
+    context: ChartPanelSeriesSyncContext,
+  ): void {
+    const activeKeys = new Set(
+      panelSeries.map((item) => item.key),
     );
 
-    this.removeInactiveSeries(activeIndicatorNames);
+    this.removeInactiveSeries(activeKeys);
 
-    for (const panelSeriesItem of panelSeries) {
-      const managedSeries =
-        this.getOrCreateSeries(panelSeriesItem);
+    for (const item of panelSeries) {
+      const managed = this.getOrCreateSeries(item);
 
-      managedSeries.series.applyOptions({
-        color: panelSeriesItem.color,
-      });
+      item.handler.applySettings(
+        managed.series,
+        item.settings,
+      );
 
-      managedSeries.series.setData(panelSeriesItem.data);
+      if (
+        !managed.isInitialized ||
+        context.updateMode === 'replace'
+      ) {
+        this.replaceSeriesData(
+          managed,
+          item,
+          context,
+        );
 
-      this.syncPriceLine(
-        managedSeries,
-        panelSeriesItem,
+        continue;
+      }
+
+      this.appendSeriesData(
+        managed,
+        item,
+        context,
       );
     }
   }
@@ -62,131 +92,107 @@ export class ChartPanelSeriesManager {
 
     this.panelIndex = panelIndex;
 
-    for (const managedSeries of this.seriesByIndicatorName.values()) {
-      managedSeries.series.moveToPane(panelIndex);
+    for (const managed of this.seriesByKey.values()) {
+      managed.series.moveToPane(panelIndex);
     }
   }
 
   public dispose(): void {
-    for (const managedSeries of this.seriesByIndicatorName.values()) {
-      this.removeManagedSeries(managedSeries);
+    for (const managed of this.seriesByKey.values()) {
+      this.chart.removeSeries(managed.series);
     }
 
-    this.seriesByIndicatorName.clear();
+    this.seriesByKey.clear();
   }
 
-  private syncPriceLine(
-    managedSeries: ManagedChartPanelSeries,
-    panelSeries: ChartPanelSeries,
+  private replaceSeriesData(
+    managed: ManagedChartPanelSeries,
+    item: ChartPanelSeries,
+    context: ChartPanelSeriesSyncContext,
   ): void {
-    const lastValue = this.getLastValue(panelSeries.data);
+    const data = [];
 
-    if (lastValue === null) {
-      this.removePriceLine(managedSeries);
-      return;
+    for (
+      let index = context.startIndex;
+      index <= context.endIndex;
+      index++
+    ) {
+      data.push(
+        item.handler.getData({
+          accessors: context.accessors,
+          descriptor: item.descriptor,
+          index,
+        }),
+      );
     }
 
-    const options = {
-      price: lastValue,
-      title: panelSeries.indicatorName,
-      color: panelSeries.color,
-      lineVisible: false,
-      axisLabelVisible: true,
-      axisLabelColor: panelSeries.color,
-    };
+    item.handler.setData(
+      managed.series,
+      data,
+    );
 
-    if (!managedSeries.priceLine) {
-      managedSeries.priceLine =
-        managedSeries.series.createPriceLine(options);
-
-      return;
-    }
-
-    managedSeries.priceLine.applyOptions(options);
+    managed.isInitialized = true;
   }
 
-  private getLastValue(
-    data: readonly MarketChartLinePoint[],
-  ): number | null {
-    for (let index = data.length - 1; index >= 0; index -= 1) {
-      const point = data[index];
-
-      if (point && 'value' in point) {
-        return point.value;
-      }
+  private appendSeriesData(
+    managed: ManagedChartPanelSeries,
+    item: ChartPanelSeries,
+    context: ChartPanelSeriesSyncContext,
+  ): void {
+    if (context.endIndex < 0) {
+      return;
     }
 
-    return null;
+    const data = item.handler.getData({
+      accessors: context.accessors,
+      descriptor: item.descriptor,
+      index: context.endIndex,
+    });
+
+    item.handler.updateSeries(
+      managed.series,
+      data,
+    );
   }
 
   private removeInactiveSeries(
-    activeIndicatorNames: ReadonlySet<string>,
+    activeKeys: ReadonlySet<string>,
   ): void {
-    for (const [
-      indicatorName,
-      managedSeries,
-    ] of this.seriesByIndicatorName) {
-      if (activeIndicatorNames.has(indicatorName)) {
+    for (const [key, managed] of this.seriesByKey) {
+      if (activeKeys.has(key)) {
         continue;
       }
 
-      this.removeManagedSeries(managedSeries);
-      this.seriesByIndicatorName.delete(indicatorName);
+      this.chart.removeSeries(managed.series);
+      this.seriesByKey.delete(key);
     }
-  }
-
-  private removeManagedSeries(
-    managedSeries: ManagedChartPanelSeries,
-  ): void {
-    this.removePriceLine(managedSeries);
-    this.chart.removeSeries(managedSeries.series);
-  }
-
-  private removePriceLine(
-    managedSeries: ManagedChartPanelSeries,
-  ): void {
-    if (!managedSeries.priceLine) {
-      return;
-    }
-
-    managedSeries.series.removePriceLine(
-      managedSeries.priceLine,
-    );
-
-    managedSeries.priceLine = null;
   }
 
   private getOrCreateSeries(
-    panelSeries: ChartPanelSeries,
+    item: ChartPanelSeries,
   ): ManagedChartPanelSeries {
-    const existingSeries =
-      this.seriesByIndicatorName.get(panelSeries.indicatorName);
+    const existing = this.seriesByKey.get(item.key);
 
-    if (existingSeries) {
-      return existingSeries;
+    if (existing) {
+      return existing;
     }
 
-    const series = this.chart.addSeries(
-      LineSeries,
-      {
-        color: panelSeries.color,
-        lineWidth: 1,
-        priceLineVisible: false,
-        lastValueVisible: false,
-      },
-      this.panelIndex,
-    );
-
-    const managedSeries: ManagedChartPanelSeries = {
-      series,
-      priceLine: null,
+    const managed: ManagedChartPanelSeries = {
+      series: item.handler.createSeries(
+        {
+          chart: this.chart,
+          panelIndex: this.panelIndex,
+        },
+        item.settings,
+      ),
+      isInitialized: false,
     };
 
-    this.seriesByIndicatorName.set(
-      panelSeries.indicatorName,
-      managedSeries,
+    this.seriesByKey.set(
+      item.key,
+      managed,
     );
 
-    return managedSeries;
+    return managed;
   }
 }

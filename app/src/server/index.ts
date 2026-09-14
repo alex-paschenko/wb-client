@@ -1,6 +1,5 @@
 // app/src/server/index.ts
 import 'dotenv/config';
-
 import type { Server } from 'node:http';
 
 import { createApp } from './app.js';
@@ -14,18 +13,14 @@ import {
 import { marketsService } from './services/markets.js';
 import { waitForDatabase } from './db/wait-for-start.js';
 import { whitebitWsService } from './services/whitebit-ws.js';
-import {
-  marketStatisticsAggregationService
-} from './services/market-statistics-aggregation.js';
+import { storageAggregationService } from './services/storage-aggregation.js';
 import {
   marketStatisticsRollingService
 } from './services/market-statistics-rolling.js';
 import { frontendWsService } from './services/frontend-ws.js';
-import { indicatorManager } from './indicators/indicator-manager.js';
+import { entityManager } from './services/entity-manager.js';
 import { serverGlobalStateService } from './services/global-state.js';
-import {
-  marketStatisticsPersistenceQueueService
-} from './services/market-statistics-persistence-queue.js';
+import { storagePersistenceService } from './services/storage-persistence.js';
 
 const port = Number(process.env.PORT ?? 3000);
 const app = createApp();
@@ -46,7 +41,7 @@ const shutdown = async (signal: string): Promise<void> => {
     whitebitWsService.stop();
 
     await Promise.all([
-      marketStatisticsPersistenceQueueService.stop(),
+      storagePersistenceService.stop(),
       marketStatisticsRollingService.stop(),
     ]);
 
@@ -89,12 +84,11 @@ const start = async (): Promise<void> => {
    * start() synchronously registers the registry listener
    * before reaching its first await.
    */
-  marketStatisticsPersistenceQueueService.start();
+  storagePersistenceService.start();
 
-  const aggregationStart =
-    marketStatisticsAggregationService.start();
+  const aggregationStart = storageAggregationService.start();
 
-  indicatorManager.start();
+  entityManager.start();
 
   await aggregationStart;
 

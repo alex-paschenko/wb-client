@@ -1,18 +1,13 @@
 // app/src/server/types/market-indicators.ts
-import type {
-  MarketIndicatorStorageConfig,
-} from '../../shared/types/market-indicators.js';
-import type {
-  ExtendedMarketDataView,
-} from '../../shared/types/market-statistics-storage.js';
+import type { IndicatorValue } from '../../shared/types/data-types.js';
+import type { EntityDesriptor } from '../../shared/types/storage-entities.js';
+import type { ExtendedMarketDataView } from '../../shared/types/storage-old.js';
 
 export type MarketIndicatorCalculationParams = ExtendedMarketDataView;
 
 export interface MarketIndicator {
-  readonly name: string;
+  readonly descriptor: EntityDesriptor<IndicatorValue>;
   readonly dependencies: readonly string[];
-
-  getStorageConfig(): MarketIndicatorStorageConfig;
 
   calculate(
     params: MarketIndicatorCalculationParams,

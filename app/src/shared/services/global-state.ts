@@ -1,12 +1,23 @@
 // app/src/shared/services/global-state.ts
 
-import type {
-  MarketIndicatorsRegistry,
-} from '../types/market-indicators.js';
+import {
+  STORAGE_ENTITY_KINDS,
+  type StorageEntityKind,
+} from '../constants/storage-entities.js';
 import type { MarketsByName } from '../types/market.js';
+import type {
+  EntityDescriptors,
+  EntityDesriptor,
+  KindEntityDescriptors,
+} from '../types/storage-entities.js';
+import type {
+  StorageStructure,
+  WritableStorageStructure,
+} from '../types/storage.js';
+import { deepFreeze } from '../utilities/object.js';
 
-type IndicatorRegistryListener = (
-  registry: MarketIndicatorsRegistry | null,
+type StorageEntitiesListener = (
+  entities: EntityDesriptor[] | null,
 ) => void;
 
 type MarketsListener = (
@@ -15,21 +26,20 @@ type MarketsListener = (
 ) => void;
 
 export class GlobalStateService {
-  private indicatorRegistry:
-    MarketIndicatorsRegistry | null = null;
+  private storageEntities: EntityDesriptor[] = [];
 
-  private allIndicatorNames: string[] = [];
+  private storageEntitiesStructure:
+    StorageStructure<EntityDesriptor, number> | null = null;
 
-  private indicatorsWithPreservedHistory: string[] = [];
+  private isStorageEntitiesReady = false;
 
-  private indicatorRegistryPromise:
-    Promise<MarketIndicatorsRegistry> | null = null;
+  private storageEntitiesPromise: Promise<EntityDesriptor[]> | null = null;
 
-  private resolveIndicatorRegistry:
-    ((registry: MarketIndicatorsRegistry) => void) | null = null;
+  private resolveStorageEntities:
+    ((entities: EntityDesriptor[]) => void) | null = null;
 
-  private readonly indicatorRegistryListeners =
-    new Set<IndicatorRegistryListener>();
+  private readonly storageEntitiesListeners =
+    new Set<StorageEntitiesListener>();
 
   private marketsByName: MarketsByName | null = null;
 
@@ -43,93 +53,143 @@ export class GlobalStateService {
 
   private readonly marketsListeners = new Set<MarketsListener>();
 
-  public setIndicatorRegistry(
-    registry: MarketIndicatorsRegistry,
+  public addStorageEntities(
+    entities: readonly EntityDesriptor[],
   ): void {
-    const storedRegistry = Object.freeze(
-      registry.map(
-        (entry) => Object.freeze({ ...entry })
-      ),
+    for (const entity of entities) {
+      if (
+        this.storageEntities.some(
+          (storedEntity) =>
+            storedEntity.kind === entity.kind &&
+            storedEntity.name === entity.name,
+        )
+      ) {
+        throw new Error(
+          `Storage entity "${entity.kind}:${entity.name}" is already registered`,
+        );
+      }
+
+      this.storageEntities.push({ ...entity });
+    }
+
+    this.isStorageEntitiesReady =
+      STORAGE_ENTITY_KINDS.every(
+        (kind) => this.storageEntities.some((entity) => entity.kind === kind),
+      );
+
+    if (!this.isStorageEntitiesReady) {
+      return;
+    }
+
+    this.storageEntitiesStructure = this.mapStorageEntities(
+      (entity) => entity,
     );
 
-    this.indicatorRegistry = storedRegistry;
+    this.resolveStorageEntities?.(this.storageEntities);
 
-    this.resolveIndicatorRegistry?.(storedRegistry);
+    this.resolveStorageEntities = null;
+    this.storageEntitiesPromise = null;
 
-    this.resolveIndicatorRegistry = null;
-    this.indicatorRegistryPromise = null;
-
-    this.allIndicatorNames = storedRegistry
-      .map((indicator) => indicator.name);
-
-    this.indicatorsWithPreservedHistory = storedRegistry
-     .filter((indicator) => indicator.requiresRemovedValues)
-     .map((indicator) => indicator.name);
-
-    this.notifyIndicatorRegistryListeners();
+    this.notifyStorageEntitiesListeners();
   }
 
-  public getIndicatorRegistry(): MarketIndicatorsRegistry {
-    if (!this.indicatorRegistry) {
-      throw new Error(
-        'Market indicators registry is not initialized',
-      );
+  public getStorageEntities(): EntityDesriptor[] {
+    return this.storageEntities;
+  }
+
+  public getStorageEntitiesOrNull(): EntityDesriptor[] | null {
+    return this.isStorageEntitiesReady
+      ? this.getStorageEntities()
+      : null;
+  }
+
+  public hasStorageEntities(): boolean {
+    return this.isStorageEntitiesReady;
+  }
+
+  public getStorageEntitiesWithPreservedHistory():
+    readonly EntityDesriptor[] {
+    if (!this.isStorageEntitiesReady) {
+      return [];
     }
 
-    return this.indicatorRegistry;
+    return this.storageEntities.filter(
+      (entity) => entity.requiresRemovedValues,
+    );
   }
 
-  public getIndicatorRegistryOrNull():
-    MarketIndicatorsRegistry | null {
-    return this.indicatorRegistry;
-  }
-
-  public hasIndicatorRegistry(): boolean {
-    return this.indicatorRegistry !== null;
-  }
-
-  public getAllIndicatorNames(): readonly string[] {
-    return this.allIndicatorNames;
-  }
-
-  public getIndicatorsWithPreservedHistory(): readonly string[] {
-    return this.indicatorsWithPreservedHistory;
-  }
-
-  public waitForIndicatorRegistry():
-    Promise<MarketIndicatorsRegistry> {
-    if (this.indicatorRegistry) {
-      return Promise.resolve(this.indicatorRegistry);
+  public waitForStorageEntities(): Promise<EntityDesriptor[]> {
+    if (this.isStorageEntitiesReady) {
+      return Promise.resolve(this.getStorageEntities());
     }
 
-    if (!this.indicatorRegistryPromise) {
-      this.indicatorRegistryPromise = new Promise((resolve) => {
-        this.resolveIndicatorRegistry = resolve;
+    if (!this.storageEntitiesPromise) {
+      this.storageEntitiesPromise = new Promise((resolve) => {
+        this.resolveStorageEntities = resolve;
       });
     }
 
-    return this.indicatorRegistryPromise;
+    return this.storageEntitiesPromise;
   }
 
-  public subscribeIndicatorRegistry(
-    listener: IndicatorRegistryListener,
+  public subscribeStorageEntities(
+    listener: StorageEntitiesListener,
   ): () => void {
-    this.indicatorRegistryListeners.add(listener);
-    listener(this.getIndicatorRegistryOrNull());
+    this.storageEntitiesListeners.add(listener);
+
+    listener(this.getStorageEntitiesOrNull());
 
     return () => {
-      this.indicatorRegistryListeners.delete(listener);
+      this.storageEntitiesListeners.delete(listener);
     };
   }
 
-  public clearIndicatorRegistry(): void {
-    this.indicatorRegistry = null;
-    this.indicatorRegistryPromise = null;
-    this.allIndicatorNames = [];
-    this.indicatorsWithPreservedHistory = [];
-    this.resolveIndicatorRegistry = null;
+  public clearStorageEntities(): void {
+    this.storageEntities = [];
+    this.storageEntitiesStructure = null;
+    this.isStorageEntitiesReady = false;
 
-    this.notifyIndicatorRegistryListeners();
+    this.storageEntitiesPromise = null;
+    this.resolveStorageEntities = null;
+
+    this.notifyStorageEntitiesListeners();
+  }
+
+  public mapStorageEntities<T, TDeep extends number = 2>(
+    mapper: (entity: EntityDesriptor, index: number) => T,
+    freezeDeep: TDeep = 2 as TDeep,
+  ): StorageStructure<T, TDeep> {
+    if (!this.isStorageEntitiesReady) {
+      throw new Error('Storage entities are not initialized');
+    }
+
+    const result = {} as WritableStorageStructure<T>;
+
+    for (const kind of STORAGE_ENTITY_KINDS) {
+      result[kind] = {};
+    }
+
+    for (const [index, entity] of this.storageEntities.entries()) {
+      result[entity.kind][entity.name] = mapper(entity, index);
+    }
+
+    return deepFreeze(result, freezeDeep);
+  }
+
+  public getStorageEntitiesStructure(): EntityDescriptors;
+  public getStorageEntitiesStructure(
+    kind: StorageEntityKind,
+  ): KindEntityDescriptors;
+  public getStorageEntitiesStructure(
+    kind?: StorageEntityKind,
+  ): EntityDescriptors | KindEntityDescriptors {
+    if (this.storageEntitiesStructure === null) {
+      throw new Error('Storage entities are not initialized');
+    }
+
+    return kind
+      ? this.storageEntitiesStructure[kind]
+      : this.storageEntitiesStructure;
   }
 
   public setMarkets(
@@ -152,9 +212,7 @@ export class GlobalStateService {
 
   public getMarkets(): MarketsByName {
     if (!this.marketsByName) {
-      throw new Error(
-        'Markets are not initialized',
-      );
+      throw new Error('Markets are not initialized');
     }
 
     return structuredClone(this.marketsByName);
@@ -197,14 +255,9 @@ export class GlobalStateService {
   ): () => void {
     this.marketsListeners.add(listener);
 
-    listener(
-      this.getMarketsOrNull(),
-      this.getMarketNames(),
-    );
+    listener(this.getMarketsOrNull(), this.getMarketNames() );
 
-    return () => {
-      this.marketsListeners.delete(listener);
-    };
+    return () => { this.marketsListeners.delete(listener); };
   }
 
   public clearMarkets(): void {
@@ -217,9 +270,9 @@ export class GlobalStateService {
     this.notifyMarketsListeners();
   }
 
-  private notifyIndicatorRegistryListeners(): void {
-    for (const listener of this.indicatorRegistryListeners) {
-      listener(this.getIndicatorRegistryOrNull());
+  private notifyStorageEntitiesListeners(): void {
+    for (const listener of this.storageEntitiesListeners) {
+      listener(this.getStorageEntitiesOrNull());
     }
   }
 
@@ -233,5 +286,4 @@ export class GlobalStateService {
   }
 }
 
-export const globalStateService =
-  new GlobalStateService();
+export const globalStateService = new GlobalStateService();

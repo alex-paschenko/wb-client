@@ -12,13 +12,24 @@ export const i18nResources = {
         title: 'Настройки',
         theme: 'Тема',
         language: 'Язык',
-        placeholder: 'Страница настроек будет здесь.',
-        "indicators": {
-          "title": "Индикаторы",
-          "empty": "Нет доступных индикаторов",
-          "visibilityAriaLabel": "Включить или выключить индикатор {{name}}",
-          "colorAriaLabel": "Выбрать цвет индикатора {{name}}"
-        }
+
+        sectionTitle: {
+          candles: 'Свечи',
+          indicators: 'Индикаторы',
+        },
+
+        dataKind: {
+          line: 'Линия',
+          ohlc: 'Свечи',
+          priceLine: 'Линия цены',
+        },
+
+        entity: {
+          visibilityAriaLabel: 'Показать или скрыть {{name}}: {{dataKind}}',
+          colorAriaLabel: 'Выбрать цвет {{name}}: {{dataKind}}',
+        },
+
+        entitiesEmpty: 'Нет доступных сущностей',
       },
 
       routes: {
@@ -117,13 +128,24 @@ export const i18nResources = {
         title: 'Settings',
         theme: 'Theme',
         language: 'Language',
-        placeholder: 'Settings page will be here.',
-        "indicators": {
-          "title": "Indicators",
-          "empty": "No indicators available",
-          "visibilityAriaLabel": "Toggle {{name}} indicator",
-          "colorAriaLabel": "Choose color for {{name}}"
-        }
+
+        sectionTitle: {
+          candles: 'Candles',
+          indicators: 'Indicators',
+        },
+
+        dataKind: {
+          line: 'Line',
+          ohlc: 'Candles',
+          priceLine: 'Price line',
+        },
+
+        entity: {
+          visibilityAriaLabel: 'Show or hide {{name}}: {{dataKind}}',
+          colorAriaLabel: 'Choose color for {{name}}: {{dataKind}}',
+        },
+
+        entitiesEmpty: 'No entities available',
       },
 
       routes: {

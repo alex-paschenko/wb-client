@@ -1,16 +1,19 @@
 // app/src/shared/constants/frontend-settings.ts
+
+import { STORAGE_ENTITY_KINDS } from './storage-entities.js';
 import { defaultTheme } from './themes.js';
 import { defaultLanguage } from '../i18n/languages.js';
-
 import type {
-  FrontendSettingsValue
+  EntitiesSettings,
+  EntityDataKindSettings,
+  FrontendSettingsValue,
 } from '../types/frontend-settings.js';
+import type {
+  WritableStorageStructure,
+} from '../types/storage.js';
 
-
-export const DEFAULT_CANDLE_COLOR =
-  '#2962ff';
-
-export const DEFAULT_INDICATOR_COLORS = [
+export const ENTITY_COLORS = [
+  '#2962ff',
   '#f59e0b',
   '#8b5cf6',
   '#06b6d4',
@@ -23,20 +26,22 @@ export const DEFAULT_INDICATOR_COLORS = [
   '#ef4444',
 ] as const;
 
+export const getEntityColor = (entityIndex: number): string =>
+  ENTITY_COLORS[entityIndex % ENTITY_COLORS.length];
+
+export const createEmptyEntitiesSettings = (): EntitiesSettings => {
+  const result = {} as WritableStorageStructure<EntityDataKindSettings>;
+
+  for (const kind of STORAGE_ENTITY_KINDS) {
+    result[kind] = {};
+  }
+
+  return result;
+};
+
 export const defaultFrontendSettings: FrontendSettingsValue = {
   theme: defaultTheme,
   language: defaultLanguage,
   marketsViewStates: [],
-  candles: { color: DEFAULT_CANDLE_COLOR },
-  indicators: {},
+  entities: createEmptyEntitiesSettings(),
 };
-
-export const getRandomIndicatorColor =
-  (): string => {
-    const index = Math.floor(
-      Math.random() *
-      DEFAULT_INDICATOR_COLORS.length,
-    );
-
-    return DEFAULT_INDICATOR_COLORS[index];
-  };

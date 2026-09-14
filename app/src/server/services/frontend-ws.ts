@@ -1,63 +1,66 @@
 // app/src/server/services/frontend-ws.ts
+
 import { WebSocket } from 'ws';
 
+import { CLIENT_VERSION } from '../../shared/constants/client-version.js';
 import {
-  CLIENT_VERSION,
-} from '../../shared/constants/client-version.js';
-import {
-  FRONTEND_WS_BINARY_MESSAGE_TYPES,
   FRONTEND_WS_CONTROL_MESSAGE_TYPES,
   FRONTEND_WS_SUBSCRIPTION_ACTIONS,
   FRONTEND_WS_SUBSCRIPTION_ENTITIES,
 } from '../../shared/constants/frontend-ws.js';
+import { FRONTEND_WS_CODEC } from '../../shared/constants/settings.js';
+import { MINUTE } from '../../shared/constants/time.js';
 import { temporaryUserId } from '../../shared/constants/users.js';
-import {
-  FrontendSettings,
-} from '../../shared/services/frontend-settings.js';
+import { globalStateService } from '../../shared/services/global-state.js';
+import { FrontendSettings } from '../../shared/services/frontend-settings.js';
 import type {
   FrontendWsChangeSubscriptionMessage,
   FrontendWsClientControlMessage,
-  FrontendWsRequestMarketIndicatorsRegistryMessage,
+  FrontendWsRequestStorageEntitiesMessage,
   FrontendWsRequestMarketStatisticsFullSyncMessage,
   FrontendWsSetSubscriptionMessage,
   FrontendWsSettingsChangedMessage,
 } from '../../shared/types/frontend-ws.js';
-import type {
-  FullMarketStatisticsLevel,
-} from '../../shared/types/market-statistics-storage.js';
 import {
   SERVER_WS_EVENT_TYPE,
   type ServerWsJsonMessage,
 } from '../../shared/types/server-events.js';
-import {
-  encodeFrontendWsBinaryPacket,
-} from '../../shared/utilities/frontend-ws-binary-codec.js';
-import {
-  encodeFullMarketStatisticsPayload,
-  encodeMarketStatisticsBinaryPayload,
-} from '../../shared/utilities/market-statistics-payload-codec.js';
+import { encodeCodec } from '../../shared/utilities/codecs/codecs.js';
 import { SERVER_EVENT } from '../constants/events.js';
 import { getWsServer } from '../frontend/index.js';
 import type {
-  MarketStatisticsIndicatorsChangedEvent,
-  MarketStatisticsStorageChangedEvent,
+  ServerEventMap,
+  StorageDeltaCreatedEvent,
+  StorageFullSyncResultsEvent,
 } from '../types/events.js';
 import type {
   MarketRollingStatisticsByMarket,
 } from '../types/market-statistics.js';
 import { eventBus } from './event-bus.js';
 import { frontendSettingsService } from './frontend-settings.js';
-import {
-  marketStatisticsAggregationService,
-} from './market-statistics-aggregation.js';
-import {
-  marketStatisticsRollingService,
-} from './market-statistics-rolling.js';
-import {
-  globalStateService
-} from '../../shared/services/global-state.js';
+import { marketStatisticsRollingService } from './market-statistics-rolling.js';
+
+const SERVER_EVENT_EXPIRATION = 1 * MINUTE;
+
+let serverEventId = 0;
 
 type MarketSubscriptionState = Set<string>;
+
+interface PendingServerEvent {
+  socket: WebSocket;
+  clientId: number;
+  validUntil: number;
+}
+
+type ServerEventWithIdName = {
+  [K in keyof ServerEventMap]:
+    ServerEventMap[K] extends { eventId: number }
+      ? K
+      : never;
+}[keyof ServerEventMap];
+
+type ServerEventData<K extends ServerEventWithIdName> =
+  Omit<ServerEventMap[K], 'eventId'>;
 
 type FrontendWsClientState = {
   isReady: boolean;
@@ -73,15 +76,18 @@ type FrontendWsClientState = {
 };
 
 export class FrontendWsService {
-  private readonly clients =
-    new Map<WebSocket, FrontendWsClientState>();
+  private readonly clients = new Map<WebSocket, FrontendWsClientState>();
+
+  private readonly serverEvents = new Map<number, PendingServerEvent>();
+
+  private serverEventExpirationTimer:
+    ReturnType<typeof setInterval> | null = null;
 
   public start(): void {
     const wsServer = getWsServer();
 
     wsServer.onConnection((socket) => {
       this.clients.set(socket, this.createClientState());
-
       this.sendServerHello(socket);
     });
 
@@ -94,13 +100,13 @@ export class FrontendWsService {
     });
 
     eventBus.on(
-      SERVER_EVENT.marketStatisticsStorageChanged,
-      (event) => this.handleMarketStatisticsStorageChanged(event),
+      SERVER_EVENT.storageDeltaCreated,
+      (event) => this.handleStorageDeltaCreated(event),
     );
 
     eventBus.on(
-      SERVER_EVENT.marketStatisticsIndicatorsChanged,
-      (event) => this.handleMarketStatisticsIndicatorsChanged(event),
+      SERVER_EVENT.storageFullSyncResults,
+      (event) => this.handleStorageFullSyncResults(event),
     );
 
     eventBus.on(
@@ -114,30 +120,34 @@ export class FrontendWsService {
       SERVER_EVENT.marketsInfoUpdated,
       () => { this.broadcastMarketsUpdated(); },
     );
+
+    this.serverEventExpirationTimer = setInterval(
+      () => { this.clearExpiredServerEvents(); },
+      SERVER_EVENT_EXPIRATION,
+    );
   }
 
-  private handleClientClose(
-    socket: WebSocket,
-  ): void {
+  private handleClientClose(socket: WebSocket): void {
     const state = this.clients.get(socket);
 
     if (state) {
-      for (
-        const marketName
-        of state.marketsBetweenFullSyncAndSubscription
-      ) {
+      for (const marketName of state.marketsBetweenFullSyncAndSubscription) {
         this.lowerStatisticsStorageFreeze(marketName);
+      }
+    }
+
+    for (const [eventId, pending] of this.serverEvents) {
+      if (pending.socket === socket) {
+        this.serverEvents.delete(eventId);
       }
     }
 
     this.clients.delete(socket);
   }
 
-  private lowerStatisticsStorageFreeze(
-    marketName: string,
-  ): void {
+  private lowerStatisticsStorageFreeze(marketName: string): void {
     eventBus.emit(
-      SERVER_EVENT.freezeOnStatisticsStorageNeedsToBeLowered,
+      SERVER_EVENT.freezeOnStorageNeedsToBeLowered,
       { marketName },
     );
   }
@@ -154,9 +164,7 @@ export class FrontendWsService {
     };
   }
 
-  private sendServerHello(
-    socket: WebSocket,
-  ): void {
+  private sendServerHello(socket: WebSocket): void {
     getWsServer().sendJson(socket, {
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.serverHello,
       latestClientVersion: CLIENT_VERSION,
@@ -174,36 +182,26 @@ export class FrontendWsService {
       return;
     }
 
-    if (
-      message.type ===
-      FRONTEND_WS_CONTROL_MESSAGE_TYPES.webSocketReady
-    ) {
+    if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.webSocketReady) {
       this.handleWebSocketReady(socket);
       return;
     }
 
-    if (
-      message.type ===
-      FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestSettings
-    ) {
+    if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestSettings) {
       void this.handleRequestSettings(socket, message.clientId);
       return;
     }
 
-    if (
-      message.type ===
-      FRONTEND_WS_CONTROL_MESSAGE_TYPES.settingsChanged
-    ) {
+    if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.settingsChanged) {
       void this.handleSettingsChanged(socket, message);
       return;
     }
 
     if (
       message.type ===
-      FRONTEND_WS_CONTROL_MESSAGE_TYPES
-        .requestMarketIndicatorsRegistry
+      FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestStorageEntities
     ) {
-      this.handleRequestMarketIndicatorsRegistry(socket, message);
+      this.handleRequestStorageEntities(socket, message);
       return;
     }
 
@@ -215,36 +213,28 @@ export class FrontendWsService {
       return;
     }
 
-    if (
-      message.type ===
-      FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription
-    ) {
+    if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.setSubscription) {
       this.handleSetSubscription(socket, message);
       return;
     }
 
-    if (
-      message.type ===
-      FRONTEND_WS_CONTROL_MESSAGE_TYPES.changeSubscription
-    ) {
+    if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.changeSubscription) {
       this.handleChangeSubscription(socket, message);
     }
   }
 
   private handleMarketRollingUpdated(
-    rollingStatisticsByMarket:
-      MarketRollingStatisticsByMarket,
+    rollingStatisticsByMarket: MarketRollingStatisticsByMarket,
   ): void {
     for (const [socket, state] of this.clients) {
       if (!state.isReady) {
         continue;
       }
 
-      const subscribedRolling =
-        this.filterSubscribedRollingStatistics(
-          rollingStatisticsByMarket,
-          state.marketRollingSubscription,
-        );
+      const subscribedRolling = this.filterSubscribedRollingStatistics(
+        rollingStatisticsByMarket,
+        state.marketRollingSubscription,
+      );
 
       if (Object.keys(subscribedRolling).length === 0) {
         continue;
@@ -258,8 +248,7 @@ export class FrontendWsService {
   }
 
   private filterSubscribedRollingStatistics(
-    rollingStatisticsByMarket:
-      MarketRollingStatisticsByMarket,
+    rollingStatisticsByMarket: MarketRollingStatisticsByMarket,
     markets: Set<string>,
   ): MarketRollingStatisticsByMarket {
     const result: MarketRollingStatisticsByMarket = {};
@@ -286,18 +275,14 @@ export class FrontendWsService {
       return null;
     }
 
-    if (
-      !message || typeof message !== 'object' || !('type' in message)
-    ) {
+    if (!message || typeof message !== 'object' || !('type' in message)) {
       return null;
     }
 
     return message as FrontendWsClientControlMessage;
   }
 
-  private handleWebSocketReady(
-    socket: WebSocket,
-  ): void {
+  private handleWebSocketReady(socket: WebSocket): void {
     const state = this.clients.get(socket);
 
     if (!state) {
@@ -338,9 +323,7 @@ export class FrontendWsService {
       return;
     }
 
-    const settings = FrontendSettings.fromValue(
-      message.params.settings,
-    );
+    const settings = FrontendSettings.fromValue(message.params.settings);
 
     state.settings = settings;
 
@@ -353,10 +336,9 @@ export class FrontendWsService {
     });
   }
 
-  private handleRequestMarketIndicatorsRegistry(
+  private handleRequestStorageEntities(
     socket: WebSocket,
-    message:
-      FrontendWsRequestMarketIndicatorsRegistryMessage,
+    message: FrontendWsRequestStorageEntitiesMessage,
   ): void {
     const state = this.clients.get(socket);
 
@@ -364,7 +346,7 @@ export class FrontendWsService {
       return;
     }
 
-    this.sendMarketIndicatorsRegistry(socket, message.clientId);
+    this.sendStorageEntities(socket, message.clientId);
   }
 
   private handleRequestMarketStatisticsFullSync(
@@ -373,36 +355,65 @@ export class FrontendWsService {
   ): void {
     const state = this.clients.get(socket);
 
-    if (!state) {
+    if (!state?.isReady) {
       return;
     }
 
     const { marketName } = message.params;
 
-    const shouldFreeze =
+    const freezeStorage =
       !state.marketsBetweenFullSyncAndSubscription.has(marketName);
 
-    if (shouldFreeze) {
+    if (freezeStorage) {
       state.marketsBetweenFullSyncAndSubscription.add(marketName);
     }
 
-    const levels = shouldFreeze
-      ? marketStatisticsAggregationService
-          .createFullSyncSnapshot(marketName)
-      : marketStatisticsAggregationService
-          .getStorageItemsByMarket()[marketName];
+    this.sendServerEvent(
+      SERVER_EVENT.storageFullSyncRequest,
+      { marketName, freezeStorage },
+      socket,
+      message.clientId,
+    );
+  }
 
-    if (!levels) {
+  private handleStorageFullSyncResults(
+    event: StorageFullSyncResultsEvent,
+  ): void {
+    const pending = this.serverEvents.get(event.eventId);
+
+    if (!pending) {
       return;
     }
 
-    this.sendFullMarketStatistics(
-      socket,
+    this.serverEvents.delete(event.eventId);
+
+    if (pending.validUntil <= Date.now()) {
+      return;
+    }
+
+    const state = this.clients.get(pending.socket);
+
+    if (!state?.isReady) {
+      return;
+    }
+
+    this.sendBinary(
+      pending.socket,
       state,
-      message.clientId,
-      marketName,
-      levels,
+      pending.clientId,
+      event.data,
     );
+  }
+
+  private handleStorageDeltaCreated(event: StorageDeltaCreatedEvent): void {
+    for (const [socket, state] of this.clients) {
+      if (!state.isReady ||
+        !state.marketStatisticsSubscription.has(event.marketName)) {
+        continue;
+      }
+
+      this.sendBinary(socket, state, 0, event.data);
+    }
   }
 
   private handleSetSubscription(
@@ -435,8 +446,7 @@ export class FrontendWsService {
       return;
     }
 
-    state.marketStatisticsSubscription =
-      new Set(message.params.markets);
+    state.marketStatisticsSubscription = new Set(message.params.markets);
   }
 
   private handleChangeSubscription(
@@ -453,12 +463,7 @@ export class FrontendWsService {
       message.params.entity ===
       FRONTEND_WS_SUBSCRIPTION_ENTITIES.marketRolling
     ) {
-      this.handleMarketRollingSubscriptionChanged(
-        state,
-        socket,
-        message,
-      );
-
+      this.handleMarketRollingSubscriptionChanged(state, socket, message);
       return;
     }
 
@@ -469,20 +474,11 @@ export class FrontendWsService {
       return;
     }
 
-    if (
-      message.params.action ===
-      FRONTEND_WS_SUBSCRIPTION_ACTIONS.add
-    ) {
+    if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.add) {
       for (const marketName of message.params.markets) {
         state.marketStatisticsSubscription.add(marketName);
 
-        if (
-          state.marketsBetweenFullSyncAndSubscription.delete(marketName)
-        ) {
-          /*
-           * The delta stream will continue after the snapshot,
-           * so the storage can be unfrozen now.
-           */
+        if (state.marketsBetweenFullSyncAndSubscription.delete(marketName)) {
           this.lowerStatisticsStorageFreeze(marketName);
         }
       }
@@ -500,15 +496,12 @@ export class FrontendWsService {
     socket: WebSocket,
     message: FrontendWsChangeSubscriptionMessage,
   ): void {
-    if (
-      message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.add
-    ) {
+    if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.add) {
       for (const marketName of message.params.markets) {
         state.marketRollingSubscription.add(marketName);
       }
 
       this.sendRollingSnapshot(socket, message.params.markets);
-
       return;
     }
 
@@ -517,133 +510,74 @@ export class FrontendWsService {
     }
   }
 
-  private handleMarketStatisticsStorageChanged(
-    event: MarketStatisticsStorageChangedEvent,
-  ): void {
-    this.broadcastMarketStatisticsChange(
-      event.marketName,
-      FRONTEND_WS_BINARY_MESSAGE_TYPES.marketStatisticsDelta,
-      event.delta,
-    );
-  }
-
-  private handleMarketStatisticsIndicatorsChanged(
-    event: MarketStatisticsIndicatorsChangedEvent,
-  ): void {
-    this.broadcastMarketStatisticsChange(
-      event.marketName,
-      FRONTEND_WS_BINARY_MESSAGE_TYPES.marketStatisticsIndicatorChanges,
-      event.changes,
-    );
-  }
-
-  private broadcastMarketStatisticsChange(
-    marketName: string,
-    messageType: number,
-    changes: ArrayBuffer,
-  ): void {
-    const payload = encodeMarketStatisticsBinaryPayload(
-      marketName,
-      changes,
-    );
-
-    for (const [socket, state] of this.clients) {
-      if (
-        !state.isReady ||
-        !state.marketStatisticsSubscription.has(marketName)
-      ) {
-        continue;
-      }
-
-      this.sendMarketStatisticsPacket(
-        socket,
-        state,
-        0,
-        messageType,
-        payload,
-      );
-    }
-  }
-
-  private broadcastMarketStatisticsBinary(
-    marketName: string,
-    messageType: number,
-    payload: ArrayBuffer,
-  ): void {
-    for (const [socket, state] of this.clients) {
-      if (
-        !state.isReady ||
-        !state.marketStatisticsSubscription.has(marketName)
-      ) {
-        continue;
-      }
-
-      this.sendMarketStatisticsPacket(
-        socket,
-        state,
-        0,
-        messageType,
-        payload,
-      );
-    }
-  }
-
-  private sendFullMarketStatistics(
+  private sendBinary(
     socket: WebSocket,
     state: FrontendWsClientState,
     clientId: number,
-    marketName: string,
-    levels: FullMarketStatisticsLevel[],
+    data: Uint8Array<ArrayBufferLike>,
   ): void {
-    const payload = encodeFullMarketStatisticsPayload(
-      marketName,
-      levels,
-      globalStateService.getIndicatorRegistry(),
-    );
-
-    this.sendMarketStatisticsPacket(
-      socket,
-      state,
-      clientId,
-      FRONTEND_WS_BINARY_MESSAGE_TYPES.fullMarketStatistics,
-      payload,
-    );
-  }
-
-  private sendMarketStatisticsPacket(
-    socket: WebSocket,
-    state: FrontendWsClientState,
-    clientId: number,
-    messageType: number,
-    payload: ArrayBuffer,
-  ): void {
-    const packet = encodeFrontendWsBinaryPacket(
+    const packet = encodeCodec(
+      FRONTEND_WS_CODEC,
       {
-        messageType,
         serverId: this.getNextServerId(state),
         clientId,
+        data,
       },
-      payload,
     );
 
     getWsServer().sendBinary(socket, packet);
   }
 
-  private sendMarketIndicatorsRegistry(
+  private sendServerEvent<K extends ServerEventWithIdName>(
+    eventName: K,
+    eventData: ServerEventData<K>,
+    socket: WebSocket,
+    clientId: number,
+  ): void {
+    const eventId = serverEventId++;
+
+    this.serverEvents.set(
+      eventId,
+      {
+        socket,
+        clientId,
+        validUntil: Date.now() + SERVER_EVENT_EXPIRATION,
+      },
+    );
+
+    eventBus.emit(
+      eventName,
+      {
+        ...eventData,
+        eventId,
+      } as ServerEventMap[K],
+    );
+  }
+
+  private clearExpiredServerEvents(): void {
+    const now = Date.now();
+
+    for (const [eventId, event] of this.serverEvents) {
+      if (event.validUntil <= now) {
+        this.serverEvents.delete(eventId);
+      }
+    }
+  }
+
+  private sendStorageEntities(
     socket: WebSocket,
     clientId: number,
   ): void {
     getWsServer().sendJson(socket, {
-      type:
-        FRONTEND_WS_CONTROL_MESSAGE_TYPES.marketIndicatorsRegistryLoaded,
+      type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.storageEntitiesLoaded,
       clientId,
-      params: { registry: globalStateService.getIndicatorRegistry() },
+      params: {
+        entities: globalStateService.getStorageEntities(),
+      },
     });
   }
 
-  private getNextServerId(
-    state: FrontendWsClientState,
-  ): number {
+  private getNextServerId(state: FrontendWsClientState): number {
     const serverId = state.nextServerId;
 
     state.nextServerId += 1;
@@ -655,8 +589,7 @@ export class FrontendWsService {
     socket: WebSocket,
     marketNames: string[],
   ): void {
-    const rollingStatisticsByMarket:
-      MarketRollingStatisticsByMarket = {};
+    const rollingStatisticsByMarket: MarketRollingStatisticsByMarket = {};
 
     for (const marketName of marketNames) {
       const rollingStatistics =
@@ -667,9 +600,7 @@ export class FrontendWsService {
       }
     }
 
-    if (
-      Object.keys(rollingStatisticsByMarket).length === 0
-    ) {
+    if (Object.keys(rollingStatisticsByMarket).length === 0) {
       return;
     }
 
@@ -679,9 +610,7 @@ export class FrontendWsService {
     });
   }
 
-  private sendMarketsUpdated(
-    socket: WebSocket,
-  ): void {
+  private sendMarketsUpdated(socket: WebSocket): void {
     getWsServer().sendJson(socket, {
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.marketsUpdated,
       markets: globalStateService.getMarkets(),
@@ -695,10 +624,7 @@ export class FrontendWsService {
     } satisfies ServerWsJsonMessage;
 
     for (const [socket, state] of this.clients) {
-      if (
-        !state.isReady ||
-        !state.marketInfoSubscription.isSubscribed
-      ) {
+      if (!state.isReady || !state.marketInfoSubscription.isSubscribed) {
         continue;
       }
 
@@ -706,8 +632,7 @@ export class FrontendWsService {
     }
   }
 
-  private async loadSettingsForSocket():
-    Promise<FrontendSettings> {
+  private async loadSettingsForSocket(): Promise<FrontendSettings> {
     const settingsValue =
       await frontendSettingsService.getByUserId(temporaryUserId);
 
@@ -724,5 +649,4 @@ export class FrontendWsService {
   }
 }
 
-export const frontendWsService =
-  new FrontendWsService();
+export const frontendWsService = new FrontendWsService();

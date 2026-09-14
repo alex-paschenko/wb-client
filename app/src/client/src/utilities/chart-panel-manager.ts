@@ -1,32 +1,48 @@
 // app/src/client/src/utilities/chart-panel-manager.ts
 
-import type {
-  IChartApi,
-} from 'lightweight-charts';
+import type { IChartApi } from 'lightweight-charts';
 
 import {
   ChartPanel,
   type ChartPanelData,
 } from './chart-panel';
+import type {
+  ChartPanelSeriesSyncContext,
+} from './chart-panel-series-manager';
 
 export class ChartPanelManager {
-  private readonly panelsByGroup = new Map<string, ChartPanel>();
+  private readonly panelsByGroup =
+    new Map<string, ChartPanel>();
+
   private panelGroups: string[] = [];
 
-  public constructor(private readonly chart: IChartApi) {}
+  public constructor(
+    private readonly chart: IChartApi,
+  ) {}
 
-  public sync(panelData: readonly ChartPanelData[]): void {
-    const panelGroups = panelData.map((panel) => panel.group);
+  public sync(
+    panelData: readonly ChartPanelData[],
+    context: ChartPanelSeriesSyncContext,
+  ): void {
+    const panelGroups =
+      panelData.map((panel) => panel.group);
 
     if (!this.hasSamePanelGroups(panelGroups)) {
-      this.rebuild(panelData);
+      this.rebuild(
+        panelData,
+        context,
+      );
+
       return;
     }
 
     for (const panelDataItem of panelData) {
       this.panelsByGroup
         .get(panelDataItem.group)
-        ?.sync(panelDataItem.series);
+        ?.sync(
+          panelDataItem.series,
+          context,
+        );
     }
   }
 
@@ -35,25 +51,40 @@ export class ChartPanelManager {
     this.panelGroups = [];
   }
 
-  private rebuild(panelData: readonly ChartPanelData[]): void {
+  private rebuild(
+    panelData: readonly ChartPanelData[],
+    context: ChartPanelSeriesSyncContext,
+  ): void {
     this.disposePanels();
 
-    for (const [panelIndex, panelDataItem] of panelData.entries()) {
+    for (
+      const [panelIndex, panelDataItem]
+      of panelData.entries()
+    ) {
       const panel = new ChartPanel(
         this.chart,
         panelDataItem.group,
         panelIndex,
       );
 
-      panel.sync(panelDataItem.series);
-      this.panelsByGroup.set(panelDataItem.group, panel);
+      panel.sync(
+        panelDataItem.series,
+        context,
+      );
+
+      this.panelsByGroup.set(
+        panelDataItem.group,
+        panel,
+      );
     }
 
-    this.panelGroups = panelData.map((panel) => panel.group);
+    this.panelGroups =
+      panelData.map((panel) => panel.group);
   }
 
   private disposePanels(): void {
-    const panels = [...this.panelsByGroup.values()].reverse();
+    const panels =
+      [...this.panelsByGroup.values()].reverse();
 
     for (const panel of panels) {
       panel.dispose();

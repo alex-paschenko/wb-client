@@ -1,14 +1,24 @@
+// app/src/server/services/frontend-settings.ts
+
 import { frontendSettingsDao } from '../dao/frontend-settings.js';
 import { AppError } from '../errors/app-error.js';
-
 import { isTheme } from '../../shared/constants/themes.js';
 import { isLanguageCode } from '../../shared/i18n/languages.js';
-import { FrontendSettings as FrontendSettingsModel } from '../../shared/services/frontend-settings.js';
 import {
-  isMarketViewState,
-  type FrontendSettingsValue,
-  type MarketViewStateItem,
+  FrontendSettings as FrontendSettingsModel
+} from '../../shared/services/frontend-settings.js';
+import {
+  STORAGE_ENTITY_KINDS,
+} from '../../shared/constants/storage-entities.js';
+import type {
+  EntitiesSettings,
+  EntityDataKindSettings,
+  FrontendSettingsValue,
+  MarketViewStateItem,
 } from '../../shared/types/frontend-settings.js';
+import type {
+  WritableStorageStructure,
+} from '../../shared/types/storage.js';
 
 export class FrontendSettingsService {
   public async getByUserId(
@@ -61,8 +71,8 @@ export class FrontendSettingsService {
       throw new AppError('errors.invalidSettingsPayload', 400);
     }
 
-    const marketsViewStates = body.marketsViewStates
-      .map((item): MarketViewStateItem => {
+    const marketsViewStates = body.marketsViewStates.map(
+      (item): MarketViewStateItem => {
         if (!item || typeof item !== 'object') {
           throw new AppError('errors.invalidSettingsPayload', 400);
         }
@@ -81,13 +91,48 @@ export class FrontendSettingsService {
           marketName: marketItem.marketName,
           state: marketItem.state,
         };
-      });
+      }
+    );
+
+    const entities = this.validateEntitiesSettings(body.entities);
 
     return {
       theme: body.theme,
       language: body.language,
       marketsViewStates,
+      entities,
     };
+  }
+
+  private validateEntitiesSettings(
+    input: unknown,
+  ): EntitiesSettings {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throw new AppError('errors.invalidSettingsPayload', 400);
+    }
+
+    const source = input as Record<string, unknown>;
+
+    const result =
+      {} as WritableStorageStructure<EntityDataKindSettings>;
+
+    for (const kind of STORAGE_ENTITY_KINDS) {
+      const kindSettings = source[kind];
+
+      if (
+        !kindSettings ||
+        typeof kindSettings !== 'object' ||
+        Array.isArray(kindSettings)
+      ) {
+        throw new AppError('errors.invalidSettingsPayload', 400);
+      }
+
+      result[kind] = structuredClone(
+        kindSettings as Record<string, EntityDataKindSettings>,
+      );
+    }
+
+    return result;
   }
 }
 

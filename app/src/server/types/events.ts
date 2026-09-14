@@ -1,10 +1,11 @@
 // app/src/server/types/events.ts
 
+import type { EntityDesriptor } from '../../shared/types/storage-entities.js';
 import type {
   ExtendedMarketDataView,
   FullMarketStatisticsLevel,
   MarketCandle,
-} from '../../shared/types/market-statistics-storage.js';
+} from '../../shared/types/storage-old.js';
 import type {
   MarketRollingStatistics,
   MarketRollingStatisticsByMarket,
@@ -16,12 +17,7 @@ import type { StrategySignal } from './strategy-signals.js';
 import type { SERVER_EVENT } from '../constants/events.js';
 import type { MarketTick } from './market-statistics.js';
 import type { MarketsByName } from '../../shared/types/market.js';
-import type {
-  MarketCandleAddRow,
-  MarketCandleIndicatorsChange,
-  MarketCandleRemoveRow,
-  MarketStatisticsPersistenceChanges,
-} from './persistence.js';
+import { ExtendedStoragePersistenceSnapshot, StorageAccessors } from '../../shared/types/storage.js';
 
 export type ServerEventName =
   typeof SERVER_EVENT[keyof typeof SERVER_EVENT];
@@ -60,15 +56,43 @@ export interface MarketStatisticsIndicatorsChangedEvent {
   changes: ArrayBuffer;
 }
 
-export type RecalculateIndicatorsRequestEvent = ExtendedMarketDataView;
-
-export interface IndicatorsRecalculatedEvent {
+export interface RecalculateEntitiesRequestEvent {
+  accessors: StorageAccessors;
   marketName: string;
-  receivedAt: number;
+  size: number;
+  endedAt: number;
 }
 
-export interface MarketIndicatorsRegistryReadyEvent {
-  registry: MarketIndicatorsRegistry;
+export interface EntitiesRecalculatedEvent {
+  marketName: string;
+  size: number;
+  endedAt: number;
+}
+
+
+export interface StorageSnapshotedEvent {
+  snapshots: ExtendedStoragePersistenceSnapshot[];
+}
+
+export interface StorageDeltaCreatedEvent {
+  data: Uint8Array<ArrayBufferLike>;
+  marketName: string;
+}
+
+export interface StorageFullSyncRequestEvent {
+  marketName: string;
+  eventId: number;
+  freezeStorage: boolean;
+}
+
+export interface StorageFullSyncResultsEvent {
+  marketName: string;
+  eventId: number;
+  data: Uint8Array<ArrayBufferLike>;
+}
+
+export interface AddStorageEntitiesEvent {
+  entities: EntityDesriptor[];
 }
 
 export type MarketStatisticsRestoredMarketData =
@@ -124,23 +148,21 @@ export interface ServerEventMap {
   [SERVER_EVENT.marketStatisticsIndicatorsChanged]:
     MarketStatisticsIndicatorsChangedEvent;
 
-  [SERVER_EVENT.marketIndicatorsRegistryReady]:
-    MarketIndicatorsRegistryReadyEvent;
-  [SERVER_EVENT.recalculateIndicatorsRequest]:
-    RecalculateIndicatorsRequestEvent;
-  [SERVER_EVENT.indicatorsRecalculated]:
-    IndicatorsRecalculatedEvent;
+  [SERVER_EVENT.addStorageEntities]: AddStorageEntitiesEvent;
+  [SERVER_EVENT.recalculateEntitiesRequest]: RecalculateEntitiesRequestEvent;
+  [SERVER_EVENT.entitiesRecalculated]: EntitiesRecalculatedEvent;
 
-  [SERVER_EVENT.marketStatisticsRestored]:
-    MarketStatisticsRestoredEvent;
+  [SERVER_EVENT.marketStatisticsRestored]: MarketStatisticsRestoredEvent;
 
-  [SERVER_EVENT.marketStatisticsPersistenceChanged]:
-    MarketStatisticsPersistenceChanges;
+  [SERVER_EVENT.storageSnapshoted]: StorageSnapshotedEvent;
+  [SERVER_EVENT.storageDeltaCreated]:StorageDeltaCreatedEvent;
+  [SERVER_EVENT.storageFullSyncRequest]: StorageFullSyncRequestEvent;
+  [SERVER_EVENT.storageFullSyncResults]: StorageFullSyncResultsEvent;
 
   [SERVER_EVENT.marketStatisticsApproximated]:
     MarketStatisticsApproximatedEvent;
 
-  [SERVER_EVENT.freezeOnStatisticsStorageNeedsToBeLowered]:
+  [SERVER_EVENT.freezeOnStorageNeedsToBeLowered]:
     FreezeOnStatisticsStorageNeedsToBeLoweredEvent;
 
   [SERVER_EVENT.strategySignalCreated]: StrategySignalCreatedEvent;

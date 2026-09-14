@@ -24,7 +24,7 @@ type JsonMessageHandler = (
 ) => void;
 
 type BinaryMessageHandler = (
-  data: ArrayBuffer,
+  data: Uint8Array<ArrayBufferLike>,
 ) => void;
 
 type ConnectionStateHandler = (
@@ -163,7 +163,7 @@ export class FrontendWsClient {
 
   private handleMessage(data: unknown): void {
     if (data instanceof ArrayBuffer) {
-      this.handleBinaryMessage(data);
+      this.handleBinaryMessage(new Uint8Array(data));
       return;
     }
 
@@ -174,7 +174,7 @@ export class FrontendWsClient {
 
     if (data instanceof Blob) {
       void data.arrayBuffer().then((buffer) => {
-        this.handleBinaryMessage(buffer);
+        this.handleBinaryMessage(new Uint8Array(buffer));
       });
     }
   }
@@ -232,7 +232,9 @@ export class FrontendWsClient {
     }
   }
 
-  private handleBinaryMessage(data: ArrayBuffer): void {
+  private handleBinaryMessage(
+    data: Uint8Array<ArrayBufferLike>,
+  ): void {
     for (const handler of this.binaryMessageHandlers) {
       handler(data);
     }

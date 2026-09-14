@@ -1,53 +1,129 @@
 // app/src/client/src/components/MarketChart.tsx
 
-import { useEffect, useRef } from 'react';
-
 import {
-  CandlestickSeries,
+  useEffect,
+  useMemo,
+  useRef,
+} from 'react';
+import {
   createChart,
   type IChartApi,
-  type ISeriesApi,
-  LineSeries,
 } from 'lightweight-charts';
 
 import type {
-  MarketChartCandlePoint,
-  MarketChartLinePoint,
+  FrontendSettings,
+} from '../../../shared/services/frontend-settings';
+import type { Storage } from '../../../shared/services/storage';
+import type {
+  EntityDesriptor,
+} from '../../../shared/types/storage-entities';
+import type {
+  MarketChartUpdateMode,
   MarketChartVisibleRange,
 } from '../controllers/MarketStatisticsView';
+import {
+  ENTITY_DATA_KIND_HANDLERS,
+} from '../entity-data-kinds';
 import type {
   ChartPanelData,
 } from '../utilities/chart-panel';
 import {
   ChartPanelManager,
 } from '../utilities/chart-panel-manager';
+import type {
+  ChartPanelSeries,
+} from '../utilities/chart-panel-series-manager';
 
 interface MarketChartProps {
-  candleData: MarketChartCandlePoint[];
-  candleLineColor: string;
-  panels: ChartPanelData[];
+  storage: Storage | null;
+  entities: readonly EntityDesriptor[];
+  settings: FrontendSettings;
+
+  startIndex: number;
+  endIndex: number;
+
+  updateMode: MarketChartUpdateMode;
   chartVersion: number;
   visibleRange: MarketChartVisibleRange;
 }
 
 export const MarketChart = ({
-  candleData,
-  candleLineColor,
-  panels,
+  storage,
+  entities,
+  settings,
+  startIndex,
+  endIndex,
+  updateMode,
   chartVersion,
   visibleRange,
 }: MarketChartProps) => {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const chartRef = useRef<IChartApi | null>(null);
+  const containerRef =
+    useRef<HTMLDivElement | null>(null);
 
-  const candleSeriesRef =
-    useRef<ISeriesApi<'Candlestick'> | null>(null);
-
-  const candleLineSeriesRef =
-    useRef<ISeriesApi<'Line'> | null>(null);
+  const chartRef =
+    useRef<IChartApi | null>(null);
 
   const panelManagerRef =
     useRef<ChartPanelManager | null>(null);
+
+  const panels = useMemo<ChartPanelData[]>(() => {
+    const seriesByGroup =
+      new Map<string, ChartPanelSeries[]>();
+
+    for (
+      const [entityIndex, descriptor]
+      of entities.entries()
+    ) {
+      for (const dataKind of descriptor.dataKind) {
+        const handler =
+          ENTITY_DATA_KIND_HANDLERS[dataKind];
+
+        const handlerSettings =
+          handler.getSettings(
+            settings,
+            descriptor,
+            entityIndex,
+          );
+
+        if (!handler.isVisible(handlerSettings)) {
+          continue;
+        }
+
+        let groupSeries =
+          seriesByGroup.get(descriptor.group);
+
+        if (!groupSeries) {
+          groupSeries = [];
+          seriesByGroup.set(
+            descriptor.group,
+            groupSeries,
+          );
+        }
+
+        groupSeries.push({
+          key:
+            `${descriptor.kind}:` +
+            `${descriptor.name}:` +
+            `${dataKind}`,
+          descriptor,
+          entityIndex,
+          handler,
+          settings: handlerSettings,
+        });
+      }
+    }
+
+    return Array.from(
+      seriesByGroup,
+      ([group, series]) => ({
+        group,
+        series,
+      }),
+    );
+  }, [
+    entities,
+    settings,
+  ]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -56,19 +132,22 @@ export const MarketChart = ({
       return;
     }
 
-    const textColor = getComputedStyle(document.documentElement)
-      .getPropertyValue('--color-muted')
-      .trim();
+    const textColor =
+      getComputedStyle(document.documentElement)
+        .getPropertyValue('--color-muted')
+        .trim();
 
     const chart = createChart(container, {
       width: container.clientWidth,
       height: container.clientHeight,
+
       layout: {
         background: {
           color: 'transparent',
         },
         textColor,
       },
+
       grid: {
         vertLines: {
           visible: false,
@@ -77,9 +156,11 @@ export const MarketChart = ({
           visible: false,
         },
       },
+
       rightPriceScale: {
         borderVisible: false,
       },
+
       timeScale: {
         borderVisible: false,
         timeVisible: true,
@@ -89,36 +170,17 @@ export const MarketChart = ({
       },
     });
 
-    const candleSeries = chart.addSeries(
-      CandlestickSeries,
-      {
-        priceLineVisible: false,
-        lastValueVisible: false,
-      },
-      0,
-    );
-
-    const candleLineSeries = chart.addSeries(
-      LineSeries,
-      {
-        lineWidth: 1,
-        priceLineVisible: true,
-        lastValueVisible: true,
-      },
-      0,
-    );
-
     chartRef.current = chart;
-    candleSeriesRef.current = candleSeries;
-    candleLineSeriesRef.current = candleLineSeries;
-    panelManagerRef.current = new ChartPanelManager(chart);
+    panelManagerRef.current =
+      new ChartPanelManager(chart);
 
-    const resizeObserver = new ResizeObserver(() => {
-      chart.applyOptions({
-        width: container.clientWidth,
-        height: container.clientHeight,
+    const resizeObserver =
+      new ResizeObserver(() => {
+        chart.applyOptions({
+          width: container.clientWidth,
+          height: container.clientHeight,
+        });
       });
-    });
 
     resizeObserver.observe(container);
 
@@ -129,52 +191,49 @@ export const MarketChart = ({
       chart.remove();
 
       chartRef.current = null;
-      candleSeriesRef.current = null;
-      candleLineSeriesRef.current = null;
       panelManagerRef.current = null;
     };
   }, []);
 
   useEffect(() => {
     const chart = chartRef.current;
-    const candleSeries = candleSeriesRef.current;
-    const candleLineSeries = candleLineSeriesRef.current;
     const panelManager = panelManagerRef.current;
 
-    if (
-      !chart ||
-      !candleSeries ||
-      !candleLineSeries ||
-      !panelManager
-    ) {
+    if (!chart || !panelManager || !storage) {
       return;
     }
 
-    candleSeries.setData(candleData);
+    try {
+      panelManager.sync(
+        panels,
+        {
+          accessors: storage.getAccessors(),
+          startIndex,
+          endIndex,
+          updateMode,
+        },
+      );
 
-    candleLineSeries.applyOptions({
-      color: candleLineColor,
-    });
-
-    candleLineSeries.setData(
-      candleData.map<MarketChartLinePoint>((candle) => ({
-        time: candle.time,
-        value: candle.close,
-      })),
-    );
-
-    panelManager.sync(panels);
-
-    if (candleData.length > 0) {
-      chart.timeScale().setVisibleRange(visibleRange);
+      if (endIndex >= startIndex) {
+        chart.timeScale().setVisibleRange(visibleRange);
+      }
+    } finally {
+      storage.clearLazyArrayCaches();
     }
   }, [
-    candleData,
-    candleLineColor,
+    storage,
     panels,
+    startIndex,
+    endIndex,
+    updateMode,
     chartVersion,
     visibleRange,
   ]);
 
-  return <div ref={containerRef} className="h-full w-full" />;
+  return (
+    <div
+      ref={containerRef}
+      className="h-full w-full"
+    />
+  );
 };

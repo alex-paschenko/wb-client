@@ -1,51 +1,31 @@
 // app/src/client/src/controllers/MarketStatisticsView.ts
 
-import type {
-  CandlestickData,
-  LineData,
-  UTCTimestamp,
-  WhitespaceData,
-} from 'lightweight-charts';
+import type { UTCTimestamp } from 'lightweight-charts';
 
+import { CANDLE_NAME } from '../../../shared/constants/storage-entities';
 import {
   MARKET_STATISTICS_LEVEL_DURATIONS,
-} from '../../../shared/constants/market-statistics-config';
+} from '../../../shared/constants/storage-config';
 import { SECOND } from '../../../shared/constants/time';
-import {
-  MarketStatisticsStorageService,
-} from '../../../shared/services/market-statistics-storage';
-import type {
-  MarketIndicatorValues,
-} from '../../../shared/types/market-indicators';
-import type {
-  MarketCandle,
-} from '../../../shared/types/market-statistics-storage';
-import type {
-  FullMarketStatisticsPayload,
-  MarketStatisticsBinaryPayload,
-} from '../../../shared/utilities/market-statistics-payload-codec';
-
-export type MarketChartLinePoint = LineData | WhitespaceData;
-
-export type MarketChartCandlePoint = CandlestickData;
-
-export interface MarketChartIndicatorData {
-  indicatorName: string;
-  data: MarketChartLinePoint[];
-}
+import type { Storage } from '../../../shared/services/storage';
+import type { MarketCandle } from '../../../shared/types/data-types';
+import type { LazyArray } from '../../../shared/utilities/lazy-array';
 
 export type MarketChartVisibleRange = {
   from: UTCTimestamp;
   to: UTCTimestamp;
 };
 
+export type MarketChartUpdateMode = 'replace' | 'append';
+
 export interface MarketStatisticsViewState {
   pointsCount: number;
   chartVersion: number;
+  chartUpdateMode: MarketChartUpdateMode;
   selectedInterval: number;
-  candleData: MarketChartCandlePoint[];
-  indicatorData: MarketChartIndicatorData[];
   visibleRange: MarketChartVisibleRange;
+  startIndex: number;
+  endIndex: number;
 }
 
 const defaultInterval =
@@ -69,19 +49,17 @@ export const createInitialMarketStatisticsViewState = (
 ): MarketStatisticsViewState => ({
   pointsCount: 0,
   chartVersion: 0,
+  chartUpdateMode: 'replace',
   selectedInterval: interval,
-  candleData: [],
-  indicatorData: [],
   visibleRange: createVisibleRange(interval),
+  startIndex: 0,
+  endIndex: -1,
 });
 
 export class MarketStatisticsView {
-  private storage: MarketStatisticsStorageService | null = null;
-
   private state: MarketStatisticsViewState;
 
   public constructor(
-    private readonly marketName: string,
     private interval: number = defaultInterval,
   ) {
     this.state = createInitialMarketStatisticsViewState(interval);
@@ -92,202 +70,89 @@ export class MarketStatisticsView {
   }
 
   public setInterval(
+    storage: Storage | null,
     interval: number,
   ): MarketStatisticsViewState {
     this.interval = interval;
 
-    return this.refresh();
+    return this.refresh(storage, 'replace');
   }
 
-  public applyFullSync(
-    payload: FullMarketStatisticsPayload,
+  public refresh(
+    storage: Storage | null,
+    updateMode: MarketChartUpdateMode = 'replace',
   ): MarketStatisticsViewState {
-    this.checkPayloadMarketName(payload.marketName);
-
-    const storage = new MarketStatisticsStorageService(this.marketName);
-
-    storage.restoreAllItemsByLevel(payload.levels);
-
-    this.storage = storage;
-
-    return this.refresh();
-  }
-
-  public applyDelta(
-    payload: MarketStatisticsBinaryPayload,
-  ): MarketStatisticsViewState {
-    this.checkPayloadMarketName(payload.marketName);
-
-    if (!this.storage) {
-      return this.refresh();
-    }
-
-    this.storage.applyDelta(payload.payload);
-
-    return this.refresh();
-  }
-
-  public applyIndicatorChanges(
-    payload: MarketStatisticsBinaryPayload,
-  ): MarketStatisticsViewState {
-    this.checkPayloadMarketName(payload.marketName);
-
-    if (!this.storage) {
-      return this.refresh();
-    }
-
-    this.storage.applyIndicatorChanges(payload.payload);
-
-    return this.refresh();
-  }
-
-  public refresh(): MarketStatisticsViewState {
-    const now = Date.now();
     const visibleRange = createVisibleRange(this.interval);
 
-    if (!this.storage) {
+    if (!storage || storage.size === 0) {
       this.state = {
         ...this.state,
+        pointsCount: 0,
+        chartVersion: this.state.chartVersion + 1,
+        chartUpdateMode: 'replace',
         selectedInterval: this.interval,
         visibleRange,
+        startIndex: 0,
+        endIndex: -1,
       };
 
       return this.state;
     }
 
-    const projection =
-      this.storage.createIntervalProjection(this.interval, now);
-
-    if (projection.candles.length !== projection.indicators.length) {
-      throw new Error(
-        `Cannot create market statistics view for ` +
-        `"${this.marketName}": candle count ` +
-        `${projection.candles.length} does not match ` +
-        `indicator values count ${projection.indicators.length}`,
-      );
-    }
-
-    const candleData = this.createCandleData(projection.candles);
-
-    const indicatorData = this.createIndicatorsData(
-      projection.candles,
-      projection.indicators,
-    );
+    const { startIndex, endIndex } =
+      this.getVisibleIndexes(storage);
 
     this.state = {
       ...this.state,
-      pointsCount: candleData.length,
+      pointsCount:
+        endIndex >= startIndex
+          ? endIndex - startIndex + 1
+          : 0,
       chartVersion: this.state.chartVersion + 1,
+      chartUpdateMode: updateMode,
       selectedInterval: this.interval,
-      candleData,
-      indicatorData,
       visibleRange,
+      startIndex,
+      endIndex,
     };
 
     return this.state;
   }
 
-  private checkPayloadMarketName(marketName: string): void {
-    if (marketName !== this.marketName) {
-      throw new Error(
-        `Cannot apply market statistics for market ` +
-        `"${marketName}" to view "${this.marketName}"`,
-      );
-    }
-  }
+  private getVisibleIndexes(
+    storage: Storage,
+  ): {
+    startIndex: number;
+    endIndex: number;
+  } {
+    const candles =
+      storage.getAccessors().candles[CANDLE_NAME] as LazyArray<MarketCandle>;
 
-  private createCandleData(
-    candles: readonly MarketCandle[],
-  ): MarketChartCandlePoint[] {
-    const dataByTime =
-      new Map<UTCTimestamp, MarketChartCandlePoint>();
-
-    for (const candle of candles) {
-      const time = this.toChartTime(candle.startedAt);
-
-      dataByTime.set(time, {
-        time,
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-      });
+    if (!candles || candles.length === 0) {
+      return {
+        startIndex: 0,
+        endIndex: -1,
+      };
     }
 
-    return Array.from(dataByTime.values()).sort(
-      (left, right) => Number(left.time) - Number(right.time),
-    );
-  }
+    const cutoff = Date.now() - this.interval;
+    const endIndex = candles.length - 1;
 
-  private createIndicatorsData(
-    candles: readonly MarketCandle[],
-    indicators: readonly MarketIndicatorValues[],
-  ): MarketChartIndicatorData[] {
-    const indicatorNames =
-      this.getSortedIndicatorNames(indicators);
+    let startIndex = endIndex;
 
-    return indicatorNames.map((indicatorName) => ({
-      indicatorName,
-      data: this.createIndicatorData(
-        indicatorName,
-        candles,
-        indicators,
-      ),
-    }));
-  }
+    while (startIndex > 0) {
+      const previousEndedAt = candles.get(startIndex - 1, 'endedAt');
 
-  private getSortedIndicatorNames(
-    indicators: readonly MarketIndicatorValues[],
-  ): string[] {
-    const indicatorNames = new Set<string>();
-
-    for (const indicatorValues of indicators) {
-      for (const indicatorName of Object.keys(indicatorValues)) {
-        indicatorNames.add(indicatorName);
-      }
-    }
-
-    return Array.from(indicatorNames).sort();
-  }
-
-  private createIndicatorData(
-    indicatorName: string,
-    candles: readonly MarketCandle[],
-    indicators: readonly MarketIndicatorValues[],
-  ): MarketChartLinePoint[] {
-    const dataByTime =
-      new Map<UTCTimestamp, MarketChartLinePoint>();
-
-    for (let index = 0; index < candles.length; index += 1) {
-      const candle = candles[index];
-      const indicatorValues = indicators[index];
-
-      if (!candle || !indicatorValues) {
-        throw new Error(
-          `Cannot create indicator data ` +
-          `"${indicatorName}" for market ` +
-          `"${this.marketName}": missing data ` +
-          `at projection index ${index}`,
-        );
+      if (previousEndedAt < cutoff) {
+        break;
       }
 
-      const time = this.toChartTime(candle.startedAt);
-      const value = indicatorValues[indicatorName];
-
-      dataByTime.set(
-        time,
-        value === null || value === undefined
-          ? { time }
-          : { time, value },
-      );
+      startIndex--;
     }
 
-    return Array.from(dataByTime.values()).sort(
-      (left, right) => Number(left.time) - Number(right.time),
-    );
-  }
-
-  private toChartTime(timestamp: number): UTCTimestamp {
-    return Math.floor(timestamp / ONE_SECOND) as UTCTimestamp;
+    return {
+      startIndex,
+      endIndex,
+    };
   }
 }

@@ -27,3 +27,27 @@ export class Awaiters<Key, Result> {
     resolve(result);
   }
 }
+
+type ResolverFn<T> = (
+  resolve: (value: T) => void,
+) => void;
+
+export async function waitFor<T>(
+  resolver: ResolverFn<T>,
+  intervalMs: number
+): Promise<T> {
+  return new Promise<T>((outerResolve) => {
+    const intervalId = setInterval(
+      () => {
+        const wrappedResolve = (value: T) => {
+          clearInterval(intervalId);
+          outerResolve(value);
+        };
+
+
+        resolver(wrappedResolve);
+      },
+      intervalMs,
+    );
+  });
+}

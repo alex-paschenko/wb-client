@@ -1,6 +1,4 @@
-import {
-  MARKET_STATISTICS_LEVEL_CONFIGS
-} from '../constants/market-statistics-config';
+// app/src/shared/utilities/time.ts
 
 export type TimeUnits =
   | 'milliseconds'
@@ -45,30 +43,4 @@ export function convertIntervalToTimeWithUnit (
   }
 
   return intervalWithUnit;
-};
-
-const intervalToLevel = (interval: number): number =>
-  MARKET_STATISTICS_LEVEL_CONFIGS.reduce(
-    (acc, configEntry, index) => {
-      if (acc.summInterval < interval) {
-        acc.level = index;
-        acc.summInterval += configEntry.interval;
-      }
-      return acc;
-    },
-    { level: 0, summInterval: 0 },
-  ).level;
-
-export const getCumulativeCutoffs = (
-  now: number,
-): number[] => {
-  let retentionDepth = 0;
-
-  return MARKET_STATISTICS_LEVEL_CONFIGS.map(
-    (config) => {
-      retentionDepth += config.interval;
-
-      return now - retentionDepth;
-    },
-  );
 };

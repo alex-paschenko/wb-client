@@ -1,3 +1,5 @@
+// app/src/server/dao/frontend-settings.ts
+
 import type { Sql } from '../db/client.js';
 import { q } from '../db/client.js';
 
@@ -31,7 +33,7 @@ export class FrontendSettingsDao {
       insert into frontend_settings ${
         this.q({
           user_id: userId,
-          settings: { ...settings },
+          settings: this.q.json(settings),
         })
       }
       on conflict (user_id)

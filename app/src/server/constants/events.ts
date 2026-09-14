@@ -11,21 +11,22 @@ export const SERVER_EVENT = {
   marketTickReceived: 'market tick received',
 
   marketStatisticsStorageChanged: 'market statistics storage changed',
-  marketStatisticsIndicatorsChanged:
-    'market statistics indicators changed',
+  marketStatisticsIndicatorsChanged: 'market statistics indicators changed',
 
   marketStatisticsRestored: 'market statistics restored',
 
-  marketStatisticsPersistenceChanged:
-    'market statistics persistence changed',
+  storageSnapshoted: 'storage snapshoted',
+  storageDeltaCreated: 'storage delta created',
+  storageFullSyncRequest: 'storage full sync request',
+  storageFullSyncResults: 'storage full sync results',
+
   marketStatisticsApproximated: 'market statistics approximated',
 
-  marketIndicatorsRegistryReady: 'market indicators registry ready',
-  recalculateIndicatorsRequest: 'recalculate indicators request',
-  indicatorsRecalculated: 'recalculate indicators results',
+  addStorageEntities: 'add storage entities',
+  recalculateEntitiesRequest: 'recalculate entities request',
+  entitiesRecalculated: 'entities recalculated',
 
-  freezeOnStatisticsStorageNeedsToBeLowered:
-    'freeze on the statistics storage needs to be lowered',
+  freezeOnStorageNeedsToBeLowered: 'freeze on storage needs to be lowered',
 
   strategySignalCreated: 'strategy signal created',
   strategyFailed: 'strategy failed',

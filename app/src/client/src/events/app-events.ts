@@ -1,27 +1,21 @@
 // app/src/client/src/events/app-events.ts
+
 import type {
   FrontendSettings,
 } from '../../../shared/services/frontend-settings';
 import type {
   FrontendWsSubscriptionAction,
 } from '../../../shared/types/frontend-ws';
-import type {
-  MarketRollingStatistics,
-} from '../../../shared/types/market-statistics-rolling';
-import type {
-  FullMarketStatisticsPayload,
-  MarketStatisticsBinaryPayload,
-} from '../../../shared/utilities/market-statistics-payload-codec';
+import type { MarketRollingStatistics } from
+  '../../../shared/types/market-statistics-rolling';
+import type { MarketsByName } from '../../../shared/types/market';
+import type { EntityDesriptor } from '../../../shared/types/storage-entities';
+import type { PredecodedBinary } from
+  '../../../shared/utilities/codecs/entire-binary-codec';
 import {
   EventEmitter,
   type EventMapBase,
 } from '../utilities/event-emitter';
-import type {
-  MarketIndicatorsRegistry,
-} from '../../../shared/types/market-indicators';
-import type {
-  MarketsByName,
-} from '../../../shared/types/market';
 
 type AppEventMap = EventMapBase & {
   frontendWsConnectionStateChanged: [
@@ -36,7 +30,7 @@ type AppEventMap = EventMapBase & {
 
   subscribeMarketInfo: [];
 
-  requestMarketIndicatorsRegistry: [];
+  requestStorageEntities: [];
 
   synchronizationCompleted: [];
 
@@ -52,8 +46,8 @@ type AppEventMap = EventMapBase & {
     settings: FrontendSettings,
   ];
 
-  startupIndicatorRegistryReceived: [
-    registry: MarketIndicatorsRegistry,
+  startupStorageEntitiesReceived: [
+    entities: EntityDesriptor[],
   ];
 
   requestMarketStatisticsFullSync: [
@@ -83,16 +77,12 @@ type AppEventMap = EventMapBase & {
     rollingStatistics: MarketRollingStatistics,
   ];
 
-  marketStatisticsFullSyncReceived: [
-    payload: FullMarketStatisticsPayload,
+  storageSnapshotReceived: [
+    binary: PredecodedBinary,
   ];
 
-  marketStatisticsDeltaReceived: [
-    payload: MarketStatisticsBinaryPayload,
-  ];
-
-  marketStatisticsIndicatorChangesReceived: [
-    payload: MarketStatisticsBinaryPayload,
+  storageDeltaReceived: [
+    binary: PredecodedBinary,
   ];
 };
 

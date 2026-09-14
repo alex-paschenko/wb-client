@@ -1,12 +1,11 @@
 // app/src/client/src/utilities/chart-panel.ts
 
-import type {
-  IChartApi,
-} from 'lightweight-charts';
+import type { IChartApi } from 'lightweight-charts';
 
 import {
   ChartPanelSeriesManager,
   type ChartPanelSeries,
+  type ChartPanelSeriesSyncContext,
 } from './chart-panel-series-manager';
 
 export interface ChartPanelData {
@@ -22,11 +21,21 @@ export class ChartPanel {
     public readonly group: string,
     private panelIndex: number,
   ) {
-    this.seriesManager = new ChartPanelSeriesManager(chart, panelIndex);
+    this.seriesManager =
+      new ChartPanelSeriesManager(
+        chart,
+        panelIndex,
+      );
   }
 
-  public sync(series: readonly ChartPanelSeries[]): void {
-    this.seriesManager.sync(series);
+  public sync(
+    series: readonly ChartPanelSeries[],
+    context: ChartPanelSeriesSyncContext,
+  ): void {
+    this.seriesManager.sync(
+      series,
+      context,
+    );
   }
 
   public moveTo(panelIndex: number): void {

@@ -24,14 +24,10 @@ import {
   type LogEntry,
   type LogLevel,
 } from '../../../shared/types/logger';
-import type {
-  MarketsByName,
-} from '../../../shared/types/market';
-import {
-  globalStateService,
-} from '../../../shared/services/global-state';
+import type { MarketsByName } from '../../../shared/types/market';
+import { globalStateService } from '../../../shared/services/global-state';
 import { appEvents } from '../events/app-events';
-import { MarketIndicatorsRegistry } from '../../../shared/types/market-indicators';
+import type { EntityDesriptor } from '../../../shared/types/storage-entities';
 
 type AppLogger = {
   debug: (body: string) => void;
@@ -47,7 +43,7 @@ type AppLogger = {
 
 export type AppContextValue = {
   markets: MarketsByName;
-  indicatorRegistry: MarketIndicatorsRegistry | null;
+  entities: EntityDesriptor[];
   settings: FrontendSettings;
   logs: LogEntry[];
 
@@ -63,23 +59,10 @@ export type AppContextValue = {
   ) => void;
   openMarket: (marketName: string) => void;
   closeMarket: (marketName: string) => void;
-  moveMarket: (
-    marketName: string,
-    targetIndex: number,
-  ) => void;
+  moveMarket: (marketName: string, targetIndex: number) => void;
 
-  setCandleColor: (
-    color: string,
-  ) => void;
-
-  setIndicatorColor: (
-    indicatorName: string,
-    color: string,
-  ) => void;
-
-  setIndicatorVisible: (
-    indicatorName: string,
-    isVisible: boolean,
+  updateSettings: (
+    updater: (settings: FrontendSettings) => void,
   ) => void;
 
   logger: AppLogger;
@@ -98,11 +81,8 @@ export const AppProvider = ({
     setMarketsState,
   ] = useState<MarketsByName>({});
 
-  const [
-    indicatorRegistry,
-    setIndicatorRegistry,
-  ] = useState<MarketIndicatorsRegistry | null>(
-    globalStateService.getIndicatorRegistryOrNull(),
+  const [entities, setEntities] = useState<EntityDesriptor[]>(
+    globalStateService.getStorageEntitiesOrNull() ?? [],
   );
 
   const [
@@ -143,8 +123,10 @@ export const AppProvider = ({
   }, []);
 
   useEffect(() => {
-    return globalStateService.subscribeIndicatorRegistry(
-      setIndicatorRegistry,
+    return globalStateService.subscribeStorageEntities(
+      (nextEntities) => {
+        setEntities(nextEntities ?? []);
+      },
     );
   }, []);
 
@@ -181,11 +163,9 @@ export const AppProvider = ({
     [],
   );
 
-  const updateSettingsValue =
+  const updateSettings =
     useCallback((
-      updater: (
-        settings: FrontendSettings,
-      ) => void,
+      updater: (settings: FrontendSettings) => void,
     ) => {
       const nextSettings =
         FrontendSettings.fromValue(
@@ -212,107 +192,39 @@ export const AppProvider = ({
       );
     }, []);
 
-  const setCandleColor =
-    useCallback((
-      color: string,
-    ) => {
-      updateSettingsValue(
-        (nextSettings) => {
-          nextSettings.setCandleColor(
-            color,
-          );
-        },
+  const setTheme = useCallback(
+    (theme: string) => {
+      updateSettings(
+        (nextSettings) => { nextSettings.setTheme(theme); },
       );
     }, [
-      updateSettingsValue,
+      updateSettings,
     ]);
 
-  const setIndicatorColor =
-    useCallback((
-      indicatorName: string,
-      color: string,
-    ) => {
-      updateSettingsValue(
-        (nextSettings) => {
-          nextSettings.setIndicatorColor(
-            indicatorName,
-            color,
-          );
-        },
+  const setLanguage = useCallback(
+    (language: string) => {
+      updateSettings(
+        (nextSettings) => { nextSettings.setLanguage(language); },
       );
     }, [
-      updateSettingsValue,
-    ]);
-
-  const setIndicatorVisible =
-    useCallback((
-      indicatorName: string,
-      isVisible: boolean,
-    ) => {
-      updateSettingsValue(
-        (nextSettings) => {
-          nextSettings.setIndicatorVisible(
-            indicatorName,
-            isVisible,
-          );
-        },
-      );
-    }, [
-      updateSettingsValue,
-    ]);
-
-  const setTheme =
-    useCallback((
-      theme: string,
-    ) => {
-      updateSettingsValue(
-        (nextSettings) => {
-          nextSettings.setTheme(
-            theme,
-          );
-        },
-      );
-    }, [
-      updateSettingsValue,
-    ]);
-
-  const setLanguage =
-    useCallback((
-      language: string,
-    ) => {
-      updateSettingsValue(
-        (nextSettings) => {
-          nextSettings.setLanguage(
-            language,
-          );
-        },
-      );
-    }, [
-      updateSettingsValue,
+      updateSettings,
     ]);
 
   const setMarketViewState =
-    useCallback((
-      marketName: string,
-      state: MarketViewState,
-    ) => {
-      updateSettingsValue(
+    useCallback(
+      (marketName: string, state: MarketViewState) => {
+      updateSettings(
         (nextSettings) => {
-          nextSettings.setMarketViewState(
-            marketName,
-            state,
-          );
+          nextSettings.setMarketViewState(marketName, state);
         },
       );
     }, [
-      updateSettingsValue,
+      updateSettings,
     ]);
 
-  const openMarket =
-    useCallback((
-      marketName: string,
-    ) => {
-      updateSettingsValue(
+  const openMarket = useCallback(
+    (marketName: string) => {
+      updateSettings(
         (nextSettings) => {
           nextSettings.openMarket(
             marketName,
@@ -321,43 +233,31 @@ export const AppProvider = ({
         },
       );
     }, [
-      updateSettingsValue,
+      updateSettings,
     ]);
 
-  const closeMarket =
-    useCallback((
-      marketName: string,
-    ) => {
-      updateSettingsValue(
+  const closeMarket = useCallback(
+    (marketName: string) => {
+      updateSettings(
+        (nextSettings) => { nextSettings.closeMarket(marketName); },
+      );
+    }, [
+      updateSettings,
+    ]);
+
+  const moveMarket = useCallback(
+    (marketName: string, targetIndex: number) => {
+      updateSettings(
         (nextSettings) => {
-          nextSettings.closeMarket(
-            marketName,
-          );
+          nextSettings.moveMarket(marketName, targetIndex);
         },
       );
     }, [
-      updateSettingsValue,
+      updateSettings,
     ]);
 
-  const moveMarket =
-    useCallback((
-      marketName: string,
-      targetIndex: number,
-    ) => {
-      updateSettingsValue(
-        (nextSettings) => {
-          nextSettings.moveMarket(
-            marketName,
-            targetIndex,
-          );
-        },
-      );
-    }, [
-      updateSettingsValue,
-    ]);
-
-  const addEntry =
-    useCallback((
+  const addEntry = useCallback(
+    (
       level: LogLevel,
       timestamp: number,
       body: string,
@@ -372,89 +272,83 @@ export const AppProvider = ({
           },
         ],
       );
-    }, []);
+    },
+    [],
+  );
 
-  const logger =
-    useMemo<AppLogger>(
-      () => ({
-        debug: (
-          body: string,
-        ) => {
-          addEntry(
-            LOG_LEVELS.debug,
-            Date.now(),
-            body,
-          );
-        },
+  const logger = useMemo<AppLogger>(
+    () => ({
+      debug: (
+        body: string,
+      ) => {
+        addEntry(
+          LOG_LEVELS.debug,
+          Date.now(),
+          body,
+        );
+      },
 
-        info: (
-          body: string,
-        ) => {
-          addEntry(
-            LOG_LEVELS.info,
-            Date.now(),
-            body,
-          );
-        },
+      info: (
+        body: string,
+      ) => {
+        addEntry(
+          LOG_LEVELS.info,
+          Date.now(),
+          body,
+        );
+      },
 
-        warn: (
-          body: string,
-        ) => {
-          addEntry(
-            LOG_LEVELS.warn,
-            Date.now(),
-            body,
-          );
-        },
+      warn: (
+        body: string,
+      ) => {
+        addEntry(
+          LOG_LEVELS.warn,
+          Date.now(),
+          body,
+        );
+      },
 
-        error: (
-          body: string,
-        ) => {
-          addEntry(
-            LOG_LEVELS.error,
-            Date.now(),
-            body,
-          );
-        },
+      error: (
+        body: string,
+      ) => {
+        addEntry(
+          LOG_LEVELS.error,
+          Date.now(),
+          body,
+        );
+      },
 
-        addEntry,
-      }),
-      [
-        addEntry,
-      ],
-    );
+      addEntry,
+    }),
+    [
+      addEntry,
+    ],
+  );
 
-  const value =
-    useMemo<AppContextValue>(
+  const value = useMemo<AppContextValue>(
       () => ({
         markets,
-        indicatorRegistry,
+        entities,
         settings,
         logs,
-
+        updateSettings,
         getSettings,
         getMarkets,
 
         setTheme,
         setLanguage,
-
         setMarketViewState,
         openMarket,
         closeMarket,
         moveMarket,
-
-        setCandleColor,
-        setIndicatorColor,
-        setIndicatorVisible,
-
         logger,
       }),
       [
         markets,
-        indicatorRegistry,
+        entities,
         settings,
         logs,
-
+        updateSettings,
         getSettings,
         getMarkets,
 
@@ -465,11 +359,6 @@ export const AppProvider = ({
         openMarket,
         closeMarket,
         moveMarket,
-
-        setCandleColor,
-        setIndicatorColor,
-        setIndicatorVisible,
-
         logger,
       ],
     );

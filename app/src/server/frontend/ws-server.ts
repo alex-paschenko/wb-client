@@ -120,7 +120,7 @@ export class AppWsServer {
 
   public sendBinary(
     socket: WebSocket,
-    data: ArrayBuffer,
+    data: Uint8Array,
   ): void {
     if (socket.readyState !== WebSocket.OPEN) {
       return;

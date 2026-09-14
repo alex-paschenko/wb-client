@@ -4,9 +4,7 @@ import type {
   MarketRollingStatistics,
 } from '../../shared/types/market-statistics-rolling.js';
 import { SERVER_EVENT } from '../constants/events.js';
-import type {
-  MarketsInfoUpdatedEvent,
-} from '../types/events.js';
+import type { MarketsInfoUpdatedEvent } from '../types/events.js';
 import { MarketTick } from '../types/market-statistics.js';
 import type {
   WhitebitMarketStatistics,

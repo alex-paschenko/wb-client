@@ -1,11 +1,11 @@
 // app/src/shared/types/market-indicators.ts
 
 import type {
-  INDICATOR_CODECS,
+  STORAGE_CODECS,
 } from '../constants/market-indicators.js';
 
 export type IndicatorValueCodecName =
-  typeof INDICATOR_CODECS[number]['name'];
+  typeof STORAGE_CODECS[number]['name'];
 
 export type IndicatorValueCodecIndex = number;
 

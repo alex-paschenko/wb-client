@@ -1,4 +1,10 @@
 // app/src/shared/types/frontend-settings.ts
+
+import type {
+  EntityDataKind,
+} from '../constants/storage-entities.js';
+import type { StorageStructure } from './storage.js';
+
 export const MARKET_VIEW_STATES = {
   closed: 'closed',
   quarter: 'quarter',
@@ -17,24 +23,21 @@ export type MarketViewStateItem = {
   state: MarketViewState;
 };
 
-export type CandleSettings = {
-  color: string;
-};
+export type EntityDataKindSettings =
+  Partial<Record<EntityDataKind, unknown>>;
 
-export type IndicatorSettings = {
-  color: string;
-  isVisible: boolean;
-};
-
-export type IndicatorsSettings =
-  Record<string, IndicatorSettings>;
+/*
+ * Deep=1 keeps the outer StorageStructure readonly while entity maps
+ * remain mutable inside FrontendSettings.
+ */
+export type EntitiesSettings =
+  StorageStructure<EntityDataKindSettings, 1>;
 
 export type FrontendSettingsValue = {
   language: string;
   theme: string;
   marketsViewStates: MarketViewStateItem[];
-  candles: CandleSettings;
-  indicators: IndicatorsSettings;
+  entities: EntitiesSettings;
 };
 
 export const isMarketViewState = (

@@ -693,7 +693,7 @@ export class Storage {
           this.getChunkAndPosByFlatIndex,
           this.invalidateSnapshot,
         ),
-      3,
+      2,
     );
   }
 

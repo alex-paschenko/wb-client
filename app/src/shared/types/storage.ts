@@ -14,7 +14,7 @@ export type StorageStructure<T, TDeep extends number = 2> =
 
 export type StorageItemValues = Partial<StorageStructure<unknown>>;
 
-export type StorageAccessors = StorageStructure<LazyArray, 3>;
+export type StorageAccessors = StorageStructure<LazyArray, 2>;
 
 export interface StorageChunkSet {
   level: number;

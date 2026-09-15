@@ -238,7 +238,7 @@ extends IncrementalIndicator<RcaIndicatorState> {
   private getCandles(
     accessors: StorageAccessors,
   ) {
-    return this.getEntityValues<MarketCandle>(accessors, CANDLE_NAME);
+    return this.getEntityValues<MarketCandle>(accessors, 'candles', CANDLE_NAME);
   }
 
   private calculateValue(relativeSpeedSum: number): number {

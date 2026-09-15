@@ -3,6 +3,7 @@
 import { globalStateService } from '../../../services/global-state.js';
 import type {
   FixedSizeCodec,
+  PrimitiveCodec,
   SingleValueCodec,
 } from '../../../types/codecs.js';
 import type {
@@ -53,6 +54,20 @@ const getSingleValueCodec = (
   if (codec.dataKind !== 'singleValue') {
     throw new TypeError(
       `Codec "${name}" must be singleValue`,
+    );
+  }
+
+  return codec;
+};
+
+const getPrimitiveCodec = (
+  name: string,
+): PrimitiveCodec<any, any> => {
+  const codec = getCodec(name);
+
+  if (codec.dataKind !== 'primitive') {
+    throw new TypeError(
+      `Codec "${name}" must be primitive`,
     );
   }
 
@@ -203,23 +218,16 @@ const writeParams = (
   view: DataView,
   params: StorageDeltaParams,
 ): number => {
-  const nullableFloat64 =
-    getSingleValueCodec('float64 (nullable) v1.0');
+  const nullableFloat64 = getPrimitiveCodec('float64 (nullable) v1.0');
 
   view.setUint16(offset, params.size, true);
   offset += UINT16_SIZE;
 
-  offset = nullableFloat64.writeByOffset(
-    offset,
-    view,
-    params.startedAt,
-  ).nextOffset;
+  nullableFloat64.writeByOffset(offset, view, params.startedAt);
+  offset += nullableFloat64.size;
 
-  offset = nullableFloat64.writeByOffset(
-    offset,
-    view,
-    params.endedAt,
-  ).nextOffset;
+  nullableFloat64.writeByOffset(offset, view, params.endedAt);
+  offset += nullableFloat64.size;
 
   return offset;
 };
@@ -231,27 +239,22 @@ const readParams = (
   value: StorageDeltaParams;
   nextOffset: number;
 } => {
-  const nullableFloat64 =
-    getSingleValueCodec('float64 (nullable) v1.0');
+  const nullableFloat64 = getPrimitiveCodec('float64 (nullable) v1.0');
 
   const size = view.getUint16(offset, true);
   offset += UINT16_SIZE;
 
-  const startedAtResult =
-    nullableFloat64.readByOffset(offset, view);
+  const startedAt = nullableFloat64.readByOffset(offset, view);
+  offset += nullableFloat64.size;
 
-  offset = startedAtResult.nextOffset;
-
-  const endedAtResult =
-    nullableFloat64.readByOffset(offset, view);
-
-  offset = endedAtResult.nextOffset;
+  const endedAt = nullableFloat64.readByOffset(offset, view);
+  offset += nullableFloat64.size;
 
   return {
     value: {
       size,
-      startedAt: startedAtResult.value,
-      endedAt: endedAtResult.value,
+      startedAt: startedAt,
+      endedAt: endedAt,
     },
     nextOffset: offset,
   };
@@ -265,34 +268,20 @@ const writeStructuralChanges = (
   view.setUint16(offset, changes.length, true);
   offset += UINT16_SIZE;
 
-  const nullableFloat64 = getSingleValueCodec('float64 (nullable) v1.0');
+  const nullableFloat64 = getPrimitiveCodec('float64 (nullable) v1.0');
 
   for (const change of changes) {
-    view.setUint8(
-      offset,
-      OPERATION_TYPES[change.type],
-    );
-
+    view.setUint8(offset, OPERATION_TYPES[change.type]);
     offset += UINT8_SIZE;
 
     view.setUint8(offset, change.level);
     offset += UINT8_SIZE;
 
     if (change.type === 'addItem') {
-      view.setFloat64(
-        offset,
-        change.startedAt,
-        true,
-      );
-
+      view.setFloat64(offset, change.startedAt, true);
       offset += FLOAT64_SIZE;
 
-      view.setFloat64(
-        offset,
-        change.endedAt,
-        true,
-      );
-
+      view.setFloat64(offset, change.endedAt, true);
       offset += FLOAT64_SIZE;
 
       continue;
@@ -301,11 +290,12 @@ const writeStructuralChanges = (
     view.setUint16(offset, change.count, true);
     offset += UINT16_SIZE;
 
-    offset = nullableFloat64.writeByOffset(
+    nullableFloat64.writeByOffset(
       offset,
       view,
       change.newStartedAt,
-    ).nextOffset;
+    );
+    offset += nullableFloat64.size;
   }
 
   return offset;
@@ -321,7 +311,7 @@ const readStructuralChanges = (
   const changesCount = view.getUint16(offset, true);
   offset += UINT16_SIZE;
 
-  const nullableFloat64 = getSingleValueCodec('float64 (nullable) v1.0');
+  const nullableFloat64 = getPrimitiveCodec('float64 (nullable) v1.0');
 
   const changes: StorageStructuralChange[] = [];
 
@@ -358,16 +348,14 @@ const readStructuralChanges = (
 
       offset += UINT16_SIZE;
 
-      const newStartedAtResult =
-        nullableFloat64.readByOffset(offset, view);
-
-      offset = newStartedAtResult.nextOffset;
+      const newStartedAt = nullableFloat64.readByOffset(offset, view);
+      offset += nullableFloat64.size;
 
       changes.push({
         type: 'deleteItems',
         level,
         count,
-        newStartedAt: newStartedAtResult.value,
+        newStartedAt,
       });
 
       continue;
@@ -393,8 +381,7 @@ const writeEntityChanges = (
   view.setUint16(offset, entityChanges.length, true);
   offset += UINT16_SIZE;
 
-  const entities =
-    globalStateService.getStorageEntities();
+  const entities = globalStateService.getStorageEntities();
 
   const chunkSets = accumulator.getChunkSets();
 
@@ -402,65 +389,37 @@ const writeEntityChanges = (
     const entity = entities[entityChange.entityIndex]!;
     const codec = getFixedSizeCodec(entity.codec);
 
-    view.setUint16(
-      offset,
-      entityChange.entityIndex,
-      true,
-    );
+    view.setUint16(offset, entityChange.entityIndex, true);
 
     offset += UINT16_SIZE;
 
-    view.setUint16(
-      offset,
-      entityChange.changes.length,
-      true,
-    );
+    view.setUint16(offset, entityChange.changes.length, true);
 
     offset += UINT16_SIZE;
 
     for (const interval of entityChange.changes) {
-      view.setUint8(
-        offset,
-        interval.chunkSetIndex,
-      );
+      view.setUint8(offset, interval.chunkSetIndex);
 
       offset += UINT8_SIZE;
 
-      view.setUint8(
-        offset,
-        interval.startItemIndex,
-      );
+      view.setUint8(offset, interval.startItemIndex);
 
       offset += UINT8_SIZE;
 
-      view.setUint8(
-        offset,
-        interval.itemsCount,
-      );
+      view.setUint8(offset, interval.itemsCount);
 
       offset += UINT8_SIZE;
 
-      const chunkSet =
-        chunkSets[interval.chunkSetIndex]!;
+      const chunkSet = chunkSets[interval.chunkSetIndex]!;
 
-      const chunk =
-        chunkSet.chunks[entity.kind][entity.name];
+      const chunk = chunkSet.chunks[entity.kind][entity.name];
 
-      const startByte =
-        interval.startItemIndex * codec.size;
+      const startByte = interval.startItemIndex * codec.size;
 
-      const byteLength =
-        interval.itemsCount * codec.size;
+      const byteLength = interval.itemsCount * codec.size;
 
-      new Uint8Array(
-        view.buffer,
-        view.byteOffset + offset,
-        byteLength,
-      ).set(
-        chunk.data.subarray(
-          startByte,
-          startByte + byteLength,
-        ),
+      new Uint8Array(view.buffer, view.byteOffset + offset, byteLength)
+        .set(chunk.data.subarray(startByte, startByte + byteLength),
       );
 
       offset += byteLength;
@@ -478,13 +437,11 @@ const readEntityChanges = (
   value: StorageDeltaEntityChanges[];
   nextOffset: number;
 } => {
-  const changedEntityCount =
-    view.getUint16(offset, true);
+  const changedEntityCount = view.getUint16(offset, true);
 
   offset += UINT16_SIZE;
 
-  const entities =
-    globalStateService.getStorageEntities();
+  const entities = globalStateService.getStorageEntities();
 
   const chunkSets = accumulator.getChunkSets();
 
@@ -495,8 +452,7 @@ const readEntityChanges = (
     entityChangeIndex < changedEntityCount;
     entityChangeIndex++
   ) {
-    const entityIndex =
-      view.getUint16(offset, true);
+    const entityIndex = view.getUint16(offset, true);
 
     offset += UINT16_SIZE;
 
@@ -508,43 +464,36 @@ const readEntityChanges = (
       );
     }
 
-    const intervalCount =
-      view.getUint16(offset, true);
+    const intervalCount = view.getUint16(offset, true);
 
     offset += UINT16_SIZE;
 
     const codec = getFixedSizeCodec(entity.codec);
 
-    const changes =
-      [] as StorageDeltaEntityChanges['changes'];
+    const changes = [] as StorageDeltaEntityChanges['changes'];
 
     for (
       let intervalIndex = 0;
       intervalIndex < intervalCount;
       intervalIndex++
     ) {
-      const chunkSetIndex =
-        view.getUint8(offset);
+      const chunkSetIndex = view.getUint8(offset);
 
       offset += UINT8_SIZE;
 
-      const startItemIndex =
-        view.getUint8(offset);
+      const startItemIndex = view.getUint8(offset);
 
       offset += UINT8_SIZE;
 
-      const itemsCount =
-        view.getUint8(offset);
+      const itemsCount = view.getUint8(offset);
 
       offset += UINT8_SIZE;
 
-      const chunkSet =
-        chunkSets[chunkSetIndex];
+      const chunkSet = chunkSets[chunkSetIndex];
 
       if (!chunkSet) {
         throw new RangeError(
-          `Storage chunk set index ${chunkSetIndex} ` +
-          `is out of range`,
+          `Storage chunk set index ${chunkSetIndex} is out of range`,
         );
       }
 
@@ -561,8 +510,7 @@ const readEntityChanges = (
         );
       }
 
-      const chunk =
-        chunkSet.chunks[entity.kind]?.[entity.name];
+      const chunk = chunkSet.chunks[entity.kind]?.[entity.name];
 
       if (!chunk) {
         throw new Error(
@@ -572,11 +520,9 @@ const readEntityChanges = (
         );
       }
 
-      const startByte =
-        startItemIndex * codec.size;
+      const startByte = startItemIndex * codec.size;
 
-      const byteLength =
-        itemsCount * codec.size;
+      const byteLength = itemsCount * codec.size;
 
       const nextOffset = offset + byteLength;
 
@@ -587,19 +533,11 @@ const readEntityChanges = (
       }
 
       chunk.data.set(
-        new Uint8Array(
-          view.buffer,
-          view.byteOffset + offset,
-          byteLength,
-        ),
+        new Uint8Array(view.buffer, view.byteOffset + offset, byteLength),
         startByte,
       );
 
-      changes.push({
-        chunkSetIndex,
-        startItemIndex,
-        itemsCount,
-      });
+      changes.push({chunkSetIndex, startItemIndex, itemsCount});
 
       offset = nextOffset;
     }
@@ -612,10 +550,7 @@ const readEntityChanges = (
     });
   }
 
-  return {
-    value: entityChanges,
-    nextOffset: offset,
-  };
+  return { value: entityChanges, nextOffset: offset };
 };
 
 export const delta_V1_0 = singleValueCodecDefinition<
@@ -642,23 +577,11 @@ export const delta_V1_0 = singleValueCodecDefinition<
     view.setUint8(offset, value.flags);
     offset += UINT8_SIZE;
 
-    offset = writeParams(
-      offset,
-      view,
-      value.startParams,
-    );
+    offset = writeParams(offset, view, value.startParams);
 
-    offset = writeParams(
-      offset,
-      view,
-      value.endParams,
-    );
+    offset = writeParams(offset, view, value.endParams);
 
-    offset = writeStructuralChanges(
-      offset,
-      view,
-      value.structuralChanges,
-    );
+    offset = writeStructuralChanges(offset, view, value.structuralChanges);
 
     offset = writeEntityChanges(
       offset,
@@ -667,10 +590,7 @@ export const delta_V1_0 = singleValueCodecDefinition<
       accumulator,
     );
 
-    return {
-      value,
-      nextOffset: offset,
-    };
+    return { value, nextOffset: offset };
   },
 
   read: (

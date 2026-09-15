@@ -75,9 +75,7 @@ export class FrontendWsController {
         );
 
         if (!isConnected) {
-          this.lastServerId = 0;
-          globalStateService.clearStorageEntities();
-          globalStateService.clearMarkets();
+          this.clearSessionState();
         }
 
         appEvents.emit(
@@ -173,7 +171,7 @@ export class FrontendWsController {
             `Binary WS processing failed: ${message}`,
           );
 
-          this.lastServerId = 0;
+          this.clearSessionState();
           frontendWsClient.reconnect();
         }
       });
@@ -250,8 +248,7 @@ export class FrontendWsController {
     this.unsubscribeChangeMarketRollingSubscription = null;
 
     this.clearSettingsSaveTimeout();
-
-    this.lastServerId = 0;
+    this.clearSessionState();
 
     frontendWsClient.close();
 
@@ -422,7 +419,7 @@ export class FrontendWsController {
       `received ${serverId}, expected ${expectedServerId}`,
     );
 
-    this.lastServerId = 0;
+    this.clearSessionState();
     frontendWsClient.reconnect();
 
     return false;
@@ -470,6 +467,12 @@ export class FrontendWsController {
     }
 
     return this.getAppContext();
+  }
+
+  private clearSessionState(): void {
+    this.lastServerId = 0;
+    globalStateService.clearStorageEntities();
+    globalStateService.clearMarkets();
   }
 }
 

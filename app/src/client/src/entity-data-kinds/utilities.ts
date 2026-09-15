@@ -22,5 +22,5 @@ export const getEntityChartTime = (
 
   const startedAt = candles.get(index, 'startedAt');
 
-  return Math.floor(startedAt / ONE_SECOND) as UTCTimestamp;
+  return startedAt / ONE_SECOND as UTCTimestamp;
 };

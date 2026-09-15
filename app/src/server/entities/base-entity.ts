@@ -9,6 +9,9 @@ import type {
   Entity,
   EntityAffectedRange,
 } from '../types/entities.js';
+import type {
+  StorageEntityKind,
+} from '../../shared/constants/storage-entities.js';
 
 export abstract class BaseEntity<T> implements Entity<T> {
   public readonly descriptor: EntityDesriptor<T>;
@@ -30,18 +33,23 @@ export abstract class BaseEntity<T> implements Entity<T> {
   public removeMarket(_marketName: string): void {}
 
   protected getValues(accessors: StorageAccessors): LazyArray<T> {
-    return this.getEntityValues<T>(accessors, this.descriptor.name);
+    return this.getEntityValues<T>(
+      accessors,
+      this.descriptor.kind,
+      this.descriptor.name,
+    );
   }
 
   protected getEntityValues<TValue>(
     accessors: StorageAccessors,
+    kind: StorageEntityKind,
     name: string,
   ): LazyArray<TValue> {
-    const values = accessors[this.descriptor.kind][name];
+    const values = accessors[kind][name];
 
     if (!values) {
       throw new Error(
-        `Entity "${this.descriptor.kind}/${name}" accessor not found`,
+        `Entity "${kind}/${name}" accessor not found`,
       );
     }
 
@@ -57,8 +65,11 @@ export abstract class BaseEntity<T> implements Entity<T> {
 
     for (const dependency of this.dependencies) {
       intervals.push(
-        ...this.getEntityValues(accessors, dependency)
-          .getTransitoryChanges(),
+        ...this.getEntityValues(
+          accessors,
+          this.descriptor.kind,
+          dependency,
+        ).getTransitoryChanges(),
       );
     }
 

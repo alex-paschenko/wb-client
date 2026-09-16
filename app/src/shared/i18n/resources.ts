@@ -39,6 +39,14 @@ export const i18nResources = {
         settings: 'Настройки',
       },
 
+      chart: {
+        entityData: {
+          price: 'Цена',
+          speed: 'Скорость',
+          acceleration: 'Ускорение',
+        },
+      },
+
       log: {
         title: 'Лог',
         scrollToBottom: 'Прокрутить вниз',
@@ -155,6 +163,14 @@ export const i18nResources = {
       routes: {
         dashboard: 'Dashboard',
         settings: 'Settings',
+      },
+
+      chart: {
+        entityData: {
+          price: 'Price',
+          speed: 'Speed',
+          acceleration: 'Acceleration',
+        },
       },
 
       log: {

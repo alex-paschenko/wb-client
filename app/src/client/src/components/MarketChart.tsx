@@ -1,15 +1,10 @@
 // app/src/client/src/components/MarketChart.tsx
 
-import {
-  useEffect,
-  useMemo,
-  useRef,
-} from 'react';
-import {
-  createChart,
-  type IChartApi,
-} from 'lightweight-charts';
+import { useEffect, useMemo, useRef } from 'react';
+import { createChart, type IChartApi} from 'lightweight-charts';
+import { useTranslation } from 'react-i18next';
 
+import { truncateMiddle } from '../utilities/string';
 import type {
   FrontendSettings,
 } from '../../../shared/services/frontend-settings';
@@ -57,29 +52,27 @@ export const MarketChart = ({
   chartVersion,
   visibleRange,
 }: MarketChartProps) => {
-  const containerRef =
-    useRef<HTMLDivElement | null>(null);
+  const { t } = useTranslation();
 
-  const chartRef =
-    useRef<IChartApi | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
-  const panelManagerRef =
-    useRef<ChartPanelManager | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+
+  const panelManagerRef = useRef<ChartPanelManager | null>(null);
 
   const panels = useMemo<ChartPanelData[]>(() => {
-    const seriesByGroup =
-      new Map<string, ChartPanelSeries[]>();
+    const seriesByGroup = new Map<string, ChartPanelSeries[]>();
 
     for (const [entityIndex, descriptor] of entities.entries()) {
-      for (const { kind: dataKind, group } of descriptor.data) {
+      for (const data of descriptor.data) {
+        const { kind: dataKind, group } = data;
         const handler = ENTITY_DATA_KIND_HANDLERS[dataKind];
 
-        const handlerSettings =
-          handler.getSettings(
-            settings,
-            descriptor,
-            entityIndex,
-          );
+        const handlerSettings = handler.getSettings(
+          settings,
+          descriptor,
+          entityIndex,
+        );
 
         if (!handler.isVisible(handlerSettings)) {
           continue;
@@ -92,12 +85,17 @@ export const MarketChart = ({
           seriesByGroup.set(group, groupSeries);
         }
 
+        const translatedName = data.key
+          ? t(`chart.entityData.${data.key}`, {
+              defaultValue: descriptor.name,
+            })
+          : descriptor.name;
+
+        const title = truncateMiddle(translatedName, 10);
+
         groupSeries.push({
-          key:
-            `${descriptor.kind}:` +
-            `${descriptor.name}:` +
-            `${dataKind}:` +
-            `${group}`,
+          key: `${descriptor.kind}:${descriptor.name}:${dataKind}:${group}`,
+          title,
           descriptor,
           entityIndex,
           handler,
@@ -116,6 +114,7 @@ export const MarketChart = ({
   }, [
     entities,
     settings,
+    t,
   ]);
 
   useEffect(() => {

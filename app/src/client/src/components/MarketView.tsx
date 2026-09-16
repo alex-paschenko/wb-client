@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
-  MARKET_STATISTICS_LEVEL_DURATIONS,
+  STORAGE_LEVEL_DURATIONS,
 } from '../../../shared/constants/storage-config';
 import type {
   OpenMarketViewState,
@@ -25,7 +25,7 @@ interface MarketViewProps {
 }
 
 const defaultDuration =
-  MARKET_STATISTICS_LEVEL_DURATIONS[0];
+  STORAGE_LEVEL_DURATIONS[0];
 
 export const MarketView = ({
   marketName,
@@ -49,7 +49,7 @@ export const MarketView = ({
     useController(controller);
 
   const selectedDuration = useMemo(() => {
-    return MARKET_STATISTICS_LEVEL_DURATIONS.find(
+    return STORAGE_LEVEL_DURATIONS.find(
       (item) =>
         item.interval ===
         controllerState.selectedInterval,
@@ -59,7 +59,7 @@ export const MarketView = ({
   ]);
 
   const durationItems = useMemo(() => {
-    return MARKET_STATISTICS_LEVEL_DURATIONS.map(
+    return STORAGE_LEVEL_DURATIONS.map(
       (duration) => ({
         value: duration.interval,
 

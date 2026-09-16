@@ -1,10 +1,6 @@
 // app/src/client/src/utilities/chart-panel-series-manager.ts
 
-import type {
-  IChartApi,
-  ISeriesApi,
-  SeriesType,
-} from 'lightweight-charts';
+import type { IChartApi, ISeriesApi, SeriesType } from 'lightweight-charts';
 
 import type { StorageAccessors } from '../../../shared/types/storage';
 import type {
@@ -19,6 +15,7 @@ import type {
 
 export interface ChartPanelSeries {
   key: string;
+  title: string;
   descriptor: EntityDesriptor;
   entityIndex: number;
   handler: AnyEntityDataKindHandler;
@@ -178,13 +175,14 @@ export class ChartPanelSeriesManager {
     }
 
     const managed: ManagedChartPanelSeries = {
-      series: item.handler.createSeries(
-        {
-          chart: this.chart,
-          panelIndex: this.panelIndex,
-        },
-        item.settings,
-      ),
+    series: item.handler.createSeries(
+      {
+        chart: this.chart,
+        panelIndex: this.panelIndex,
+        title: item.title,
+      },
+      item.settings,
+    ),
       isInitialized: false,
     };
 

@@ -101,10 +101,11 @@ export const accelerationLineDataKindHandler:
     isVisible: (settings) => settings.isVisible,
     getData,
 
-    createSeries: ({ chart, panelIndex }, settings) => {
+    createSeries: ({ chart, panelIndex, title }, settings) => {
       return chart.addSeries(
         LineSeries,
         {
+          title,
           color: settings.color,
           lineWidth: 1,
           visible: settings.isVisible,

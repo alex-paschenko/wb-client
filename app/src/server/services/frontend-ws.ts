@@ -45,14 +45,11 @@ import { frontendSettingsService } from './frontend-settings.js';
 import { marketStatisticsRollingService } from './market-statistics-rolling.js';
 
 const SERVER_EVENT_EXPIRATION = 1 * MINUTE;
-const FULL_SYNC_SUBSCRIPTION_TIMEOUT = 10 * SECONDS;
-const FULL_SYNC_WATCHDOG_INTERVAL = 1 * SECOND;
 
 let serverEventId = 0;
 
 type MarketStatisticsSubscriptionState = Map<string, number>;
 type MarketRollingSubscriptionState = Map<string, number>;
-type PendingFullSyncState = Map<string, number>;
 
 interface PendingServerEvent {
   socket: WebSocket;
@@ -77,7 +74,6 @@ type FrontendWsClientState = {
   marketInfoSubscription: { clientId: number; isSubscribed: boolean; };
   marketStatisticsSubscription: MarketStatisticsSubscriptionState;
   marketRollingSubscription: MarketRollingSubscriptionState;
-  marketsBetweenFullSyncAndSubscription: PendingFullSyncState;
 };
 
 export class FrontendWsService {
@@ -86,8 +82,6 @@ export class FrontendWsService {
   private readonly serverEvents = new Map<number, PendingServerEvent>();
 
   private serverEventExpirationTimer:
-    ReturnType<typeof setInterval> | null = null;
-  private fullSyncWatchdogTimer:
     ReturnType<typeof setInterval> | null = null;
 
   public start(): void {
@@ -132,25 +126,9 @@ export class FrontendWsService {
       () => { this.clearExpiredServerEvents(); },
       SERVER_EVENT_EXPIRATION,
     );
-
-    this.fullSyncWatchdogTimer = setInterval(
-      () => { this.processFullSyncWatchdog(); },
-      FULL_SYNC_WATCHDOG_INTERVAL,
-    );
   }
 
   private handleClientClose(socket: WebSocket): void {
-    const state = this.clients.get(socket);
-
-    if (state) {
-      for (
-        const marketName of
-        state.marketsBetweenFullSyncAndSubscription.keys()
-      ) {
-        this.lowerStatisticsStorageFreeze(marketName);
-      }
-    }
-
     for (const [eventId, pending] of this.serverEvents) {
       if (pending.socket === socket) {
         this.serverEvents.delete(eventId);
@@ -158,13 +136,6 @@ export class FrontendWsService {
     }
 
     this.clients.delete(socket);
-  }
-
-  private lowerStatisticsStorageFreeze(marketName: string): void {
-    eventBus.emit(
-      SERVER_EVENT.freezeOnStorageNeedsToBeLowered,
-      { marketName },
-    );
   }
 
   private createClientState(): FrontendWsClientState {
@@ -175,7 +146,6 @@ export class FrontendWsService {
       marketInfoSubscription: { clientId: 0, isSubscribed: false },
       marketStatisticsSubscription: new Map(),
       marketRollingSubscription: new Map(),
-      marketsBetweenFullSyncAndSubscription: new Map(),
     };
   }
 
@@ -224,7 +194,7 @@ export class FrontendWsService {
       message.type ===
       FRONTEND_WS_CONTROL_MESSAGE_TYPES.requestMarketStatisticsFullSync
     ) {
-      this.handleRequestMarketStatisticsFullSync(socket, message);
+      this.handleStorageFullSyncRequest(socket, message);
       return;
     }
 
@@ -351,7 +321,7 @@ export class FrontendWsService {
     this.sendStorageEntities(socket, message.clientId);
   }
 
-  private handleRequestMarketStatisticsFullSync(
+  private handleStorageFullSyncRequest(
     socket: WebSocket,
     message: FrontendWsRequestMarketStatisticsFullSyncMessage,
   ): void {
@@ -361,19 +331,9 @@ export class FrontendWsService {
       return;
     }
 
-    const { marketName } = message.params;
-
-    const freezeStorage =
-      !state.marketsBetweenFullSyncAndSubscription.has(marketName);
-
-    state.marketsBetweenFullSyncAndSubscription.set(
-      marketName,
-      Date.now() + FULL_SYNC_SUBSCRIPTION_TIMEOUT,
-    );
-
     this.sendServerEvent(
       SERVER_EVENT.storageFullSyncRequest,
-      { marketName, freezeStorage },
+      { marketName: message.params.marketName },
       socket,
       message.clientId,
     );
@@ -400,12 +360,9 @@ export class FrontendWsService {
       return;
     }
 
-    this.sendBinary(
-      pending.socket,
-      state,
-      pending.clientId,
-      event.data,
-    );
+    this.sendBinary(pending.socket, state, pending.clientId, event.data);
+
+    state.marketStatisticsSubscription.set(event.marketName, pending.clientId);
   }
 
   private handleStorageDeltaCreated(event: StorageDeltaCreatedEvent): void {
@@ -478,27 +435,14 @@ export class FrontendWsService {
       return;
     }
 
-    if (message.params.action === FRONTEND_WS_SUBSCRIPTION_ACTIONS.add) {
-      for (const marketName of message.params.markets) {
-        state.marketStatisticsSubscription.set(
-          marketName,
-          message.clientId,
-        );
-
-        if (state.marketsBetweenFullSyncAndSubscription.delete(marketName)) {
-          this.lowerStatisticsStorageFreeze(marketName);
-        }
-      }
-
-      return;
+    if (message.params.action !== FRONTEND_WS_SUBSCRIPTION_ACTIONS.remove) {
+      throw new Error(
+        'Market statistics subscription can only be removed explicitly',
+      );
     }
 
     for (const marketName of message.params.markets) {
       state.marketStatisticsSubscription.delete(marketName);
-
-      if (state.marketsBetweenFullSyncAndSubscription.delete(marketName)) {
-        this.lowerStatisticsStorageFreeze(marketName);
-      }
     }
   }
 
@@ -558,37 +502,8 @@ export class FrontendWsService {
 
     eventBus.emit(
       eventName,
-      {
-        ...eventData,
-        eventId,
-      } as ServerEventMap[K],
+      { ...eventData, eventId } as ServerEventMap[K],
     );
-  }
-
-  private processFullSyncWatchdog(): void {
-    const now = Date.now();
-
-    for (const [socket, state] of this.clients) {
-      if (socket.readyState !== WebSocket.OPEN) {
-        continue;
-      }
-
-      for (
-        const validUntil of
-        state.marketsBetweenFullSyncAndSubscription.values()
-      ) {
-        if (validUntil > now) {
-          continue;
-        }
-
-        socket.close(
-          1008,
-          'Full sync subscription timeout',
-        );
-
-        break;
-      }
-    }
   }
 
   private clearExpiredServerEvents(): void {

@@ -63,11 +63,6 @@ export class StorageAggregationService {
     );
 
     eventBus.on(
-      SERVER_EVENT.freezeOnStorageNeedsToBeLowered,
-      (event) => { this.freezingByMarket.warm(event.marketName); },
-    );
-
-    eventBus.on(
       SERVER_EVENT.storageFullSyncRequest,
       (event) => { void this.handleFullSyncRequest(event); }
     );
@@ -386,30 +381,39 @@ export class StorageAggregationService {
     }
 
     const targetLevel = sourceLevel + 1;
-
     const targetDuration = storageConfig.getLevelConfig(targetLevel).duration;
 
     const sourceCandles = this.readCandles(candles, sourceRange.start, count);
 
-    const aggregatedCandles = this.aggregateCandlesByDuration(
+    const bucketCounts = this.getAggregationBucketCounts(
       sourceCandles,
       targetDuration,
     );
 
-    const newStartedAt = this.getStartedAtAfterDelete(
-      candles,
-      sourceRange,
-      count,
-    );
+    for (const bucketCount of bucketCounts) {
+      const currentSourceRange = this.getLevelRange(storage, sourceLevel);
 
-    storage.deleteNItems(sourceLevel, count, newStartedAt);
+      const bucket = this.readCandles(
+        candles,
+        currentSourceRange.start,
+        bucketCount,
+      );
 
-    for (const candle of aggregatedCandles) {
+      const aggregatedCandle = this.aggregateCandles(bucket);
+
+      const newStartedAt = this.getStartedAtAfterDelete(
+        candles,
+        currentSourceRange,
+        bucketCount,
+      );
+
+      storage.deleteNItems(sourceLevel, bucketCount, newStartedAt);
+
       storage.addItem(
         targetLevel,
-        candle.startedAt,
-        candle.endedAt,
-        this.createCandleValues(candle),
+        aggregatedCandle.startedAt,
+        aggregatedCandle.endedAt,
+        this.createCandleValues(aggregatedCandle),
       );
     }
 
@@ -502,34 +506,19 @@ export class StorageAggregationService {
   private async handleFullSyncRequest(
     event: StorageFullSyncRequestEvent,
   ): Promise<void> {
-    const { marketName, eventId, freezeStorage } = event;
+    const { marketName, eventId } = event;
     const storage = this.getOrCreateStorage(marketName);
-
-    const awaiter = (
-      freezingByMarket: Freezing,
-      marketName: string,
-      resolver: (_: void) => void,
-    ) => {
-      if (!freezingByMarket.isIcy(marketName)) {
-        resolver();
-      }
-    };
 
     await waitFor(
       (resolver: (_: void) => void) => {
-        awaiter(this.freezingByMarket, marketName, resolver);
+        if (!this.freezingByMarket.isIcy(marketName)) {
+          resolver();
+        }
       },
       3,
     );
 
-    // This freeze is started when any client requests a full
-    // synchronization. It will be finished (via
-    // "freezeOnStorageNeedsToBeLowered" event) only after that client
-    // subscribes to the deltas — otherwise, the client may lose
-    // some deltas.
-    if (freezeStorage) {
-      this.freezingByMarket.cool(marketName);
-    }
+    this.freezingByMarket.cool(marketName);
 
     try {
       const data = storage.getBinarySnapshot();
@@ -538,12 +527,8 @@ export class StorageAggregationService {
         SERVER_EVENT.storageFullSyncResults,
         { marketName, eventId, data },
       );
-    } catch (error) {
-      if (freezeStorage) {
-        this.freezingByMarket.warm(marketName);
-      }
-
-      throw error;
+    } finally {
+      this.freezingByMarket.warm(marketName);
     }
   }
 
@@ -565,15 +550,11 @@ export class StorageAggregationService {
     };
   }
 
-  private aggregateCandlesByDuration(
+  private getAggregationBucketCounts(
     candles: readonly MarketCandle[],
     duration: number,
-  ): MarketCandle[] {
-    if (candles.length === 0) {
-      return [];
-    }
-
-    const result: MarketCandle[] = [];
+  ): number[] {
+    const result: number[] = [];
 
     let start = 0;
 
@@ -587,11 +568,7 @@ export class StorageAggregationService {
         end++;
       }
 
-      const bucket = candles.slice(start, end);
-
-      const aggregated = this.aggregateCandles(bucket);
-      result.push(aggregated);
-
+      result.push(end - start);
       start = end;
     }
 

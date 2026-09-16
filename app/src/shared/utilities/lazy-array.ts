@@ -128,7 +128,7 @@ export class LazyArray<T = unknown> {
     this.transitoryChangedItems.addAfter(index);
     this.cumulativeChangedItems.addAfter(index);
 
-    this.shiftDeletedIndexesAfterInsert(index);
+    this.shiftDeletedIndexesAfterInsert(insertIndex);
 
     this.storageHasBeenChanged();
 
@@ -368,9 +368,9 @@ export class LazyArray<T = unknown> {
     return true;
   }
 
-  private shiftDeletedIndexesAfterInsert(index: number): void {
+  private shiftDeletedIndexesAfterInsert(insertIndex: number): void {
     for (const deleted of this.deletedItems) {
-      if (deleted.index > index) {
+      if (deleted.index > insertIndex) {
         deleted.index++;
       }
     }

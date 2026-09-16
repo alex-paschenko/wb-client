@@ -14,7 +14,7 @@ import {
 
 export const STORAGE_CHUNK_CAPACITY = 64;
 
-interface MarketStatisticsDurations extends TimeAsCountUnit {
+interface StorageLevelDurations extends TimeAsCountUnit {
   interval: number;
 };
 
@@ -29,7 +29,7 @@ const intervals = [
   7 * DAYS,
 ];
 
-export const MARKET_STATISTICS_LEVEL_DURATIONS: MarketStatisticsDurations[] =
+export const STORAGE_LEVEL_DURATIONS: StorageLevelDurations[] =
   intervals.map((interval) => {
     return {
       ...convertIntervalToTimeWithUnit(interval),

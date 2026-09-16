@@ -15,6 +15,7 @@ export interface EntityDataKindSettingsProps {
 export interface EntitySeriesContext {
   chart: IChartApi;
   panelIndex: number;
+  title: string;
 }
 
 export interface EntityDataContext {

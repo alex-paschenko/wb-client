@@ -4,7 +4,7 @@ import type { UTCTimestamp } from 'lightweight-charts';
 
 import { CANDLE_NAME } from '../../../shared/constants/storage-entities';
 import {
-  MARKET_STATISTICS_LEVEL_DURATIONS,
+  STORAGE_LEVEL_DURATIONS,
 } from '../../../shared/constants/storage-config';
 import { SECOND } from '../../../shared/constants/time';
 import type { Storage } from '../../../shared/services/storage';
@@ -29,7 +29,7 @@ export interface MarketStatisticsViewState {
 }
 
 const defaultInterval =
-  MARKET_STATISTICS_LEVEL_DURATIONS[0].interval;
+  STORAGE_LEVEL_DURATIONS[0].interval;
 
 const ONE_SECOND = 1 * SECOND;
 

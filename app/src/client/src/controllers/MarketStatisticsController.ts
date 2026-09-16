@@ -4,7 +4,7 @@ import {
   FRONTEND_WS_SUBSCRIPTION_ACTIONS,
 } from '../../../shared/constants/frontend-ws';
 import {
-  MARKET_STATISTICS_LEVEL_DURATIONS,
+  STORAGE_LEVEL_DURATIONS,
 } from '../../../shared/constants/storage-config';
 import { SECONDS } from '../../../shared/constants/time';
 import { Storage } from '../../../shared/services/storage';
@@ -35,8 +35,7 @@ export type MarketStatisticsChartMode = {
   interval: number;
 };
 
-const defaultInterval =
-  MARKET_STATISTICS_LEVEL_DURATIONS[0].interval;
+const defaultInterval = STORAGE_LEVEL_DURATIONS[0].interval;
 
 const defaultChartMode: MarketStatisticsChartMode = {
   interval: defaultInterval,
@@ -65,8 +64,6 @@ export class MarketStatisticsController
   private unsubscribeDelta: (() => void) | null = null;
   private unsubscribeRolling: (() => void) | null = null;
 
-  private readonly pendingSingleRequests = new Set<number>();
-
   private readonly pendingSubscriptions = new Set<number>();
 
   private windowTimer: ReturnType<typeof setInterval> | null = null;
@@ -92,11 +89,11 @@ export class MarketStatisticsController
       this.marketName,
     );
 
-  this.unsubscribeDelta = appEvents.on(
-    'storageDeltaReceived',
-    (clientId, delta) => this.handleDelta(clientId, delta),
-    this.marketName,
-  );
+    this.unsubscribeDelta = appEvents.on(
+      'storageDeltaReceived',
+      (clientId, delta) => this.handleDelta(clientId, delta),
+      this.marketName,
+    );
 
     this.unsubscribeRolling = appEvents.on(
       'marketRollingUpdated',
@@ -110,15 +107,14 @@ export class MarketStatisticsController
       this.refreshChartData();
     }, 30 * SECONDS);
 
-    const fullSyncClientId = this.getOnlyClientId(
-      appEvents.emit(
-        'requestMarketStatisticsFullSync',
-        this.marketName,
-      ),
-      'requestMarketStatisticsFullSync',
+    const eventName = 'requestMarketStatisticsFullSync';
+    const result = appEvents.emit(eventName, this.marketName);
+    const statisticsSubscriptionClientId = this.getOnlyClientId(
+      result,
+      eventName,
     );
 
-    this.pendingSingleRequests.add(fullSyncClientId);
+    this.pendingSubscriptions.add(statisticsSubscriptionClientId);
 
     this.notify();
   }
@@ -150,8 +146,6 @@ export class MarketStatisticsController
     );
 
     this.storage = null;
-
-    this.pendingSingleRequests.clear();
     this.pendingSubscriptions.clear();
   }
 
@@ -180,15 +174,6 @@ export class MarketStatisticsController
       storage,
     });
 
-    const statisticsSubscriptionClientId = this.getOnlyClientId(
-      appEvents.emit(
-        'changeMarketStatisticsSubscription',
-        FRONTEND_WS_SUBSCRIPTION_ACTIONS.add,
-        [this.marketName],
-      ),
-      'changeMarketStatisticsSubscription',
-    );
-
     const rollingSubscriptionClientId = this.getOnlyClientId(
       appEvents.emit(
         'changeMarketRollingSubscription',
@@ -198,7 +183,6 @@ export class MarketStatisticsController
       'changeMarketRollingSubscription',
     );
 
-    this.pendingSubscriptions.add(statisticsSubscriptionClientId);
     this.pendingSubscriptions.add(rollingSubscriptionClientId);
   }
 
@@ -266,10 +250,6 @@ export class MarketStatisticsController
   }
 
   private isPendingRequest(clientId: number): boolean {
-    if (this.pendingSingleRequests.delete(clientId)) {
-      return true;
-    }
-
     return this.pendingSubscriptions.has(clientId);
   }
 }

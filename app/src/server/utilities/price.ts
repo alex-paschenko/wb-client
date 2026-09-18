@@ -1,6 +1,8 @@
 // app/src/server/utilities/price.ts
 
-import { TIME_DERIVATIVES_SCALE } from "../../shared/constants/market-statistics-storage";
+import {
+  RELATIVE_SPEED_SCALE,
+} from '../../shared/constants/time-derivatives';
 
 export function calculateSpeed(
   startedAt: number | undefined,
@@ -22,6 +24,6 @@ export function calculateSpeed(
     return 0;
   }
 
-  return TIME_DERIVATIVES_SCALE *
+  return RELATIVE_SPEED_SCALE *
     (endPrice - startPrice) / startPrice / duration;
 }

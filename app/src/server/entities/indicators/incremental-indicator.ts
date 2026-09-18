@@ -48,10 +48,11 @@ extends StatefulEntity<IndicatorValue, TState> {
     }
 
     const affectedRanges = this.infiniteRange
-      ? this.buildInfiniteAffectedRanges(accessors)
+      ? this.buildInfiniteAffectedRanges(accessors, changedIntervals)
       : this.buildFiniteAffectedRanges(
           accessors,
           this.affectedValuesCount,
+          changedIntervals,
         );
 
     this.rangeCalculate(accessors, marketName, affectedRanges);

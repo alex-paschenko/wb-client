@@ -19,7 +19,7 @@ export class AdaptiveEmaIndicator extends RecursiveFilterIndicator {
   ) {
     const { count, abbreviation } = convertIntervalToTimeWithUnit(params.tau);
 
-    super(params.tau, `adaptive-ema-${count}${abbreviation}`);
+    super(params.tau, `aEMA-${count}${abbreviation}`);
 
     if (
       !Number.isFinite(params.minTau) ||

@@ -78,7 +78,7 @@ export const MarketView = ({
   return (
     <DashboardItem
       initialSize={size}
-      heightClassName="item-height-md"
+      heightClassName="item-height-lg"
       controlsVisibility="hover"
       onClose={() => closeMarket(marketName)}
       onSizeChange={(nextSize) => {

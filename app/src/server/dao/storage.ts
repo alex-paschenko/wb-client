@@ -46,7 +46,6 @@ export class StorageDao {
   }
 
   public async getAliveForRestore(
-    cutoff: number,
     marketNames: string[],
   ): Promise<StoragePersistenceSnapshot[]> {
     return this.q<StoragePersistenceSnapshot[]>`
@@ -56,9 +55,7 @@ export class StorageDao {
         ended_at as "endedAt",
         data
       from storage_alive
-      where
-        market_name = any(${marketNames}::text[]) and
-          ended_at >= ${cutoff}
+      where market_name = any(${marketNames}::text[])
     `;
   }
 
@@ -76,11 +73,11 @@ export class StorageDao {
   }
 
   public async deleteAlives(
-    marketNames: string[],
+    marketName: string,
   ): Promise<void> {
     await this.q`
       delete from storage_alive
-      where market_name = any(${marketNames}::text[])
+      where market_name = ${marketName}
     `;
   }
 

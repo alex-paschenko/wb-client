@@ -1,5 +1,7 @@
 // app/src/server/services/storage-aggregation.ts
 
+import { writeFile } from 'node:fs/promises';
+
 import { storageConfig } from '../../shared/services/storage-config.js';
 import { globalStateService } from '../../shared/services/global-state.js';
 import { Storage } from '../../shared/services/storage.js';
@@ -28,8 +30,10 @@ import {
   decodeEntireBinary,
 } from '../../shared/utilities/codecs/entire-binary-codec.js';
 import type { NullableTypedObjectValue } from '../../shared/types/codecs.js';
+import { SECOND, SECONDS } from '../../shared/constants/time.js';
 
-const SNAPSHOT_WORKER_INTERVAL = 1_000;
+const SNAPSHOT_WORKER_INTERVAL = 1 * SECOND;
+const STARTUP_SNAPSHOT_JITTER = 16 * SECONDS;
 
 interface LevelRange {
   start: number;
@@ -85,20 +89,54 @@ export class StorageAggregationService {
     setInterval(() => {
       let marketName = '---';
       let numOfPoints = 0;
+      let size = 0;
 
       for (const [currentMarketName, storage] of storages.entries()) {
         const currentNumOfPoints =
-          storage.size - storage.getLevelBoundaries()[0];
+          storage.size - storage.levelBoundaries[0];
 
         if (currentNumOfPoints > numOfPoints) {
+          size = storage.size;
           numOfPoints = currentNumOfPoints;
           marketName = currentMarketName;
         }
       }
 
       console.log(
-        `Most active market: ${marketName} (${numOfPoints})`,
+        `Most active market: ${marketName} (L0: ${numOfPoints}, size: ${size})`,
       );
+
+      if (marketName === '---') {
+        return;
+      }
+
+      this.freezingByMarket.cool(marketName);
+
+      const storage = this.getOrCreateStorage(marketName);
+      const data: any[] = [];
+      const accessors = storage.getAccessors();
+      const candles = accessors['candles'][CANDLE_NAME] as LazyArray<MarketCandle>;
+      const indicators = accessors['indicators'];
+
+      for (let index = 0; index < storage.size; index++) {
+        const dataItem = {
+          candle: candles.get(index),
+          'cEMA-20s': indicators['cEMA-20s'].get(index),
+          'cEMA-50s': indicators['cEMA-50s'].get(index),
+          'cEMA-1.5m': indicators['cEMA-1.5m'].get(index),
+          'cEMA-3m': indicators['cEMA-3m'].get(index),
+        };
+
+        data.push(dataItem);
+      }
+
+      writeFile(
+        `./logs/${marketName}.json`,
+        JSON.stringify({ data, levelBoundaries: storage.levelBoundaries }, null, 2),
+        'utf8',
+      );
+
+      this.freezingByMarket.warm(marketName);
     }, 30_000);
   }
 
@@ -114,12 +152,12 @@ export class StorageAggregationService {
 
     this.freezingByMarket.coolAndIce(event.marketName);
 
-    void this.processLiveTick(event.marketName, event.tick).finally(
+    void this.processTick(event.marketName, event.tick).finally(
       () => { this.freezingByMarket.warmAndMeltIce(event.marketName); }
     );
   }
 
-  private async processLiveTick(
+  private async processTick(
     marketName: string,
     tick: MarketTick,
   ): Promise<void> {
@@ -151,13 +189,11 @@ export class StorageAggregationService {
       sourceLevel < storageConfig.maxLevel;
       sourceLevel++
     ) {
-      const aggregated = this.aggregateLiveLevel(storage, sourceLevel);
+      const aggregated = this.aggregateLevel(storage, sourceLevel);
 
-      if (!aggregated) {
-        break;
+      if (aggregated) {
+        await this.recalculateEntities(marketName, storage);
       }
-
-      await this.recalculateEntities(marketName, storage);
     }
 
     this.trimMaxLevel(storage);
@@ -165,7 +201,10 @@ export class StorageAggregationService {
     const data = storage.getBinaryDelta();
 
     if (data) {
-      eventBus.emit(SERVER_EVENT.storageDeltaCreated, { marketName, data });
+      eventBus.emit(
+        SERVER_EVENT.storageDeltaCreated,
+        { marketName, data },
+      );
     }
 
     storage.clearAccessors();
@@ -175,235 +214,44 @@ export class StorageAggregationService {
     }
   }
 
-  private aggregateLiveLevel(
+  private aggregateLevel(
     storage: Storage,
     sourceLevel: number,
   ): boolean {
-    const candles = this.getCandlesAccessor(storage);
-    const sourceRange = this.getLevelRange(storage, sourceLevel);
-
-    if (sourceRange.start === sourceRange.end) {
-      return false;
-    }
-
     const sourceConfig = storageConfig.getLevelConfig(sourceLevel);
-
-    const targetConfig = storageConfig.getLevelConfig(sourceLevel + 1);
-
-    const startedAt = candles.get(sourceRange.start, 'startedAt');
-    const endedAt = candles.get(sourceRange.end - 1, 'endedAt',);
-
-    if (endedAt - startedAt <= sourceConfig.interval + targetConfig.duration) {
-      return false;
-    }
-
-    const cutoff = endedAt - sourceConfig.interval;
-    const count = this.countItemsBefore(candles, sourceRange, cutoff);
-
-    if (count === 0) {
-      return false;
-    }
-
-    const bucketCount = this.getFirstBucketCount(
-      candles,
-      sourceRange.start,
-      count,
-      targetConfig.duration,
-    );
-
-    if (bucketCount === 0) {
-      return false;
-    }
-
-    const sourceCandles =
-      this.readCandles(candles, sourceRange.start, bucketCount);
-
-    const aggregatedCandle = this.aggregateCandles(sourceCandles);
-
-    const newStartedAt =
-      this.getStartedAtAfterDelete(candles, sourceRange, bucketCount);
-
-    storage.deleteNItems(sourceLevel, bucketCount, newStartedAt);
-
-    storage.addItem(
-      sourceLevel + 1,
-      aggregatedCandle.startedAt,
-      aggregatedCandle.endedAt,
-      this.createCandleValues(aggregatedCandle),
-    );
-
-    return true;
-  }
-
-  private async prepareStoragesFromDatabase(): Promise<void> {
-    const maxLevelConfig =
-      storageConfig.getLevelConfig(storageConfig.maxLevel);
-
-    const databaseMarketNames =
-      await storagePersistenceService.getAliveMarketNames();
-
-    const activeMarketNames = new Set(
-      globalStateService.getMarketNames() ?? [],
-    );
-
-    console.log(
-      'Market statistics startup aggregation started',
-      { markets: databaseMarketNames.length },
-    );
-
-    const totalMarkets = databaseMarketNames.length;
-    const marketsToDelete: string[] = [];
-
-    let processed = 0;
-    let reportedDecile = 0;
-
-    while (databaseMarketNames.length > 0) {
-      const marketNamesBatch =
-        databaseMarketNames.splice(0, SNAPSHOT_BATCH_SIZE);
-
-      const snapshots = await storagePersistenceService.getAliveForRestore(
-        maxLevelConfig.cutoff,
-        marketNamesBatch,
-      );
-
-      const restoredNames = new Set(
-        snapshots.map((snapshot) => snapshot.marketName),
-      );
-
-      for (const marketName of marketNamesBatch) {
-        if (!restoredNames.has(marketName)) {
-          marketsToDelete.push(marketName);
-        }
-      }
-
-      for (const snapshot of snapshots) {
-        const marketName = snapshot.marketName;
-        this.freezingByMarket.coolAndIce(marketName);
-
-        try {
-          const storage = this.getOrCreateStorage(marketName);
-
-          const predecodedSnapshot = decodeEntireBinary(snapshot.data);
-          this.validatePredecodedSnapshot(predecodedSnapshot, marketName);
-
-          storage.applySnapshot({
-            codecName: predecodedSnapshot.codecName,
-            data: predecodedSnapshot.data,
-          });
-
-          storage.initDelta('restrict');
-
-          await this.prepareStartupStorage(marketName, storage);
-
-          if (activeMarketNames.has(marketName)) {
-            this.snapshotScheduledAt.set(marketName, Date.now());
-          } else {
-            this.emitPersistenceSnapshots(
-              marketName,
-              storage,
-              'archive snapshot only',
-            );
-
-            this.removeMarketStorage(marketName);
-          }
-        } finally {
-          this.freezingByMarket.warmAndMeltIce(marketName);
-        }
-      }
-
-      processed += marketNamesBatch.length;
-
-      const currentDecile = Math.min(
-        10,
-        Math.floor(processed * 10 / totalMarkets),
-      );
-
-      if (currentDecile > reportedDecile) {
-        for (
-          let value = reportedDecile + 1;
-          value <= currentDecile;
-          value++
-        ) {
-          console.log(`processed: ${value}/10`);
-        }
-
-        reportedDecile = currentDecile;
-      }
-    }
-
-    await storagePersistenceService.deleteAlives(marketsToDelete);
-
-    console.log(
-      'Market statistics startup aggregation finished',
-      { storages: this.storagesByMarket.size },
-    );
-  }
-
-  private async prepareStartupStorage(
-    marketName: string,
-    storage: Storage,
-  ): Promise<void> {
-    for (
-      let sourceLevel = 0;
-      sourceLevel < storageConfig.maxLevel;
-      sourceLevel++
-    ) {
-      const sourceConfig = storageConfig.getLevelConfig(sourceLevel);
-
-      const aggregated = this.aggregateStartupLevel(
-        storage,
-        sourceLevel,
-        sourceConfig.cutoff,
-      );
-
-      if (aggregated) {
-        await this.recalculateEntities(marketName, storage);
-      }
-    }
-
-    this.trimMaxLevel(storage);
-
-    storage.clearAccessors();
-  }
-
-  private aggregateStartupLevel(
-    storage: Storage,
-    sourceLevel: number,
-    cutoff: number,
-  ): boolean {
-    const candles = this.getCandlesAccessor(storage);
-    const sourceRange = this.getLevelRange(storage, sourceLevel);
-
-    const count = this.countItemsBefore(candles, sourceRange, cutoff);
-
-    if (count === 0) {
-      return false;
-    }
-
     const targetLevel = sourceLevel + 1;
-    const targetDuration = storageConfig.getLevelConfig(targetLevel).duration;
+    const targetConfig = storageConfig.getLevelConfig(targetLevel);
 
-    const sourceCandles = this.readCandles(candles, sourceRange.start, count);
+    let aggregated = false;
 
-    const bucketCounts = this.getAggregationBucketCounts(
-      sourceCandles,
-      targetDuration,
-    );
+    while (true) {
+      const sourceRange = this.getLevelRange(storage, sourceLevel);
+      const sourceCount = sourceRange.end - sourceRange.start;
 
-    for (const bucketCount of bucketCounts) {
-      const currentSourceRange = this.getLevelRange(storage, sourceLevel);
+      if (sourceCount < sourceConfig.maxCount) {
+        break;
+      }
 
-      const bucket = this.readCandles(
+      const candles = this.getCandlesAccessor(storage);
+
+      const bucketCount = this.getFirstBucketCount(
         candles,
-        currentSourceRange.start,
+        sourceRange.start,
+        sourceCount,
+        targetConfig.duration,
+      );
+
+      const sourceCandles = this.readCandles(
+        candles,
+        sourceRange.start,
         bucketCount,
       );
 
-      const aggregatedCandle = this.aggregateCandles(bucket);
+      const aggregatedCandle = this.aggregateCandles(sourceCandles);
 
       const newStartedAt = this.getStartedAtAfterDelete(
         candles,
-        currentSourceRange,
+        sourceRange,
         bucketCount,
       );
 
@@ -415,35 +263,120 @@ export class StorageAggregationService {
         aggregatedCandle.endedAt,
         this.createCandleValues(aggregatedCandle),
       );
+
+      aggregated = true;
     }
 
-    return true;
+    return aggregated;
+  }
+
+  private async prepareStoragesFromDatabase(): Promise<void> {
+    const databaseMarketNames =
+      await storagePersistenceService.getAliveMarketNames();
+
+    const marketNames = globalStateService.getMarketNames() ?? [];
+
+    console.log(
+      'Market statistics storage restore started',
+      {
+        snapshots: databaseMarketNames.length,
+        markets: marketNames.length,
+      },
+    );
+
+    const totalSnapshots = databaseMarketNames.length;
+
+    let processed = 0;
+    let reportedDecile = 0;
+
+    while (databaseMarketNames.length > 0) {
+      const marketNamesBatch =
+        databaseMarketNames.splice(0, SNAPSHOT_BATCH_SIZE);
+
+      const snapshots =
+        await storagePersistenceService.getAliveForRestore(marketNamesBatch);
+
+      for (const snapshot of snapshots) {
+        const marketName = snapshot.marketName;
+
+        this.freezingByMarket.coolAndIce(marketName);
+
+        try {
+          const storage = this.getOrCreateStorage(marketName);
+
+          const predecodedSnapshot = decodeEntireBinary(snapshot.data);
+
+          this.validatePredecodedSnapshot(predecodedSnapshot, marketName);
+
+          storage.applySnapshot({
+            codecName: predecodedSnapshot.codecName,
+            data: predecodedSnapshot.data,
+          });
+
+          this.snapshotScheduledAt.set(
+            marketName,
+            Date.now() + Math.random() * STARTUP_SNAPSHOT_JITTER,
+          );
+        } finally {
+          this.freezingByMarket.warmAndMeltIce(marketName);
+        }
+      }
+
+      processed += marketNamesBatch.length;
+
+      if (totalSnapshots > 0) {
+        const currentDecile = Math.min(
+          10,
+          Math.floor(processed * 10 / totalSnapshots),
+        );
+
+        if (currentDecile > reportedDecile) {
+          for (
+            let value = reportedDecile + 1;
+            value <= currentDecile;
+            value++
+          ) {
+            console.log(`processed: ${value}/10`);
+          }
+
+          reportedDecile = currentDecile;
+        }
+      }
+    }
+
+    for (const marketName of marketNames) {
+      this.getOrCreateStorage(marketName);
+    }
+
+    console.log(
+      'Market statistics storage restore finished',
+      { storages: this.storagesByMarket.size },
+    );
   }
 
   private trimMaxLevel(
     storage: Storage,
   ): void {
+    const maxLevel = storageConfig.maxLevel;
+    const maxLevelConfig = storageConfig.getLevelConfig(maxLevel);
+
     const candles = this.getCandlesAccessor(storage);
+    const range = this.getLevelRange(storage, maxLevel);
 
-    const range = this.getLevelRange(storage, storageConfig.maxLevel);
+    const levelCount = range.end - range.start;
+    const countToDelete = levelCount - maxLevelConfig.maxCount;
 
-    const count = this.countItemsBefore(
-      candles,
-      range,
-      storageConfig.getLevelConfig(storageConfig.maxLevel).cutoff,
-    );
-
-    if (count === 0) {
+    if (countToDelete <= 0) {
       return;
     }
 
     const newStartedAt = this.getStartedAtAfterDelete(
       candles,
       range,
-      count,
+      countToDelete,
     );
 
-    storage.deleteNItems(storageConfig.maxLevel, count, newStartedAt);
+    storage.deleteNItems(maxLevel, countToDelete, newStartedAt);
   }
 
   private async recalculateEntities(
@@ -550,31 +483,6 @@ export class StorageAggregationService {
     };
   }
 
-  private getAggregationBucketCounts(
-    candles: readonly MarketCandle[],
-    duration: number,
-  ): number[] {
-    const result: number[] = [];
-
-    let start = 0;
-
-    while (start < candles.length) {
-      let end = start + 1;
-
-      while (
-        end < candles.length &&
-        candles[end - 1].endedAt - candles[start].startedAt < duration
-      ) {
-        end++;
-      }
-
-      result.push(end - start);
-      start = end;
-    }
-
-    return result;
-  }
-
   private aggregateCandles(
     candles: readonly MarketCandle[],
   ): MarketCandle {
@@ -624,35 +532,35 @@ export class StorageAggregationService {
     count: number,
     duration: number,
   ): number {
-    if (count === 0) {
+    if (count <= 0) {
       return 0;
     }
 
     const startedAt = candles.get(start, 'startedAt');
 
-    for (let offset = 0; offset < count; offset++) {
-      const endedAt = candles.get(start + offset, 'endedAt');
+    let bucketCount = 1;
 
-      if (endedAt - startedAt >= duration) {
-        return offset + 1;
+    while (bucketCount < count) {
+      const currentEndedAt = candles.get(start + bucketCount - 1, 'endedAt');
+
+      const nextEndedAt = candles.get(start + bucketCount, 'endedAt');
+
+      const currentDifference = Math.abs(
+        currentEndedAt - startedAt - duration,
+      );
+
+      const nextDifference = Math.abs(
+        nextEndedAt - startedAt - duration,
+      );
+
+      if (nextDifference >= currentDifference) {
+        break;
       }
+
+      bucketCount++;
     }
 
-    return 0;
-  }
-
-  private countItemsBefore(
-    candles: LazyArray<MarketCandle>,
-    range: LevelRange,
-    cutoff: number,
-  ): number {
-    let index = range.start;
-
-    while (index < range.end && candles.get(index, 'endedAt') < cutoff) {
-      index++;
-    }
-
-    return index - range.start;
+    return bucketCount;
   }
 
   private readCandles(
@@ -681,24 +589,11 @@ export class StorageAggregationService {
       : undefined;
   }
 
-  private getLastLevelCandle(
-    storage: Storage,
-    level: number,
-  ): MarketCandle | null {
-    const range = this.getLevelRange(storage, level);
-
-    if (range.start === range.end) {
-      return null;
-    }
-
-    return this.getCandlesAccessor(storage).get(range.end - 1);
-  }
-
   private getLevelRange(
     storage: Storage,
     level: number,
   ): LevelRange {
-    const boundaries = storage.getLevelBoundaries();
+    const boundaries = storage.levelBoundaries;
 
     return {
       start: boundaries[level],
@@ -777,7 +672,7 @@ export class StorageAggregationService {
 
     this.freezingByMarket.coolAndIce(marketName);
 
-    void this.processLiveTick(marketName, tick)
+    void this.processTick(marketName, tick)
       .finally(
         () => {
           this.freezingByMarket.warmAndMeltIce(marketName);
@@ -821,39 +716,39 @@ export class StorageAggregationService {
         continue;
       }
 
-      this.emitPersistenceSnapshots(marketName, storage, 'both snapshots');
+      this.freezingByMarket.cool(marketName);
 
-      this.snapshotScheduledAt.set(
-        marketName,
-        now + this.getNextSnapshotInterval(),
-      );
-    }
-  }
+      const isAliveMarket = globalStateService.hasMarket(marketName);
 
-  private emitPersistenceSnapshots(
-    marketName: string,
-    storage: Storage,
-    snapshotTypes: SnapshotTypes,
-  ): void {
-    this.freezingByMarket.cool(marketName);
+      try {
+        let snapshots = storage.getPersistenceSnapshot(
+          isAliveMarket ? 'both snapshots' : 'archive snapshot only',
+        );
 
-    try {
-      let snapshots = storage.getPersistenceSnapshot(snapshotTypes);
-
-      if (snapshots.length === 0) {
-        return;
+        if (snapshots.length > 0) {
+          eventBus.emit(
+            SERVER_EVENT.storageSnapshoted,
+            { snapshots },
+          );
+        }
+      } finally {
+        /*
+        * Snapshot encoding is synchronous. Lower the freeze immediately
+        * after Storage has returned the immutable binary snapshots.
+        */
+        this.freezingByMarket.warm(marketName);
       }
 
-      eventBus.emit(
-        SERVER_EVENT.storageSnapshoted,
-        { snapshots },
-      );
-    } finally {
-      /*
-       * Snapshot encoding is synchronous. Lower the freeze immediately
-       * after Storage has returned the immutable binary snapshots.
-       */
-      this.freezingByMarket.warm(marketName);
+
+      if (isAliveMarket) {
+        this.snapshotScheduledAt.set(
+          marketName,
+          now + this.getNextSnapshotInterval(),
+        );
+      } else {
+        storagePersistenceService.deleteAlives(marketName);
+        this.removeMarketStorage(marketName);
+      }
     }
   }
 

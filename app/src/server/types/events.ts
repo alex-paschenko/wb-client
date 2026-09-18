@@ -2,19 +2,16 @@
 
 import type { EntityDesriptor } from '../../shared/types/storage-entities.js';
 import type {
-  ExtendedMarketDataView,
-  FullMarketStatisticsLevel,
-  MarketCandle,
-} from '../../shared/types/storage-old.js';
-import type {
   MarketRollingStatistics,
   MarketRollingStatisticsByMarket,
 } from '../../shared/types/market-statistics-rolling.js';
-import type { StrategySignal } from './strategy-signals.js';
 import type { SERVER_EVENT } from '../constants/events.js';
 import type { MarketTick } from './market-statistics.js';
 import type { MarketsByName } from '../../shared/types/market.js';
-import { ExtendedStoragePersistenceSnapshot, StorageAccessors } from '../../shared/types/storage.js';
+import {
+  ExtendedStoragePersistenceSnapshot,
+  StorageAccessors,
+} from '../../shared/types/storage.js';
 
 export type ServerEventName =
   typeof SERVER_EVENT[keyof typeof SERVER_EVENT];
@@ -50,7 +47,6 @@ export interface EntitiesRecalculatedEvent {
   size: number;
   endedAt: number;
 }
-
 
 export interface StorageSnapshotedEvent {
   snapshots: ExtendedStoragePersistenceSnapshot[];

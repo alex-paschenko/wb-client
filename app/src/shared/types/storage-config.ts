@@ -5,12 +5,8 @@ export interface StorageLevelConfigDefinition {
   interval: number;
 }
 
-export interface ExtendedStorageLevelConfig
-    extends StorageLevelConfigDefinition {
-      cumulativeInterval: number;
-      level: number;
-    }
-
-export interface StorageLevelConfig extends ExtendedStorageLevelConfig {
-  cutoff: number;
+export interface StorageLevelConfig
+  extends StorageLevelConfigDefinition {
+  level: number;
+  maxCount: number;
 }

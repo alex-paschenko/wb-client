@@ -105,7 +105,7 @@ export const priceLineDataKindHandler:
         {
           title,
           color: settings.color,
-          lineWidth: 1,
+          lineWidth: 3,
           visible: settings.isVisible,
           priceLineVisible: true,
           lastValueVisible: true,

@@ -1,7 +1,5 @@
 // app/src/shared/utilities/lazy-array.ts
 
-// app/src/shared/utilities/lazy-array.ts
-
 import type {
   CodecFieldName,
   FixedCountArrayCodec,
@@ -23,7 +21,7 @@ import { entityBinaryCodec } from './codecs/codecs.js';
 type ObjectType = Record<string, unknown>;
 
 export class LazyArray<T = unknown> {
-  private readonly cache: T[];
+  private cache: T[];
 
   private readonly transitoryChangedItems: Bitmap;
   private readonly cumulativeChangedItems: Bitmap;
@@ -210,9 +208,7 @@ export class LazyArray<T = unknown> {
   }
 
   public clearCache(): void {
-    for (let index = 0; index < this.cache.length; index++) {
-      delete this.cache[index];
-    }
+    this.cache = new Array(this.cache.length);
   }
 
   public clearAll(): void {

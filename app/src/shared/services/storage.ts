@@ -55,7 +55,7 @@ export class Storage {
    *
    * The object itself never changes, only its values do.
    */
-  private readonly levelBoundaries: Record<number, number> = {};
+  private readonly levelsBoundaries: Record<number, number> = {};
 
   private startLevel0Index: number = 0;
 
@@ -75,7 +75,7 @@ export class Storage {
     private readonly marketName: string,
   ) {
     for (let level = 0; level < storageConfig.numberOfLevels; level++) {
-      this.levelBoundaries[level] = 0;
+      this.levelsBoundaries[level] = 0;
     }
 
     this.getChunkAndPosByFlatIndex = this.getChunkAndPosByFlatIndex.bind(this);
@@ -193,7 +193,7 @@ export class Storage {
       return [];
     }
 
-    const flatIndex = this.levelBoundaries[level];
+    const flatIndex = this.levelsBoundaries[level];
     const collectDeleted = level !== storageConfig.maxLevel;
 
     this.invalidateSnapshot();
@@ -387,8 +387,8 @@ export class Storage {
     return result;
   }
 
-  public getLevelBoundaries(): Record<number, number> {
-    return this.levelBoundaries;
+  public get levelBoundaries(): Record<number, number> {
+    return this.levelsBoundaries;
   }
 
   public getChunkAndPosByFlatIndex(
@@ -649,8 +649,7 @@ export class Storage {
         const chunkSet = this.chunkSets[chunkSetIndex];
         const chunkSetFlatEnd = this.chunkSetFlatEnds[chunkSetIndex];
 
-        const startItemIndex =
-          chunkSet.start + flatIndex - previousFlatEnd;
+        const startItemIndex = flatIndex - previousFlatEnd;
 
         let itemsCount = 0;
 
@@ -767,12 +766,12 @@ export class Storage {
   private getLevelEndFlatIndex(level: number): number {
     return level === 0
       ? this.size
-      : this.levelBoundaries[level - 1];
+      : this.levelsBoundaries[level - 1];
   }
 
   private getLevelSize(level: number): number {
     return this.getLevelEndFlatIndex(level) -
-      this.levelBoundaries[level];
+      this.levelsBoundaries[level];
   }
 
   private insertChunkSetFlatEnd(
@@ -808,7 +807,7 @@ export class Storage {
     delta: number,
   ): void {
     for (let currentLevel = 0; currentLevel < level; currentLevel++) {
-      this.levelBoundaries[currentLevel] += delta;
+      this.levelsBoundaries[currentLevel] += delta;
     }
   }
 
@@ -826,7 +825,7 @@ export class Storage {
     let flatIndex = 0;
 
     for (let level = storageConfig.maxLevel; level >= 0; level--) {
-      this.levelBoundaries[level] = flatIndex;
+      this.levelsBoundaries[level] = flatIndex;
 
       while (
         chunkSetIndex < this.chunkSets.length &&

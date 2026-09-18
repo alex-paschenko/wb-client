@@ -4,9 +4,7 @@ import { MINUTES, SECONDS } from '../../../shared/constants/time.js';
 import { AdaptiveEmaIndicator } from './adaptive-ema.js';
 import { ContinuousEmaIndicator } from './continuous-ema.js';
 import { EmaIndicator } from './ema.js';
-import { RcaIndicator } from './rca.js';
 
-const rcaPeriods = [20, 50, 90, 200];
 const emaPeriods = [20, 50, 90, 200];
 
 const filterTaus = [
@@ -17,10 +15,6 @@ const filterTaus = [
 ];
 
 export const indicators = [
-  ...rcaPeriods.map(
-    (period) => new RcaIndicator({ period }),
-  ),
-
   ...emaPeriods.map(
     (period) => new EmaIndicator({ period }),
   ),

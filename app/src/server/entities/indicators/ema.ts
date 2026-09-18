@@ -25,7 +25,7 @@ extends IncrementalIndicator<EmaIndicatorState> {
         kind: 'indicators',
         name: `ema-${params.period}`,
         codec: 'float32 (nullable) v1.0',
-        data: [{ kind: 'line', group: 'price' }],
+        data: [{ kind: 'line', group: 'candles' }],
         requiresRemovedValues: false,
         empty: null,
       },

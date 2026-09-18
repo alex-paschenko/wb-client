@@ -1,4 +1,6 @@
-import { TIME_DERIVATIVES_SCALE } from "../../shared/constants/market-statistics-storage";
+import {
+  TIME_DERIVATIVE_SCALE,
+} from '../../shared/constants/time-derivatives';
 
 export function calculateTimeDerivative(
   fromTime: number | undefined,
@@ -21,7 +23,7 @@ export function calculateTimeDerivative(
     return 0;
   }
 
-  return TIME_DERIVATIVES_SCALE * (toValue - fromValue) / duration;
+  return TIME_DERIVATIVE_SCALE * (toValue - fromValue) / duration;
 }
 
 export function calculateTimeIntegral(

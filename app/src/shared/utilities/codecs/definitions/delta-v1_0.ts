@@ -390,37 +390,34 @@ const writeEntityChanges = (
     const codec = getFixedSizeCodec(entity.codec);
 
     view.setUint16(offset, entityChange.entityIndex, true);
-
     offset += UINT16_SIZE;
 
     view.setUint16(offset, entityChange.changes.length, true);
-
     offset += UINT16_SIZE;
 
     for (const interval of entityChange.changes) {
       view.setUint8(offset, interval.chunkSetIndex);
-
       offset += UINT8_SIZE;
 
       view.setUint8(offset, interval.startItemIndex);
-
       offset += UINT8_SIZE;
 
       view.setUint8(offset, interval.itemsCount);
-
       offset += UINT8_SIZE;
 
       const chunkSet = chunkSets[interval.chunkSetIndex]!;
 
       const chunk = chunkSet.chunks[entity.kind][entity.name];
 
-      const startByte = interval.startItemIndex * codec.size;
+      const physicalStartItemIndex =
+        chunkSet.start + interval.startItemIndex;
+
+      const startByte = physicalStartItemIndex * codec.size;
 
       const byteLength = interval.itemsCount * codec.size;
 
       new Uint8Array(view.buffer, view.byteOffset + offset, byteLength)
-        .set(chunk.data.subarray(startByte, startByte + byteLength),
-      );
+        .set(chunk.data.subarray(startByte, startByte + byteLength));
 
       offset += byteLength;
     }
@@ -478,15 +475,12 @@ const readEntityChanges = (
       intervalIndex++
     ) {
       const chunkSetIndex = view.getUint8(offset);
-
       offset += UINT8_SIZE;
 
       const startItemIndex = view.getUint8(offset);
-
       offset += UINT8_SIZE;
 
       const itemsCount = view.getUint8(offset);
-
       offset += UINT8_SIZE;
 
       const chunkSet = chunkSets[chunkSetIndex];
@@ -499,14 +493,12 @@ const readEntityChanges = (
 
       if (
         itemsCount === 0 ||
-        startItemIndex < chunkSet.start ||
-        startItemIndex + itemsCount > chunkSet.end
+        startItemIndex + itemsCount > chunkSet.size
       ) {
         throw new RangeError(
           `Invalid storage delta interval in chunk set ` +
           `${chunkSetIndex}: start=${startItemIndex}, ` +
-          `count=${itemsCount}, ` +
-          `live=${chunkSet.start}..${chunkSet.end}`,
+          `count=${itemsCount}, size=${chunkSet.size}`,
         );
       }
 
@@ -514,13 +506,13 @@ const readEntityChanges = (
 
       if (!chunk) {
         throw new Error(
-          `Storage chunk ` +
-          `"${entity.kind}:${entity.name}" not found in ` +
-          `chunk set ${chunkSetIndex}`,
+          `Storage chunk "${entity.kind}:${entity.name}" not found ` +
+          `in chunk set ${chunkSetIndex}`,
         );
       }
 
-      const startByte = startItemIndex * codec.size;
+      const physicalStartItemIndex = chunkSet.start + startItemIndex;
+      const startByte = physicalStartItemIndex * codec.size;
 
       const byteLength = itemsCount * codec.size;
 

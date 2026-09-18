@@ -28,7 +28,7 @@ extends IncrementalIndicator<RecursiveFilterState> {
         kind: 'indicators',
         name,
         codec: 'float32 (nullable) v1.0',
-        data: [{ kind: 'line', group: 'speed' }],
+        data: [{ kind: 'line', group: 'recursiveFilter' }],
         requiresRemovedValues: true,
         empty: null,
       },

@@ -20,11 +20,7 @@ export class CandleEntity extends BaseEntity<MarketCandle> {
         { kind: 'ohlc', group: 'candles' },
         { kind: 'priceLine', group: 'candles', key: 'price' },
         { kind: 'speedLine', group: 'speed', key: 'speed' },
-        {
-          kind: 'accelerationLine',
-          group: 'speed',
-          key: 'acceleration',
-        },
+        { kind: 'accelerationLine', group: 'speed', key: 'acceleration' },
       ],
       requiresRemovedValues: true,
       empty: {

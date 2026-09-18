@@ -20,15 +20,13 @@ export class ContinuousEmaIndicator
 
     super(
       params.tau,
-      `continuous-ema-${count}${abbreviation}`,
+      `cEMA-${count}${abbreviation}`,
     );
   }
 
   protected getInput(
     candle: MarketCandle,
   ): number | null {
-    return Number.isFinite(candle.speed)
-      ? candle.speed
-      : null;
+    return Number.isFinite(candle.speed) ? candle.speed : null;
   }
 }

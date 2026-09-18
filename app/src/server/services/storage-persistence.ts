@@ -168,15 +168,14 @@ export class StoragePersistenceService {
     return storageDao.getAliveMarketNames();
   }
 
-  public async deleteAlives(marketNames: string[]): Promise<void> {
-    return storageDao.deleteAlives(marketNames);
+  public async deleteAlives(marketName: string): Promise<void> {
+    return storageDao.deleteAlives(marketName);
   }
 
   public async getAliveForRestore(
-    cutoff: number,
     marketNames: string[],
   ): Promise<StoragePersistenceSnapshot[]> {
-    return storageDao.getAliveForRestore(cutoff, marketNames);
+    return storageDao.getAliveForRestore(marketNames);
   }
 
   private handleStorageSnapshoted(

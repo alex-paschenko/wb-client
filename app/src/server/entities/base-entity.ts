@@ -79,6 +79,7 @@ export abstract class BaseEntity<T> implements Entity<T> {
   protected buildFiniteAffectedRanges(
     accessors: StorageAccessors,
     affectedValuesCount: number,
+    changedIntervals?: readonly ChangedInterval[],
   ): EntityAffectedRange[] {
     const values = this.getValues(accessors);
 
@@ -86,7 +87,9 @@ export abstract class BaseEntity<T> implements Entity<T> {
       return [];
     }
 
-    const ranges = this.getChangedIntervals(accessors).map((interval) => {
+    const ranges = (
+      changedIntervals ?? this.getChangedIntervals(accessors)
+    ).map((interval) => {
       const startIndex =
         interval[changedIntervalIndexes.startFlatAscIndex];
 
@@ -106,9 +109,10 @@ export abstract class BaseEntity<T> implements Entity<T> {
 
   protected buildInfiniteAffectedRanges(
     accessors: StorageAccessors,
+    changedIntervals?: readonly ChangedInterval[],
   ): EntityAffectedRange[] {
     const values = this.getValues(accessors);
-    const intervals = this.getChangedIntervals(accessors);
+    const intervals = changedIntervals ?? this.getChangedIntervals(accessors);
 
     if (values.length === 0 || intervals.length === 0) {
       return [];

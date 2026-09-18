@@ -45,11 +45,11 @@ export class GlobalStateService {
 
   private marketNames: string[] | null = null;
 
-  private marketsPromise:
-    Promise<MarketsByName> | null = null;
+  private marketNamesSet: Set<string> | null = null;
 
-  private resolveMarkets:
-    ((markets: MarketsByName) => void) | null = null;
+  private marketsPromise: Promise<MarketsByName> | null = null;
+
+  private resolveMarkets: ((markets: MarketsByName) => void) | null = null;
 
   private readonly marketsListeners = new Set<MarketsListener>();
 
@@ -101,21 +101,6 @@ export class GlobalStateService {
     return this.isStorageEntitiesReady
       ? this.getStorageEntities()
       : null;
-  }
-
-  public hasStorageEntities(): boolean {
-    return this.isStorageEntitiesReady;
-  }
-
-  public getStorageEntitiesWithPreservedHistory():
-    readonly EntityDesriptor[] {
-    if (!this.isStorageEntitiesReady) {
-      return [];
-    }
-
-    return this.storageEntities.filter(
-      (entity) => entity.requiresRemovedValues,
-    );
   }
 
   public waitForStorageEntities(): Promise<EntityDesriptor[]> {
@@ -201,6 +186,7 @@ export class GlobalStateService {
 
     this.marketsByName = storedMarkets;
     this.marketNames = storedMarketNames;
+    this.marketNamesSet = new Set(storedMarketNames);
 
     this.resolveMarkets?.(storedMarkets);
 
@@ -230,8 +216,14 @@ export class GlobalStateService {
       : null;
   }
 
-  public hasMarkets(): boolean {
-    return this.marketsByName !== null;
+  public hasMarket(
+    marketName: string,
+  ): boolean {
+    if (!this.marketNamesSet) {
+      throw new Error('Markets are not initialized');
+    }
+
+    return this.marketNamesSet.has(marketName);
   }
 
   public waitForMarkets(): Promise<MarketsByName> {

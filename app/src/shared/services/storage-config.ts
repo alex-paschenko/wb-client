@@ -1,22 +1,8 @@
 // app/src/shared/services/storage-config.ts
 
-import {
-  DAYS,
-  HOUR,
-  HOURS,
-  MINUTE,
-  MINUTES,
-  SECONDS,
-  WEEK,
-} from '../constants/time';
-import type {
-  ExtendedStorageLevelConfig,
-  StorageLevelConfig,
-  StorageLevelConfigDefinition,
-} from '../types/storage-config';
-import {
-  STORAGE_CHUNK_CAPACITY,
-} from '../constants/storage-config.js';
+import { DAYS, HOUR, HOURS, MINUTE, MINUTES, SECONDS, WEEK } from '../constants/time';
+import { STORAGE_CHUNK_CAPACITY } from '../constants/storage-config.js';
+import type { StorageLevelConfig, StorageLevelConfigDefinition } from '../types/storage-config';
 
 const STORAGE_LEVELS_CONFIGS = [
   {
@@ -42,7 +28,7 @@ const STORAGE_LEVELS_CONFIGS = [
 ] as const satisfies readonly StorageLevelConfigDefinition[];
 
 class StorageConfig {
-  private config: ExtendedStorageLevelConfig[];
+  private readonly config: StorageLevelConfig[];
 
   public constructor() {
     if (
@@ -55,15 +41,18 @@ class StorageConfig {
       );
     }
 
-    let retentionDepth = 0;
-
     this.config = STORAGE_LEVELS_CONFIGS.map(
       (item, index) => {
-        retentionDepth += item.interval;
+        const nextItem = STORAGE_LEVELS_CONFIGS[index + 1];
+
+        const maxCount = nextItem
+          ? Math.ceil((item.interval + nextItem.duration) / item.duration)
+          : Math.ceil(item.interval / item.duration);
+
         return {
           ...item,
           level: index,
-          cumulativeInterval: retentionDepth,
+          maxCount,
         };
       },
     );
@@ -84,10 +73,7 @@ class StorageConfig {
       throw new RangeError(`Level ${level} not found in config`);
     }
 
-    return {
-      ...levelConfig,
-      cutoff: Date.now() - levelConfig.cumulativeInterval,
-    };
+    return { ...levelConfig };
   }
 }
 

@@ -6,16 +6,15 @@ import type {
   FixedSizeCodec,
 } from '../types/codecs.js';
 import {
-  changedIntervalIndexes,
   type ChangedInterval,
   type LazyArrayDeletedItems,
 } from '../types/lazy-array.js';
 import type { EntityDesriptor } from '../types/storage-entities.js';
 import type {
   GetChunkAndPosByFlatIndex,
-  StorageChunkAndPosition,
+  StorageViewAndPosition,
 } from '../types/storage.js';
-import { Bitmap } from './bitmap.js';
+import { ChangedIntervals } from './changed-intervals.js';
 import { entityBinaryCodec } from './codecs/codecs.js';
 
 type ObjectType = Record<string, unknown>;
@@ -23,12 +22,14 @@ type ObjectType = Record<string, unknown>;
 export class LazyArray<T = unknown> {
   private cache: T[];
 
-  private readonly transitoryChangedItems: Bitmap;
-  private readonly cumulativeChangedItems: Bitmap;
+  private readonly transitoryChanges: ChangedIntervals;
+  private readonly cumulativeChanges: ChangedIntervals;
 
   private readonly codec: FixedSizeCodec;
 
   private deletedItems: LazyArrayDeletedItems<T>[] = [];
+
+  private cachedViewAndPos: StorageViewAndPosition | null = null;
 
   public constructor(
     private readonly entity: EntityDesriptor,
@@ -43,8 +44,8 @@ export class LazyArray<T = unknown> {
     this.codec = entityBinaryCodec(entity.codec);
     this.cache = new Array<T>(size);
 
-    this.transitoryChangedItems = new Bitmap(size);
-    this.cumulativeChangedItems = new Bitmap(size);
+    this.transitoryChanges = new ChangedIntervals(size);
+    this.cumulativeChanges = new ChangedIntervals(size);
   }
 
   public get length(): number {
@@ -115,16 +116,16 @@ export class LazyArray<T = unknown> {
      * Storage has already inserted the physical item, so the new flat
      * index can already be resolved by the callback.
      */
-    const { view, itemIndex } =
-      this.getChunkAndPosition(insertIndex);
+    this.cachedViewAndPos = null;
+    const [view, itemIndex] = this.getViewAndPosition(insertIndex);
 
     const storedValue =
       this.codec.writeByItemIndex(itemIndex, view, value);
 
     this.cache.splice(insertIndex, 0, storedValue);
 
-    this.transitoryChangedItems.addAfter(index);
-    this.cumulativeChangedItems.addAfter(index);
+    this.transitoryChanges.addAfter(index);
+    this.cumulativeChanges.addAfter(index);
 
     this.shiftDeletedIndexesAfterInsert(insertIndex);
 
@@ -169,30 +170,32 @@ export class LazyArray<T = unknown> {
 
       this.deletedItems.push({ index, values });
     }
-
+//
     this.shiftDeletedIndexesAfterDelete(index, count);
 
     this.cache.splice(index, count);
-    this.transitoryChangedItems.deleteItems(index, count);
-    this.cumulativeChangedItems.deleteItems(index, count);
+    this.transitoryChanges.deleteItems(index, count);
+    this.cumulativeChanges.deleteItems(index, count);
+
+    this.cachedViewAndPos = null;
 
     this.storageHasBeenChanged();
   }
 
-  public getTransitoryChanges(): ChangedInterval[] {
-    return this.getChanges(this.transitoryChangedItems);
+  public getTransitoryChanges(): readonly ChangedInterval[] {
+    return this.transitoryChanges.intervals;
   }
 
   public clearTransitoryChanges(): void {
-    this.transitoryChangedItems.clearAll();
+    this.transitoryChanges.clear();
   }
 
-  public getCumulativeChanges(): Bitmap {
-    return this.cumulativeChangedItems;;
+  public getCumulativeChanges(): ChangedIntervals {
+    return this.cumulativeChanges;
   }
 
   public clearCumulativeChanges(): void {
-    this.cumulativeChangedItems.clearAll();
+    this.cumulativeChanges.clear();
   }
 
   public getDeleted(): LazyArrayDeletedItems<T>[] {
@@ -216,30 +219,7 @@ export class LazyArray<T = unknown> {
     this.clearCumulativeChanges();
     this.clearDeleted();
     this.clearCache();
-  }
-
-  private getChanges(bitmap: Bitmap): ChangedInterval[] {
-    const intervals: ChangedInterval[] = [];
-
-    for (let index = 0; index < this.cache.length; index++) {
-      if (!bitmap.get(index)) {
-        continue;
-      }
-
-      const lastInterval = intervals.at(-1);
-
-      if (
-        lastInterval &&
-        lastInterval[changedIntervalIndexes.startFlatAscIndex] +
-          lastInterval[changedIntervalIndexes.count] === index
-      ) {
-        lastInterval[changedIntervalIndexes.count] += 1;
-      } else {
-        intervals.push([index, 1]);
-      }
-    }
-
-    return intervals;
+    this.cachedViewAndPos = null;
   }
 
   private getItem(index: number): T {
@@ -247,7 +227,7 @@ export class LazyArray<T = unknown> {
       return this.cache[index];
     }
 
-    const { view, itemIndex } = this.getChunkAndPosition(index);
+    const [view, itemIndex] = this.getViewAndPosition(index);
 
     const value = this.codec.readByItemIndex(itemIndex, view) as T;
 
@@ -275,8 +255,7 @@ export class LazyArray<T = unknown> {
       );
     }
 
-    const { view, itemIndex } =
-      this.getChunkAndPosition(index);
+    const [view, itemIndex] = this.getViewAndPosition(index);
 
     return field.readByItemIndex(
       itemIndex,
@@ -285,8 +264,7 @@ export class LazyArray<T = unknown> {
   }
 
   private setItem(index: number, value: T): T {
-    const { view, itemIndex } =
-      this.getChunkAndPosition(index);
+    const [view, itemIndex] = this.getViewAndPosition(index);
 
     const previousValue =
       this.codec.readByItemIndex(itemIndex, view) as T;
@@ -318,11 +296,9 @@ export class LazyArray<T = unknown> {
       );
     }
 
-    const { view, itemIndex } =
-      this.getChunkAndPosition(index);
+    const [view, itemIndex] = this.getViewAndPosition(index);
 
-    const previousValue =
-      field.readByItemIndex(itemIndex, view);
+    const previousValue = field.readByItemIndex(itemIndex, view);
 
     const storedValue = field.writeByItemIndex(
       itemIndex,
@@ -399,7 +375,7 @@ export class LazyArray<T = unknown> {
 
   private getChunkAndPosition(
     index: number,
-  ): StorageChunkAndPosition {
+  ): StorageViewAndPosition {
     return this.getChunkAndPosByFlatIndex(
       this.entity.kind,
       this.entity.name,
@@ -407,9 +383,27 @@ export class LazyArray<T = unknown> {
     );
   }
 
+
+  private getViewAndPosition(
+    flatIndex: number,
+  ): [view: DataView, itemIndex: number] {
+    if (
+      !this.cachedViewAndPos ||
+      flatIndex < this.cachedViewAndPos[2] ||
+      flatIndex >= this.cachedViewAndPos[3]
+    ) {
+      this.cachedViewAndPos = this.getChunkAndPosition(flatIndex);
+    }
+
+    return [
+      this.cachedViewAndPos[0],
+      this.cachedViewAndPos[1] + flatIndex - this.cachedViewAndPos[2],
+    ];
+  }
+
   private setChanged(index: number): void {
-    this.transitoryChangedItems.set(index, true);
-    this.cumulativeChangedItems.set(index, true);
+    this.transitoryChanges.set(index);
+    this.cumulativeChanges.set(index);
 
     this.storageHasBeenChanged();
   }

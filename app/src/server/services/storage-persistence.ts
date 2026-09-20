@@ -496,14 +496,26 @@ export class StoragePersistenceService {
   }
 
   private logRuntimeState(): void {
+    const currentEventLoopUtilization =
+      performance.eventLoopUtilization();
+
     const eventLoopUtilization =
-      performance.eventLoopUtilization(this.lastEventLoopUtilization);
+      performance.eventLoopUtilization(
+        currentEventLoopUtilization,
+        this.lastEventLoopUtilization,
+      );
 
-    this.lastEventLoopUtilization = performance.eventLoopUtilization();
+    this.lastEventLoopUtilization =
+      currentEventLoopUtilization;
 
-    const cpuUsage = process.cpuUsage(this.lastCpuUsage);
+    const currentCpuUsage = process.cpuUsage();
 
-    this.lastCpuUsage = process.cpuUsage();
+    const cpuUsage = {
+      user: currentCpuUsage.user - this.lastCpuUsage.user,
+      system: currentCpuUsage.system - this.lastCpuUsage.system,
+    };
+
+    this.lastCpuUsage = currentCpuUsage;
 
     const toMilliseconds = (
       nanoseconds: number,
@@ -514,6 +526,21 @@ export class StoragePersistenceService {
       {
         eventLoopUtilization: Number(
           eventLoopUtilization.utilization.toFixed(3),
+        ),
+
+        eventLoopActiveMs: Number(
+          eventLoopUtilization.active.toFixed(2),
+        ),
+
+        eventLoopIdleMs: Number(
+          eventLoopUtilization.idle.toFixed(2),
+        ),
+
+        eventLoopTotalMs: Number(
+          (
+            eventLoopUtilization.active +
+            eventLoopUtilization.idle
+          ).toFixed(2),
         ),
 
         eventLoopDelayMeanMs: Number(
@@ -542,10 +569,12 @@ export class StoragePersistenceService {
           process.memoryUsage().heapUsed / 1024 / 1024,
         ),
 
+        activeResources: process.getActiveResourcesInfo(),
+
         workerBusy: this.workerBusy,
       },
     );
-
+//
     this.eventLoopDelay.reset();
   }
 }

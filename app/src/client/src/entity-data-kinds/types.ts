@@ -5,7 +5,10 @@ import type { IChartApi, ISeriesApi, SeriesType } from 'lightweight-charts';
 import type { EntityDataKind } from '../../../shared/constants/storage-entities';
 import type { FrontendSettings } from '../../../shared/services/frontend-settings';
 import type { StorageAccessors } from '../../../shared/types/storage';
-import type { EntityDesriptor } from '../../../shared/types/storage-entities';
+import type {
+  EntityDataDescriptor,
+  EntityDesriptor,
+} from '../../../shared/types/storage-entities';
 
 export interface EntityDataKindSettingsProps {
   descriptor: EntityDesriptor;
@@ -21,6 +24,7 @@ export interface EntitySeriesContext {
 export interface EntityDataContext {
   accessors: StorageAccessors;
   descriptor: EntityDesriptor;
+  dataDescriptor: EntityDataDescriptor;
   index: number;
 }
 
@@ -70,4 +74,5 @@ export interface EntityDataKindHandler<
   ): void;
 }
 
-export type AnyEntityDataKindHandler = EntityDataKindHandler<any, any, any>;
+export type AnyEntityDataKindHandler =
+  EntityDataKindHandler<any, any, any>;

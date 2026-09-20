@@ -1,4 +1,4 @@
-// app/src/shared/constants/market-statistics-storage.ts
+// app/src/shared/constants/time-derivatives.ts
 
 import { MINUTE } from './time.js';
 

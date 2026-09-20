@@ -94,9 +94,16 @@ export const MarketChart = ({
         const title = truncateMiddle(translatedName, 10);
 
         groupSeries.push({
-          key: `${descriptor.kind}:${descriptor.name}:${dataKind}:${group}`,
+          key: [
+            descriptor.kind,
+            descriptor.name,
+            dataKind,
+            group,
+            data.key ?? '',
+          ].join(':'),
           title,
           descriptor,
+          dataDescriptor: data,
           entityIndex,
           handler,
           settings: handlerSettings,

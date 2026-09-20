@@ -17,3 +17,9 @@ export interface MarketCandle {
 }
 
 export type IndicatorValue = number | null;
+
+export interface MarketPhaseValue {
+  position: number;
+  speed: number;
+  acceleration: number;
+}

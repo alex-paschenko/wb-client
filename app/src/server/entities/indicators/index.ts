@@ -4,6 +4,7 @@ import { MINUTES, SECONDS } from '../../../shared/constants/time.js';
 import { AdaptiveEmaIndicator } from './adaptive-ema.js';
 import { ContinuousEmaIndicator } from './continuous-ema.js';
 import { EmaIndicator } from './ema.js';
+import { MarketPhaseIndicator } from './market-phase.js';
 
 const emaPeriods = [20, 50, 90, 200];
 
@@ -31,4 +32,8 @@ export const indicators = [
         sensitivity: 1,
       }),
   ),
+
+    new MarketPhaseIndicator({
+    tau: 20 * SECONDS,
+  }),
 ];

@@ -18,6 +18,7 @@ import type {
   CodecAccumulatorFromDefinition,
   CodecDataFromDefinition,
 } from '../../../types/codecs.js';
+import { marketPhase_V1_0 } from './market-phase-v1_0.js';
 
 export const CODEC_DEFINITIONS = {
   'string (2^16) v1.0': string2To16_V1_0,
@@ -39,6 +40,8 @@ export const CODEC_DEFINITIONS = {
   'float64 (nullable) v1.0': float64Nullable_V1_0,
 
   'candle v1.0': candle_V1_0,
+  
+  'market phase v1.0': marketPhase_V1_0,
 
   'snapshot v1.0': snapshot_V1_0,
 

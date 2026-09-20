@@ -4,6 +4,7 @@ import type { IChartApi, ISeriesApi, SeriesType } from 'lightweight-charts';
 
 import type { StorageAccessors } from '../../../shared/types/storage';
 import type {
+  EntityDataDescriptor,
   EntityDesriptor,
 } from '../../../shared/types/storage-entities';
 import type {
@@ -17,6 +18,7 @@ export interface ChartPanelSeries {
   key: string;
   title: string;
   descriptor: EntityDesriptor;
+  dataDescriptor: EntityDataDescriptor;
   entityIndex: number;
   handler: AnyEntityDataKindHandler;
   settings: unknown;
@@ -118,6 +120,7 @@ export class ChartPanelSeriesManager {
         item.handler.getData({
           accessors: context.accessors,
           descriptor: item.descriptor,
+          dataDescriptor: item.dataDescriptor,
           index,
         }),
       );
@@ -143,6 +146,7 @@ export class ChartPanelSeriesManager {
     const data = item.handler.getData({
       accessors: context.accessors,
       descriptor: item.descriptor,
+      dataDescriptor: item.dataDescriptor,
       index: context.endIndex,
     });
 
@@ -175,14 +179,14 @@ export class ChartPanelSeriesManager {
     }
 
     const managed: ManagedChartPanelSeries = {
-    series: item.handler.createSeries(
-      {
-        chart: this.chart,
-        panelIndex: this.panelIndex,
-        title: item.title,
-      },
-      item.settings,
-    ),
+      series: item.handler.createSeries(
+        {
+          chart: this.chart,
+          panelIndex: this.panelIndex,
+          title: item.title,
+        },
+        item.settings,
+      ),
       isInitialized: false,
     };
 

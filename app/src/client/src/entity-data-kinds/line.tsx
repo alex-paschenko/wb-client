@@ -1,13 +1,22 @@
 // app/src/client/src/entity-data-kinds/line.tsx
 
-import { LineSeries, type LineData, type WhitespaceData } from 'lightweight-charts';
+import {
+  LineSeries,
+  type LineData,
+  type WhitespaceData,
+} from 'lightweight-charts';
 
-import type { IndicatorValue } from '../../../shared/types/data-types';
 import type { LazyArray } from '../../../shared/utilities/lazy-array';
 import { getEntityChartTime } from './utilities';
-import { getEntityColor } from '../../../shared/constants/frontend-settings';
-import type { FrontendSettings } from '../../../shared/services/frontend-settings';
-import type { EntityDesriptor } from '../../../shared/types/storage-entities';
+import {
+  getEntityColor,
+} from '../../../shared/constants/frontend-settings';
+import type {
+  FrontendSettings,
+} from '../../../shared/services/frontend-settings';
+import type {
+  EntityDesriptor,
+} from '../../../shared/types/storage-entities';
 import { useAppContext } from '../contexts/AppContext';
 import { LineSettings } from './LineSettings';
 import type { LineEntitySettings } from './settings-types';
@@ -26,11 +35,12 @@ const getSettings = (
   descriptor: EntityDesriptor,
   entityIndex: number,
 ): LineEntitySettings => {
-  const stored = settings.getEntityDataKindSettings<LineEntitySettings>(
-    descriptor.kind,
-    descriptor.name,
-    DATA_KIND,
-  );
+  const stored =
+    settings.getEntityDataKindSettings<LineEntitySettings>(
+      descriptor.kind,
+      descriptor.name,
+      DATA_KIND,
+    );
 
   return {
     color: stored?.color ?? getEntityColor(entityIndex),
@@ -54,10 +64,11 @@ const setSettings = (
 const getData = ({
   accessors,
   descriptor,
+  dataDescriptor,
   index,
 }: EntityDataContext): LinePoint => {
   const accessor =
-    accessors[descriptor.kind][descriptor.name] as LazyArray<IndicatorValue>;
+    accessors[descriptor.kind][descriptor.name] as LazyArray<unknown>;
 
   if (!accessor) {
     throw new Error(
@@ -66,11 +77,24 @@ const getData = ({
   }
 
   const time = getEntityChartTime(accessors, index);
-  const value = accessor.get(index);
 
-  return value === null
-    ? { time }
-    : { time, value };
+  const value = dataDescriptor.key
+    ? accessor.get(index, dataDescriptor.key as never)
+    : accessor.get(index);
+
+  if (value === null) {
+    return { time };
+  }
+
+  if (typeof value !== 'number') {
+    throw new TypeError(
+      `Line data must be a number or null: ` +
+      `${descriptor.kind}/${descriptor.name}` +
+      (dataDescriptor.key ? `.${dataDescriptor.key}` : ''),
+    );
+  }
+
+  return { time, value };
 };
 
 const SettingsComponent = ({
@@ -84,7 +108,9 @@ const SettingsComponent = ({
       descriptor={descriptor}
       entityIndex={entityIndex}
       dataKind={DATA_KIND}
-      getSettings={() => getSettings(settings, descriptor, entityIndex)}
+      getSettings={() =>
+        getSettings(settings, descriptor, entityIndex)
+      }
       setSettings={(value) => {
         updateSettings((nextSettings) => {
           setSettings(nextSettings, descriptor, value);

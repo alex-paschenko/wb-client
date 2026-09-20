@@ -6,7 +6,7 @@ import type { StorageEntityKind } from '../constants/storage-entities.js';
 import { globalStateService } from './global-state.js';
 import type {
   StorageAccessors,
-  StorageChunkAndPosition,
+  StorageViewAndPosition,
   StorageChunks,
   StorageChunkSet,
   StorageItemValues,
@@ -395,7 +395,7 @@ export class Storage {
     kind: StorageEntityKind,
     name: string,
     flatIndex: number,
-  ): StorageChunkAndPosition {
+  ): StorageViewAndPosition {
     if (!Number.isSafeInteger(flatIndex) || flatIndex < 0 || flatIndex >= this.size) {
       throw new RangeError(
         `Invalid storage flat index: ${flatIndex} (length: ${this.size})`,
@@ -407,6 +407,7 @@ export class Storage {
 
     const previousFlatEnd =
       chunkSetIndex === 0 ? 0 : this.chunkSetFlatEnds[chunkSetIndex - 1];
+    const currentFlatEnd = this.chunkSetFlatEnds[chunkSetIndex];
 
     const itemOffset = flatIndex - previousFlatEnd;
     const itemIndex = chunkSet.start + itemOffset;
@@ -428,7 +429,12 @@ export class Storage {
       );
     }
 
-    return { ...chunk, itemIndex };
+    return [
+      chunk.view,
+      chunkSet.start,
+      currentFlatEnd - chunkSet.size,
+      currentFlatEnd,
+    ];
   }
 
   private addItemStructure(
@@ -602,85 +608,79 @@ export class Storage {
 
     return change.type === 'addItem' && change.level === 0;
   }
-
+//
   private buildDeltaChangeIntervals(
     structuralAppendOnly: boolean,
   ): StorageBuiltDeltaChanges {
-    const entityChanges: StorageDeltaEntityChanges[] = [];
-    let appendOnly = structuralAppendOnly;
+const entityChanges: StorageDeltaEntityChanges[] = [];
+let appendOnly = structuralAppendOnly;
+const appendedFlatIndex = this.size - 1;
 
-    const appendedFlatIndex = this.size - 1;
+for (
+  const [entityIndex, entity] of
+  globalStateService.getStorageEntities().entries()
+) {
+  const changedIntervals = this.accessors[entity.kind][entity.name]
+    .getCumulativeChanges();
 
-    for (
-      const [entityIndex, entity] of
-      globalStateService.getStorageEntities().entries()
-    ) {
-      const bitmap =
-        this.accessors[entity.kind][entity.name].getCumulativeChanges();
+  if (changedIntervals.length !== this.size) {
+    throw new Error(
+      `Changed intervals length mismatch for ` +
+      `${entity.kind}:${entity.name}: ` +
+      `${changedIntervals.length} !== ${this.size}`,
+    );
+  }
 
-      if (bitmap.length !== this.size) {
-        throw new Error(
-          `Cumulative bitmap size ${bitmap.length} does not ` +
-          `match storage size ${this.size}`,
-        );
-      }
+  if (changedIntervals.intervals.length === 0) {
+    continue;
+  }
 
-      const changes = [];
+  const changes = [];
+  let chunkSetIndex = 0;
+  let previousFlatEnd = 0;
 
-      let chunkSetIndex = 0;
-      let previousFlatEnd = 0;
-      let flatIndex = 0;
+  for (const [startFlatIndex, count] of changedIntervals.intervals) {
+    let flatIndex = startFlatIndex;
+    let remainingCount = count;
 
-      while (flatIndex < this.size) {
-        while (flatIndex >= this.chunkSetFlatEnds[chunkSetIndex]) {
-          previousFlatEnd = this.chunkSetFlatEnds[chunkSetIndex];
-          chunkSetIndex++;
-        }
-
-        if (!bitmap.get(flatIndex)) {
-          flatIndex++;
-          continue;
-        }
-
-        if (flatIndex !== appendedFlatIndex) {
-          appendOnly = false;
-        }
-
-        const chunkSet = this.chunkSets[chunkSetIndex];
-        const chunkSetFlatEnd = this.chunkSetFlatEnds[chunkSetIndex];
-
-        const startItemIndex = flatIndex - previousFlatEnd;
-
-        let itemsCount = 0;
-
-        while (flatIndex < chunkSetFlatEnd && bitmap.get(flatIndex)) {
-          if (flatIndex !== appendedFlatIndex) {
-            appendOnly = false;
-          }
-
-          flatIndex++;
-          itemsCount++;
-        }
-
-        changes.push({ chunkSetIndex, startItemIndex, itemsCount });
-      }
-
-      if (changes.length === 0) {
-        continue;
-      }
-
-      entityChanges.push({
-        entityKind: entity.kind,
-        entityName: entity.name,
-        entityIndex,
-        changes,
-      });
+    if (flatIndex !== appendedFlatIndex || remainingCount !== 1) {
+      appendOnly = false;
     }
 
-    return {
-      entityChanges,
-      appendOnly,
-    };
+    while (remainingCount > 0) {
+      while (flatIndex >= this.chunkSetFlatEnds[chunkSetIndex]) {
+        previousFlatEnd = this.chunkSetFlatEnds[chunkSetIndex];
+
+        chunkSetIndex++;
+      }
+
+      const chunkSetFlatEnd = this.chunkSetFlatEnds[chunkSetIndex];
+
+      const itemsCount = Math.min(
+        remainingCount,
+        chunkSetFlatEnd - flatIndex,
+      );
+
+      changes.push({
+        chunkSetIndex,
+        startItemIndex: flatIndex - previousFlatEnd,
+        itemsCount,
+      });
+
+      flatIndex += itemsCount;
+      remainingCount -= itemsCount;
+    }
+  }
+
+  entityChanges.push({
+    entityKind: entity.kind,
+    entityName: entity.name,
+    entityIndex,
+    changes,
+  });
+}
+
+return { entityChanges, appendOnly };
   }
 
   private buildAccessors() {

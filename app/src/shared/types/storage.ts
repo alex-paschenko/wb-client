@@ -36,15 +36,14 @@ export interface StorageChunk {
   view: DataView;
 }
 
-export interface StorageChunkAndPosition extends StorageChunk {
-  itemIndex: number;
-}
+export type StorageViewAndPosition =
+  [view: DataView, start: number, startFlatIndex: number, endFlatIndex: number];
 
 export type GetChunkAndPosByFlatIndex = (
   kind: StorageEntityKind,
   name: string,
   flatIndex: number,
-) => StorageChunkAndPosition;
+) => StorageViewAndPosition;
 
 export interface StoragePersistenceSnapshot {
   marketName: string;

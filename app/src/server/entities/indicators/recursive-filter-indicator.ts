@@ -29,7 +29,7 @@ extends IncrementalIndicator<RecursiveFilterState> {
         name,
         codec: 'float32 (nullable) v1.0',
         data: [{ kind: 'line', group: 'recursiveFilter' }],
-        requiresRemovedValues: true,
+        requiresRemovedValues: false,
         empty: null,
       },
     );
@@ -139,13 +139,6 @@ extends IncrementalIndicator<RecursiveFilterState> {
     const candles = this.getCandles(accessors);
     const values = this.getValues(accessors);
 
-    const deletedByIndex = new Map(
-      values.getDeleted().map((deleted) => [
-        deleted.index,
-        deleted.values.at(-1) ?? null,
-      ]),
-    );
-
     let previousValue: IndicatorValue =
       range.startIndex > 0
         ? values.get(range.startIndex - 1)
@@ -158,14 +151,6 @@ extends IncrementalIndicator<RecursiveFilterState> {
 
     for (let index = range.startIndex; index <= range.endIndex; index++) {
       const candle = candles.get(index);
-      const deletedValue = deletedByIndex.get(index);
-
-      if (deletedValue !== undefined) {
-        previousValue = deletedValue;
-        previousReceivedAt = candle.receivedAt;
-        values.set(index, previousValue);
-        continue;
-      }
 
       previousValue = this.calculateNextValue(
         previousValue,
@@ -183,7 +168,11 @@ extends IncrementalIndicator<RecursiveFilterState> {
   private getCandles(
     accessors: StorageAccessors,
   ) {
-    return this.getEntityValues<MarketCandle>(accessors, 'candles', CANDLE_NAME);
+    return this.getEntityValues<MarketCandle>(
+      accessors,
+      'candles',
+      CANDLE_NAME,
+    );
   }
 
   private calculateNextValue(

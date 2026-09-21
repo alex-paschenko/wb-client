@@ -22,4 +22,6 @@ export interface MarketPhaseValue {
   position: number;
   speed: number;
   acceleration: number;
+  surprise: number;
+  residualVariance: number;
 }

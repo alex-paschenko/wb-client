@@ -4,9 +4,11 @@ import { useTranslation } from 'react-i18next';
 
 import { STORAGE_ENTITY_KINDS } from
   '../../../shared/constants/storage-entities';
+import { LineEntitySettings } from '../components/LineEntitySettings';
+import { OhlcEntitySettings } from '../components/OhlcEntitySettings';
 import { SettingsSection } from '../components/SettingsSection';
 import { useAppContext } from '../contexts/AppContext';
-import { ENTITY_DATA_KIND_HANDLERS } from '../entity-data-kinds';
+import { getEntityDataKey } from '../entity-data/utilities';
 
 export const SettingsPage = () => {
   const { t } = useTranslation();
@@ -43,18 +45,33 @@ export const SettingsPage = () => {
                       descriptor,
                       entityIndex,
                     }) => {
-                      return descriptor.data.map(({ kind: dataKind, group }) => {
-                        const handler = ENTITY_DATA_KIND_HANDLERS[dataKind];
+                      return descriptor.data.map((data, dataIndex) => {
+                        const key = [
+                          descriptor.name,
+                          getEntityDataKey(data),
+                          data.group,
+                        ].join(':');
 
-                        const SettingsComponent = handler.SettingsComponent;
+                        switch (data.kind) {
+                          case 'line':
+                            return (
+                              <LineEntitySettings
+                                key={key}
+                                descriptor={descriptor}
+                                data={data}
+                                colorIndex={entityIndex + dataIndex}
+                              />
+                            );
 
-                        return (
-                          <SettingsComponent
-                            key={`${descriptor.name}:${dataKind}:${group}`}
-                            descriptor={descriptor}
-                            entityIndex={entityIndex}
-                          />
-                        );
+                          case 'ohlc':
+                            return (
+                              <OhlcEntitySettings
+                                key={key}
+                                descriptor={descriptor}
+                                data={data}
+                              />
+                            );
+                        }
                       });
                     })}
                   </div>

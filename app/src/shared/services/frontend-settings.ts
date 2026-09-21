@@ -4,13 +4,9 @@ import {
   createEmptyEntitiesSettings,
   defaultFrontendSettings,
 } from '../constants/frontend-settings.js';
-import type {
-  EntityDataKind,
-  StorageEntityKind,
-} from '../constants/storage-entities.js';
+import type { StorageEntityKind } from '../constants/storage-entities.js';
 import type {
   EntitiesSettings,
-  EntityDataKindSettings,
   FrontendSettingsValue,
   MarketViewState,
   MarketViewStateItem,
@@ -84,22 +80,22 @@ export class FrontendSettings {
     this.value.theme = theme;
   }
 
-  public getEntityDataKindSettings<T>(
+  public getEntityDataSettings<T>(
     kind: StorageEntityKind,
     entityName: string,
-    dataKind: EntityDataKind,
+    dataKey: string,
   ): T | null {
-    const value = this.value.entities[kind][entityName]?.[dataKind];
+    const value = this.value.entities[kind][entityName]?.[dataKey];
 
     return value === undefined
       ? null
       : structuredClone(value as T);
   }
 
-  public setEntityDataKindSettings<T>(
+  public setEntityDataSettings<T>(
     kind: StorageEntityKind,
     entityName: string,
-    dataKind: EntityDataKind,
+    dataKey: string,
     settings: T,
   ): void {
     const kindSettings = this.value.entities[kind];
@@ -111,7 +107,7 @@ export class FrontendSettings {
       kindSettings[entityName] = entitySettings;
     }
 
-    entitySettings[dataKind] = structuredClone(settings);
+    entitySettings[dataKey] = structuredClone(settings);
   }
 
   public ensureMarkets(

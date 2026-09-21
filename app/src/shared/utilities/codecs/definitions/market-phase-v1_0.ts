@@ -14,5 +14,7 @@ export const marketPhase_V1_0 =
       { fieldName: 'position', codec: 'float64 (nullable) v1.0' },
       { fieldName: 'speed', codec: 'float64 (nullable) v1.0' },
       { fieldName: 'acceleration', codec: 'float64 (nullable) v1.0' },
+      { fieldName: 'surprise', codec: 'float64 (nullable) v1.0' },
+      { fieldName: 'residualVariance', codec: 'float64 (nullable) v1.0' },
     ],
   });

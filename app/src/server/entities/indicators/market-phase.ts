@@ -1,4 +1,4 @@
-// app/src/server/entities/indicators/market-phase.ts
+// app/src/server/src/entities/indicators/market-phase.ts
 
 import { CANDLE_NAME } from '../../../shared/constants/storage-entities.js';
 import {
@@ -14,13 +14,19 @@ import { convertIntervalToTimeWithUnit } from '../../../shared/utilities/time.js
 import { BaseEntity } from '../base-entity.js';
 
 interface MarketPhaseIndicatorParams {
-  tau: number;
+  responseTime: number;
+  surpriseTau: number;
 }
 
 interface ObserverGains {
   position: number;
   speed: number;
   acceleration: number;
+}
+
+interface SurpriseState {
+  surprise: number;
+  residualVariance: number;
 }
 
 const DAMPING = 0.7;
@@ -32,14 +38,19 @@ const POSITION_SCALE =
 
 const SMALL_NORMALIZED_INTERVAL = 1e-3;
 
+// First 90% crossing of the speed step response at damping = 0.7.
+const SPEED_RESPONSE_90_TAU_RATIO = 1.401164;
+
 export class MarketPhaseIndicator
 extends BaseEntity<MarketPhaseValue> {
   private readonly tau: number;
+  private readonly surpriseTau: number;
 
   public constructor(
     params: MarketPhaseIndicatorParams,
   ) {
-    const { tau } = params;
+    const { responseTime, surpriseTau } = params;
+    const tau = responseTime / SPEED_RESPONSE_90_TAU_RATIO;
 
     if (!Number.isFinite(tau) || tau <= 0) {
       throw new Error(
@@ -47,39 +58,39 @@ extends BaseEntity<MarketPhaseValue> {
       );
     }
 
-    const { count, abbreviation } =
-      convertIntervalToTimeWithUnit(tau);
+    if (
+      !Number.isFinite(surpriseTau) ||
+      surpriseTau <= 0
+    ) {
+      throw new Error(
+        'Market phase surpriseTau must be a positive finite number: ' +
+        surpriseTau,
+      );
+    }
+
+    const { count, abbreviation } = convertIntervalToTimeWithUnit(responseTime);
 
     super({
       kind: 'indicators',
       name: `phase-${count}${abbreviation}`,
       codec: 'market phase v1.0',
       data: [
-        {
-          kind: 'line',
-          group: 'marketPhase2',
-          key: 'position',
-        },
-        {
-          kind: 'speedLine',
-          group: 'marketPhase',
-          key: 'speed',
-        },
-        {
-          kind: 'accelerationLine',
-          group: 'marketPhase',
-          key: 'acceleration',
-        },
+        { kind: 'line', group: 'marketPhase', key: 'speed' },
+        { kind: 'line', group: 'marketPhase', key: 'acceleration' },
+        { kind: 'line', group: 'marketPhaseSurprise', key: 'surprise' },
       ],
       requiresRemovedValues: false,
       empty: {
         position: 0,
         speed: 0,
         acceleration: 0,
+        surprise: 0,
+        residualVariance: 0,
       },
     });
 
     this.tau = tau;
+    this.surpriseTau = surpriseTau;
   }
 
   public calculate(
@@ -130,7 +141,11 @@ extends BaseEntity<MarketPhaseValue> {
         ? candles.get(startIndex - 1, 'receivedAt')
         : null;
 
-    for (let index = startIndex; index <= endIndex; index++) {
+    for (
+      let index = startIndex;
+      index <= endIndex;
+      index++
+    ) {
       const candle = candles.get(index);
 
       const value = this.calculateNextValue(
@@ -161,6 +176,8 @@ extends BaseEntity<MarketPhaseValue> {
         position,
         speed: 0,
         acceleration: 0,
+        surprise: 0,
+        residualVariance: 0,
       };
     }
 
@@ -198,6 +215,15 @@ extends BaseEntity<MarketPhaseValue> {
     const gains =
       this.getObserverGains(dt, tau);
 
+    const {
+      surprise,
+      residualVariance,
+    } = this.calculateSurprise(
+      previousValue.residualVariance,
+      residual,
+      elapsed,
+    );
+
     return {
       position:
         predictedPosition +
@@ -210,6 +236,37 @@ extends BaseEntity<MarketPhaseValue> {
       acceleration:
         previousValue.acceleration +
         gains.acceleration * residual,
+
+      surprise,
+      residualVariance,
+    };
+  }
+
+  private calculateSurprise(
+    previousResidualVariance: number,
+    residual: number,
+    elapsed: number,
+  ): SurpriseState {
+    if (previousResidualVariance <= 0) {
+      return {
+        surprise: 0,
+        residualVariance: residual * residual,
+      };
+    }
+
+    const surprise =
+      residual / Math.sqrt(previousResidualVariance);
+
+    const alpha =
+      Math.exp(-elapsed / this.surpriseTau);
+
+    const residualVariance =
+      alpha * previousResidualVariance +
+      (1 - alpha) * residual * residual;
+
+    return {
+      surprise,
+      residualVariance,
     };
   }
 

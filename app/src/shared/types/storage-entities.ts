@@ -1,18 +1,28 @@
 // app/src/shared/types/storage-entities.ts
 
-import type {
-  StorageEntityKind,
-  EntityDataKind,
-} from '../constants/storage-entities.js';
+import type { StorageEntityKind } from '../constants/storage-entities.js';
 import type { EntityCodecName } from '../utilities/codecs/definitions/index.js';
 import type { StorageStructure, StorageStructureKind } from './storage.js';
 
+export type LineStyle = 'price';
 
-export interface EntityDataDescriptor {
-  kind: EntityDataKind;
+export interface LineDataDescriptor {
+  kind: 'line';
   group: string;
   key?: string;
+  style?: LineStyle;
 }
+
+export interface OhlcDataDescriptor {
+  kind: 'ohlc';
+  group: string;
+  key?: never;
+  style?: never;
+}
+
+export type EntityDataDescriptor =
+  | LineDataDescriptor
+  | OhlcDataDescriptor;
 
 export interface EntityDesriptor<T = unknown> {
   kind: StorageEntityKind;

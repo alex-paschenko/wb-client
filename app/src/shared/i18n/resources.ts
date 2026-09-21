@@ -19,11 +19,14 @@ export const i18nResources = {
         },
 
         dataKind: {
-          line: 'Линия',
+          line: {
+            default: 'Линия',
+            price: 'Линия цены',
+            speed: 'Линия скорости',
+            acceleration: 'Линия ускорения',
+            surprise: 'Линия неожиданности',
+          },
           ohlc: 'Свечи',
-          priceLine: 'Линия цены',
-          speedLine: 'Линия скорости',
-          accelerationLine: 'Линия ускорения',
         },
 
         entity: {
@@ -44,6 +47,7 @@ export const i18nResources = {
           price: 'Цена',
           speed: 'Скорость',
           acceleration: 'Ускорение',
+          surprise: 'Неожиданность',
         },
       },
 
@@ -145,11 +149,14 @@ export const i18nResources = {
         },
 
         dataKind: {
-          line: 'Line',
+          line: {
+            default: 'Line',
+            price: 'Price line',
+            speed: 'Speed line',
+            acceleration: 'Acceleration line',
+            surprise: 'Surprise line',
+          },
           ohlc: 'Candles',
-          priceLine: 'Price line',
-          speedLine: 'Speed line',
-          accelerationLine: 'Acceleration line',
         },
 
         entity: {
@@ -170,6 +177,7 @@ export const i18nResources = {
           price: 'Price',
           speed: 'Speed',
           acceleration: 'Acceleration',
+          surprise: 'Surprise',
         },
       },
 

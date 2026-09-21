@@ -1,8 +1,5 @@
 // app/src/shared/types/frontend-settings.ts
 
-import type {
-  EntityDataKind,
-} from '../constants/storage-entities.js';
 import type { StorageStructure } from './storage.js';
 
 export const MARKET_VIEW_STATES = {
@@ -23,15 +20,14 @@ export type MarketViewStateItem = {
   state: MarketViewState;
 };
 
-export type EntityDataKindSettings =
-  Partial<Record<EntityDataKind, unknown>>;
+export type EntityDataSettings = Record<string, unknown>;
 
 /*
  * Deep=1 keeps the outer StorageStructure readonly while entity maps
  * remain mutable inside FrontendSettings.
  */
 export type EntitiesSettings =
-  StorageStructure<EntityDataKindSettings, 1>;
+  StorageStructure<EntityDataSettings, 1>;
 
 export type FrontendSettingsValue = {
   language: string;

@@ -34,6 +34,7 @@ export const indicators = [
   ),
 
     new MarketPhaseIndicator({
-    tau: 20 * SECONDS,
+    responseTime: 30 * SECONDS,
+    surpriseTau: 5 * MINUTES,
   }),
 ];

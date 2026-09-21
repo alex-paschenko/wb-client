@@ -1,27 +1,47 @@
 // app/src/client/src/utilities/chart-panel-series-manager.ts
 
-import type { IChartApi, ISeriesApi, SeriesType } from 'lightweight-charts';
+import {
+  CandlestickSeries,
+  LineSeries,
+  type CandlestickData,
+  type IChartApi,
+  type ISeriesApi,
+  type LineData,
+  type SeriesType,
+  type WhitespaceData,
+} from 'lightweight-charts';
 
+import type { MarketCandle } from '../../../shared/types/data-types';
 import type { StorageAccessors } from '../../../shared/types/storage';
 import type {
   EntityDataDescriptor,
   EntityDesriptor,
+  LineDataDescriptor,
 } from '../../../shared/types/storage-entities';
+import type { LazyArray } from '../../../shared/utilities/lazy-array';
 import type {
   MarketChartUpdateMode,
 } from '../controllers/MarketStatisticsView';
 import type {
-  AnyEntityDataKindHandler,
-} from '../entity-data-kinds/types';
+  LineEntitySettings,
+  OhlcEntitySettings,
+} from '../entity-data/types';
+import {
+  getEntityChartTime,
+} from '../entity-data/utilities';
+
+type LinePoint = LineData | WhitespaceData;
+
+type ChartPanelSeriesSettings =
+  | LineEntitySettings
+  | OhlcEntitySettings;
 
 export interface ChartPanelSeries {
   key: string;
   title: string;
   descriptor: EntityDesriptor;
   dataDescriptor: EntityDataDescriptor;
-  entityIndex: number;
-  handler: AnyEntityDataKindHandler;
-  settings: unknown;
+  settings: ChartPanelSeriesSettings;
 }
 
 export interface ChartPanelSeriesSyncContext {
@@ -58,9 +78,9 @@ export class ChartPanelSeriesManager {
     for (const item of panelSeries) {
       const managed = this.getOrCreateSeries(item);
 
-      item.handler.applySettings(
+      this.applySettings(
         managed.series,
-        item.settings,
+        item,
       );
 
       if (
@@ -109,27 +129,56 @@ export class ChartPanelSeriesManager {
     item: ChartPanelSeries,
     context: ChartPanelSeriesSyncContext,
   ): void {
-    const data = [];
+    switch (item.dataDescriptor.kind) {
+      case 'line': {
+        const series =
+          managed.series as ISeriesApi<'Line'>;
 
-    for (
-      let index = context.startIndex;
-      index <= context.endIndex;
-      index++
-    ) {
-      data.push(
-        item.handler.getData({
-          accessors: context.accessors,
-          descriptor: item.descriptor,
-          dataDescriptor: item.dataDescriptor,
-          index,
-        }),
-      );
+        const data: LinePoint[] = [];
+
+        for (
+          let index = context.startIndex;
+          index <= context.endIndex;
+          index++
+        ) {
+          data.push(
+            this.getLineData(
+              item,
+              item.dataDescriptor,
+              context.accessors,
+              index,
+            ),
+          );
+        }
+
+        series.setData(data);
+        break;
+      }
+
+      case 'ohlc': {
+        const series =
+          managed.series as ISeriesApi<'Candlestick'>;
+
+        const data: CandlestickData[] = [];
+
+        for (
+          let index = context.startIndex;
+          index <= context.endIndex;
+          index++
+        ) {
+          data.push(
+            this.getOhlcData(
+              item,
+              context.accessors,
+              index,
+            ),
+          );
+        }
+
+        series.setData(data);
+        break;
+      }
     }
-
-    item.handler.setData(
-      managed.series,
-      data,
-    );
 
     managed.isInitialized = true;
   }
@@ -143,17 +192,139 @@ export class ChartPanelSeriesManager {
       return;
     }
 
-    const data = item.handler.getData({
-      accessors: context.accessors,
-      descriptor: item.descriptor,
-      dataDescriptor: item.dataDescriptor,
-      index: context.endIndex,
-    });
+    switch (item.dataDescriptor.kind) {
+      case 'line': {
+        const series =
+          managed.series as ISeriesApi<'Line'>;
 
-    item.handler.updateSeries(
-      managed.series,
-      data,
-    );
+        series.update(
+          this.getLineData(
+            item,
+            item.dataDescriptor,
+            context.accessors,
+            context.endIndex,
+          ),
+        );
+
+        break;
+      }
+
+      case 'ohlc': {
+        const series =
+          managed.series as ISeriesApi<'Candlestick'>;
+
+        series.update(
+          this.getOhlcData(
+            item,
+            context.accessors,
+            context.endIndex,
+          ),
+        );
+
+        break;
+      }
+    }
+  }
+
+  private getLineData(
+    item: ChartPanelSeries,
+    dataDescriptor: LineDataDescriptor,
+    accessors: StorageAccessors,
+    index: number,
+  ): LinePoint {
+    const accessor =
+      accessors[item.descriptor.kind][item.descriptor.name] as
+        LazyArray<unknown>;
+
+    if (!accessor) {
+      throw new Error(
+        `Accessor "${item.descriptor.kind}/` +
+        `${item.descriptor.name}" not found`,
+      );
+    }
+
+    const time =
+      getEntityChartTime(accessors, index);
+
+    const value = dataDescriptor.key
+      ? accessor.get(index, dataDescriptor.key as never)
+      : accessor.get(index);
+
+    if (value === null) {
+      return { time };
+    }
+
+    if (typeof value !== 'number') {
+      throw new TypeError(
+        'Line data must be a number or null: ' +
+        `${item.descriptor.kind}/${item.descriptor.name}` +
+        (
+          dataDescriptor.key
+            ? `.${dataDescriptor.key}`
+            : ''
+        ),
+      );
+    }
+
+    return {
+      time,
+      value,
+    };
+  }
+
+  private getOhlcData(
+    item: ChartPanelSeries,
+    accessors: StorageAccessors,
+    index: number,
+  ): CandlestickData {
+    const accessor =
+      accessors[item.descriptor.kind][item.descriptor.name] as
+        LazyArray<MarketCandle>;
+
+    if (!accessor) {
+      throw new Error(
+        `Accessor "${item.descriptor.kind}/` +
+        `${item.descriptor.name}" not found`,
+      );
+    }
+
+    return {
+      time: getEntityChartTime(accessors, index),
+      open: accessor.get(index, 'open'),
+      high: accessor.get(index, 'high'),
+      low: accessor.get(index, 'low'),
+      close: accessor.get(index, 'close'),
+    };
+  }
+
+  private applySettings(
+    series: ISeriesApi<SeriesType>,
+    item: ChartPanelSeries,
+  ): void {
+    switch (item.dataDescriptor.kind) {
+      case 'line': {
+        const settings =
+          item.settings as LineEntitySettings;
+
+        (series as ISeriesApi<'Line'>).applyOptions({
+          color: settings.color,
+          visible: settings.isVisible,
+        });
+
+        break;
+      }
+
+      case 'ohlc': {
+        const settings =
+          item.settings as OhlcEntitySettings;
+
+        (series as ISeriesApi<'Candlestick'>).applyOptions({
+          visible: settings.isVisible,
+        });
+
+        break;
+      }
+    }
   }
 
   private removeInactiveSeries(
@@ -178,15 +349,52 @@ export class ChartPanelSeriesManager {
       return existing;
     }
 
+    let series: ISeriesApi<SeriesType>;
+
+    switch (item.dataDescriptor.kind) {
+      case 'line': {
+        const settings =
+          item.settings as LineEntitySettings;
+
+        const isPrice =
+          item.dataDescriptor.style === 'price';
+
+        series = this.chart.addSeries(
+          LineSeries,
+          {
+            title: item.title,
+            color: settings.color,
+            lineWidth: isPrice ? 3 : 1,
+            visible: settings.isVisible,
+            priceLineVisible: isPrice,
+            lastValueVisible: true,
+          },
+          this.panelIndex,
+        );
+
+        break;
+      }
+
+      case 'ohlc': {
+        const settings =
+          item.settings as OhlcEntitySettings;
+
+        series = this.chart.addSeries(
+          CandlestickSeries,
+          {
+            visible: settings.isVisible,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          },
+          this.panelIndex,
+        );
+
+        break;
+      }
+    }
+
     const managed: ManagedChartPanelSeries = {
-      series: item.handler.createSeries(
-        {
-          chart: this.chart,
-          panelIndex: this.panelIndex,
-          title: item.title,
-        },
-        item.settings,
-      ),
+      series,
       isInitialized: false,
     };
 

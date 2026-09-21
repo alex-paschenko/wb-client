@@ -5,7 +5,7 @@ import { defaultTheme } from './themes.js';
 import { defaultLanguage } from '../i18n/languages.js';
 import type {
   EntitiesSettings,
-  EntityDataKindSettings,
+  EntityDataSettings,
   FrontendSettingsValue,
 } from '../types/frontend-settings.js';
 import type {
@@ -26,11 +26,11 @@ export const ENTITY_COLORS = [
   '#ef4444',
 ] as const;
 
-export const getEntityColor = (entityIndex: number): string =>
-  ENTITY_COLORS[entityIndex % ENTITY_COLORS.length];
+export const getEntityColor = (colorIndex: number): string =>
+  ENTITY_COLORS[colorIndex % ENTITY_COLORS.length];
 
 export const createEmptyEntitiesSettings = (): EntitiesSettings => {
-  const result = {} as WritableStorageStructure<EntityDataKindSettings>;
+  const result = {} as WritableStorageStructure<EntityDataSettings>;
 
   for (const kind of STORAGE_ENTITY_KINDS) {
     result[kind] = {};

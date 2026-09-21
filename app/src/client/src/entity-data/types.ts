@@ -1,4 +1,4 @@
-// app/src/client/src/entity-data-kinds/settings-types.ts
+// app/src/client/src/entity-data/types.ts
 
 export interface LineEntitySettings {
   color: string;

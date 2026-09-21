@@ -121,10 +121,7 @@ export class StorageAggregationService {
       for (let index = 0; index < storage.size; index++) {
         const dataItem = {
           candle: candles.get(index),
-          'cEMA-20s': indicators['cEMA-20s'].get(index),
-          'cEMA-50s': indicators['cEMA-50s'].get(index),
-          'cEMA-1.5m': indicators['cEMA-1.5m'].get(index),
-          'cEMA-3m': indicators['cEMA-3m'].get(index),
+          marketPhase: indicators['phase-30s'].get(index),
         };
 
         data.push(dataItem);

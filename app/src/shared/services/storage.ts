@@ -31,6 +31,7 @@ import type {
   StorageDeltaParams,
   StorageStructuralChange,
 } from '../types/storage-delta.js';
+import { EntityDesriptor } from '../types/storage-entities.js';
 
 const SNAPSHOT_CODEC = 'snapshot v1.0' as const;
 const SNAPSHOT_BINARY_KIND = 'snapshot' satisfies BinaryKind;
@@ -61,7 +62,9 @@ export class Storage {
 
   private accessors: StorageAccessors;
 
-  private snapshot: Uint8Array | null = null;
+  private persistenceSnapshot: Uint8Array | null = null;
+
+  private clientSnapshot: Uint8Array | null = null;
 
   private isPersistenceSnapshotBeenTaken: boolean = false;
 
@@ -253,8 +256,12 @@ export class Storage {
     const structuralAppendOnly =
       this.isStructuralDeltaAppendOnly(this.deltaStartParams, endParams);
 
-    const { entityChanges, appendOnly } =
-      this.buildDeltaChangeIntervals(structuralAppendOnly);
+    const entities = globalStateService.getClientStorageEntities();
+
+    const { entityChanges, appendOnly } = this.buildDeltaChangeIntervals(
+      structuralAppendOnly,
+      entities,
+    );
 
     const flags = appendOnly ? STORAGE_DELTA_FLAGS.appendOnly : 0;
 
@@ -271,7 +278,7 @@ export class Storage {
           entityChanges,
         },
       },
-      this.getDeltaCodecAccumulator(),
+      this.getDeltaCodecAccumulator(entities),
     );
 
     this.isNeedDelta = false;
@@ -310,10 +317,16 @@ export class Storage {
     return this.accessors;
   }
 
-  public getBinarySnapshot(
-  ): Uint8Array {
-    return this.getSnapshot();
+public getBinarySnapshot(): Uint8Array {
+  if (!this.clientSnapshot) {
+    this.clientSnapshot = this.encodeSnapshot(
+      this.chunkSets,
+      globalStateService.getClientStorageEntities(),
+    );
   }
+
+  return this.clientSnapshot;
+}
 
   public applySnapshot(snapshot: PredecodedBinary): void {
     if (this.chunkSets.length > 0) {
@@ -361,7 +374,7 @@ export class Storage {
           marketName: this.marketName,
           startedAt: firstChunkSet.startedAt,
           endedAt: lastChunkSet.endedAt,
-          data: this.getSnapshot(),
+          data: this.getPersistenceSnapshotBinary(),
         }]
         : [];
 
@@ -378,7 +391,10 @@ export class Storage {
         marketName: this.marketName,
         startedAt: firstLevel0ChunkSet.startedAt,
         endedAt: lastChunkSet.endedAt,
-        data: this.encodeSnapshot(level0ChunkSets),
+        data: this.encodeSnapshot(
+          level0ChunkSets,
+          globalStateService.getStorageEntities(),
+        ),
       });
     }
 
@@ -579,13 +595,14 @@ export class Storage {
     };
   }
 
-  private getDeltaCodecAccumulator():
-    StorageDeltaCodecAccumulator {
+  private getDeltaCodecAccumulator(
+    entities: readonly EntityDesriptor[] =
+      globalStateService.getStorageEntities(),
+  ): StorageDeltaCodecAccumulator {
     return {
+      entities,
       getCurrentParams: () => this.getDeltaParams(),
-
       getChunkSets: () => this.chunkSets,
-
       applyStructuralChanges: (changes) => {
         this.applyStructuralChanges(changes);
       },
@@ -608,79 +625,77 @@ export class Storage {
 
     return change.type === 'addItem' && change.level === 0;
   }
-//
+
   private buildDeltaChangeIntervals(
     structuralAppendOnly: boolean,
+    entities: readonly EntityDesriptor[],
   ): StorageBuiltDeltaChanges {
-const entityChanges: StorageDeltaEntityChanges[] = [];
-let appendOnly = structuralAppendOnly;
-const appendedFlatIndex = this.size - 1;
+    const entityChanges: StorageDeltaEntityChanges[] = [];
+    let appendOnly = structuralAppendOnly;
+    const appendedFlatIndex = this.size - 1;
 
-for (
-  const [entityIndex, entity] of
-  globalStateService.getStorageEntities().entries()
-) {
-  const changedIntervals = this.accessors[entity.kind][entity.name]
-    .getCumulativeChanges();
+    for (const [entityIndex, entity] of entities.entries()) {
+      const changedIntervals = this.accessors[entity.kind][entity.name]
+        .getCumulativeChanges();
 
-  if (changedIntervals.length !== this.size) {
-    throw new Error(
-      `Changed intervals length mismatch for ` +
-      `${entity.kind}:${entity.name}: ` +
-      `${changedIntervals.length} !== ${this.size}`,
-    );
-  }
-
-  if (changedIntervals.intervals.length === 0) {
-    continue;
-  }
-
-  const changes = [];
-  let chunkSetIndex = 0;
-  let previousFlatEnd = 0;
-
-  for (const [startFlatIndex, count] of changedIntervals.intervals) {
-    let flatIndex = startFlatIndex;
-    let remainingCount = count;
-
-    if (flatIndex !== appendedFlatIndex || remainingCount !== 1) {
-      appendOnly = false;
-    }
-
-    while (remainingCount > 0) {
-      while (flatIndex >= this.chunkSetFlatEnds[chunkSetIndex]) {
-        previousFlatEnd = this.chunkSetFlatEnds[chunkSetIndex];
-
-        chunkSetIndex++;
+      if (changedIntervals.length !== this.size) {
+        throw new Error(
+          `Changed intervals length mismatch for ` +
+          `${entity.kind}:${entity.name}: ` +
+          `${changedIntervals.length} !== ${this.size}`,
+        );
       }
 
-      const chunkSetFlatEnd = this.chunkSetFlatEnds[chunkSetIndex];
+      if (changedIntervals.intervals.length === 0) {
+        continue;
+      }
 
-      const itemsCount = Math.min(
-        remainingCount,
-        chunkSetFlatEnd - flatIndex,
-      );
+      const changes = [];
+      let chunkSetIndex = 0;
+      let previousFlatEnd = 0;
 
-      changes.push({
-        chunkSetIndex,
-        startItemIndex: flatIndex - previousFlatEnd,
-        itemsCount,
+      for (const [startFlatIndex, count] of changedIntervals.intervals) {
+        let flatIndex = startFlatIndex;
+        let remainingCount = count;
+
+        if (flatIndex !== appendedFlatIndex || remainingCount !== 1) {
+          appendOnly = false;
+        }
+
+        while (remainingCount > 0) {
+          while (flatIndex >= this.chunkSetFlatEnds[chunkSetIndex]) {
+            previousFlatEnd = this.chunkSetFlatEnds[chunkSetIndex];
+
+            chunkSetIndex++;
+          }
+
+          const chunkSetFlatEnd = this.chunkSetFlatEnds[chunkSetIndex];
+
+          const itemsCount = Math.min(
+            remainingCount,
+            chunkSetFlatEnd - flatIndex,
+          );
+
+          changes.push({
+            chunkSetIndex,
+            startItemIndex: flatIndex - previousFlatEnd,
+            itemsCount,
+          });
+
+          flatIndex += itemsCount;
+          remainingCount -= itemsCount;
+        }
+      }
+
+      entityChanges.push({
+        entityKind: entity.kind,
+        entityName: entity.name,
+        entityIndex,
+        changes,
       });
-
-      flatIndex += itemsCount;
-      remainingCount -= itemsCount;
     }
-  }
 
-  entityChanges.push({
-    entityKind: entity.kind,
-    entityName: entity.name,
-    entityIndex,
-    changes,
-  });
-}
-
-return { entityChanges, appendOnly };
+    return { entityChanges, appendOnly };
   }
 
   private buildAccessors() {
@@ -970,25 +985,35 @@ return { entityChanges, appendOnly };
 
   private encodeSnapshot(
     chunkSets: StorageChunkSet[],
+    entities: readonly EntityDesriptor[],
   ): Uint8Array {
-    return encodeEntireBinary({
-      codecName: SNAPSHOT_CODEC,
-      binaryKind: SNAPSHOT_BINARY_KIND,
-      parameters: { marketName: this.marketName },
-      data: { chunkSets },
-    });
+    return encodeEntireBinary(
+      {
+        codecName: SNAPSHOT_CODEC,
+        binaryKind: SNAPSHOT_BINARY_KIND,
+        parameters: { marketName: this.marketName },
+        data: { chunkSets },
+      },
+      { entities },
+    );
   }
 
-  private getSnapshot(): Uint8Array {
-    if (!this.snapshot) {
-      this.snapshot = this.encodeSnapshot(this.chunkSets);
+  private getPersistenceSnapshotBinary():
+    Uint8Array {
+    if (!this.persistenceSnapshot) {
+      this.persistenceSnapshot = this.encodeSnapshot(
+        this.chunkSets,
+        globalStateService.getStorageEntities(),
+      );
     }
 
-    return this.snapshot;
+    return this.persistenceSnapshot;
   }
 
   private invalidateSnapshot = (): void => {
-    this.snapshot = null;
+    this.persistenceSnapshot = null;
+    this.clientSnapshot = null;
+
     this.isPersistenceSnapshotBeenTaken = false;
   };
 

@@ -2,6 +2,7 @@
 
 import type { StorageEntityKind } from '../constants/storage-entities.js';
 import type { StorageChunkSet } from './storage.js';
+import type { EntityDesriptor } from './storage-entities.js';
 
 export interface StorageDeltaParams {
   size: number;
@@ -58,8 +59,11 @@ export interface StorageBuiltDeltaChanges {
 }
 
 export interface StorageDeltaCodecAccumulator {
+  entities: readonly EntityDesriptor[];
+
   getCurrentParams: () => StorageDeltaParams;
   getChunkSets: () => readonly StorageChunkSet[];
+
   applyStructuralChanges: (
     changes: readonly StorageStructuralChange[],
   ) => void;

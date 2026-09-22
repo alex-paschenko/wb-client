@@ -1,6 +1,5 @@
 // app/src/shared/utilities/codecs/definitions/delta-v1_0.ts
 
-import { globalStateService } from '../../../services/global-state.js';
 import type {
   FixedSizeCodec,
   PrimitiveCodec,
@@ -157,6 +156,7 @@ const getStructuralChangesSize = (
 
 const getEntityChangesSize = (
   entityChanges: readonly StorageDeltaEntityChanges[],
+  accumulator: StorageDeltaCodecAccumulator,
 ): number => {
   if (entityChanges.length > 0xffff) {
     throw new RangeError(
@@ -165,7 +165,7 @@ const getEntityChangesSize = (
     );
   }
 
-  const entities = globalStateService.getStorageEntities();
+  const entities = accumulator.entities;
 
   let size = UINT16_SIZE;
 
@@ -381,7 +381,7 @@ const writeEntityChanges = (
   view.setUint16(offset, entityChanges.length, true);
   offset += UINT16_SIZE;
 
-  const entities = globalStateService.getStorageEntities();
+  const entities = accumulator.entities;
 
   const chunkSets = accumulator.getChunkSets();
 
@@ -438,7 +438,7 @@ const readEntityChanges = (
 
   offset += UINT16_SIZE;
 
-  const entities = globalStateService.getStorageEntities();
+  const entities = accumulator.entities;
 
   const chunkSets = accumulator.getChunkSets();
 
@@ -549,13 +549,14 @@ export const delta_V1_0 = singleValueCodecDefinition<
   StorageDeltaCodecData,
   StorageDeltaCodecAccumulator
 >({
-  getSize: (value, accumulator) => {
-    getAccumulator(accumulator);
+  getSize: (value, accumulatorValue) => {
+    const accumulator =
+      getAccumulator(accumulatorValue);
 
     return UINT8_SIZE +
       DELTA_PARAMS_SIZE * 2 +
       getStructuralChangesSize(value.structuralChanges) +
-      getEntityChangesSize(value.entityChanges);
+      getEntityChangesSize(value.entityChanges, accumulator);
   },
 
   write: (

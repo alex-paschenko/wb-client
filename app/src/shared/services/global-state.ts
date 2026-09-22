@@ -28,7 +28,12 @@ type MarketsListener = (
 export class GlobalStateService {
   private storageEntities: EntityDesriptor[] = [];
 
+  private clientStorageEntities: EntityDesriptor[] = [];
+
   private storageEntitiesStructure:
+    StorageStructure<EntityDesriptor, number> | null = null;
+
+  private clientStorageEntitiesStructure:
     StorageStructure<EntityDesriptor, number> | null = null;
 
   private isStorageEntitiesReady = false;
@@ -65,36 +70,46 @@ export class GlobalStateService {
         )
       ) {
         throw new Error(
-          `Storage entity "${entity.kind}:${entity.name}" is already registered`,
+          `Storage entity "${entity.kind}:${entity.name}" ` +
+          'is already registered',
         );
       }
 
       this.storageEntities.push({ ...entity });
     }
 
-    this.isStorageEntitiesReady =
-      STORAGE_ENTITY_KINDS.every(
-        (kind) => this.storageEntities.some((entity) => entity.kind === kind),
-      );
-
-    if (!this.isStorageEntitiesReady) {
+    if (!STORAGE_ENTITY_KINDS.every((kind) =>
+        this.storageEntities.some((entity) => entity.kind === kind),
+    )) {
       return;
     }
 
-    this.storageEntitiesStructure = this.mapStorageEntities(
-      (entity) => entity,
-    );
+    this.isStorageEntitiesReady = true;
+    this.initializeStorageEntities();
+  }
 
-    this.resolveStorageEntities?.(this.storageEntities);
+  public setStorageEntities(
+    entities: readonly EntityDesriptor[],
+  ): void {
+    this.storageEntities = entities.map((entity) => ({ ...entity }));
 
-    this.resolveStorageEntities = null;
-    this.storageEntitiesPromise = null;
+    this.isStorageEntitiesReady = true;
 
-    this.notifyStorageEntitiesListeners();
+    this.initializeStorageEntities();
   }
 
   public getStorageEntities(): EntityDesriptor[] {
     return this.storageEntities;
+  }
+
+  public getClientStorageEntities(): EntityDesriptor[] {
+    if (!this.isStorageEntitiesReady) {
+      throw new Error(
+        'Storage entities are not initialized',
+      );
+    }
+
+    return this.clientStorageEntities;
   }
 
   public getStorageEntitiesOrNull(): EntityDesriptor[] | null {
@@ -131,7 +146,11 @@ export class GlobalStateService {
 
   public clearStorageEntities(): void {
     this.storageEntities = [];
+    this.clientStorageEntities = [];
+
     this.storageEntitiesStructure = null;
+    this.clientStorageEntitiesStructure = null;
+
     this.isStorageEntitiesReady = false;
 
     this.storageEntitiesPromise = null;
@@ -143,9 +162,12 @@ export class GlobalStateService {
   public mapStorageEntities<T, TDeep extends number = 2>(
     mapper: (entity: EntityDesriptor, index: number) => T,
     freezeDeep: TDeep = 2 as TDeep,
+    entities: readonly EntityDesriptor[] = this.storageEntities,
   ): StorageStructure<T, TDeep> {
     if (!this.isStorageEntitiesReady) {
-      throw new Error('Storage entities are not initialized');
+      throw new Error(
+        'Storage entities are not initialized',
+      );
     }
 
     const result = {} as WritableStorageStructure<T>;
@@ -154,8 +176,9 @@ export class GlobalStateService {
       result[kind] = {};
     }
 
-    for (const [index, entity] of this.storageEntities.entries()) {
-      result[entity.kind][entity.name] = mapper(entity, index);
+    for (const [index, entity] of entities.entries()) {
+      result[entity.kind][entity.name] =
+        mapper(entity, index);
     }
 
     return deepFreeze(result, freezeDeep);
@@ -175,6 +198,17 @@ export class GlobalStateService {
     return kind
       ? this.storageEntitiesStructure[kind]
       : this.storageEntitiesStructure;
+  }
+
+  public getClientStorageEntitiesStructure():
+    EntityDescriptors {
+    if (this.clientStorageEntitiesStructure === null) {
+      throw new Error(
+        'Storage entities are not initialized',
+      );
+    }
+
+    return this.clientStorageEntitiesStructure;
   }
 
   public setMarkets(
@@ -262,6 +296,28 @@ export class GlobalStateService {
     this.notifyMarketsListeners();
   }
 
+  private initializeStorageEntities(): void {
+    this.clientStorageEntities =
+      this.storageEntities.filter((entity) => entity.data.length > 0);
+
+    this.storageEntitiesStructure =
+      this.mapStorageEntities((entity) => entity);
+
+    this.clientStorageEntitiesStructure =
+      this.mapStorageEntities(
+        (entity) => entity,
+        2,
+        this.clientStorageEntities,
+      );
+
+    this.resolveStorageEntities?.(this.storageEntities);
+
+    this.resolveStorageEntities = null;
+    this.storageEntitiesPromise = null;
+
+    this.notifyStorageEntitiesListeners();
+  }
+
   private notifyStorageEntitiesListeners(): void {
     for (const listener of this.storageEntitiesListeners) {
       listener(this.getStorageEntitiesOrNull());
@@ -270,10 +326,7 @@ export class GlobalStateService {
 
   private notifyMarketsListeners(): void {
     for (const listener of this.marketsListeners) {
-      listener(
-        this.getMarketsOrNull(),
-        this.getMarketNames(),
-      );
+      listener(this.getMarketsOrNull(), this.getMarketNames());
     }
   }
 }

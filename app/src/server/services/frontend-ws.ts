@@ -524,7 +524,7 @@ export class FrontendWsService {
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.storageEntitiesLoaded,
       clientId,
       params: {
-        entities: globalStateService.getStorageEntities(),
+        entities: globalStateService.getClientStorageEntities(),
       },
     });
   }

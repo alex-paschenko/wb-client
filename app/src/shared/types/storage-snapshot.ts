@@ -1,7 +1,7 @@
 // app/src/shared/types/storage-snapshot.ts
 
 import type { StorageEntityKind } from '../constants/storage-entities.js';
-import type { EntityDescriptors } from './storage-entities.js';
+import type { EntityDesriptor } from './storage-entities.js';
 
 export interface StorageSnapshotEntity {
   kind: StorageEntityKind;
@@ -21,7 +21,6 @@ export interface StorageSnapshotChunkSetHeader {
   endedAt: number;
 }
 
-export interface StorageSnapshotAccumulator {
-  entities: EntityDescriptors;
-  globalHeader: StorageSnapshotGlobalHeader | null;
+export interface StorageSnapshotCodecAccumulator {
+  entities: readonly EntityDesriptor[];
 }

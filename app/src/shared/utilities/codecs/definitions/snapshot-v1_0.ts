@@ -12,6 +12,7 @@ import type { EntityDesriptor } from '../../../types/storage-entities';
 import { singleValueCodecDefinition } from './codec-definition-helpers';
 import { getCodec } from '../codecs';
 import { FLOAT64_SIZE, UINT16_SIZE, UINT32_SIZE, UINT8_SIZE } from './general-constants';
+import type { StorageSnapshotCodecAccumulator } from '../../../types/storage-snapshot';
 
 /*
  * IMPORTANT:
@@ -20,9 +21,10 @@ import { FLOAT64_SIZE, UINT16_SIZE, UINT32_SIZE, UINT8_SIZE } from './general-co
  * Create a new codec version instead.
  */
 
-export const snapshot_V1_0 = singleValueCodecDefinition<{
-  chunkSets: StorageChunkSet[];
-}>(
+export const snapshot_V1_0 = singleValueCodecDefinition<
+  { chunkSets: StorageChunkSet[]; },
+  StorageSnapshotCodecAccumulator
+>(
   (() => {
     interface EntityDescriptor {
       kind: string;
@@ -102,8 +104,23 @@ export const snapshot_V1_0 = singleValueCodecDefinition<{
       }
     };
 
-    const getEntityDescriptors = (): EntityDescriptor[] =>
-      globalStateService.getStorageEntities().map((entity) => {
+    const getAccumulator = (
+      accumulator:
+        StorageSnapshotCodecAccumulator | null,
+    ): StorageSnapshotCodecAccumulator => {
+      if (!accumulator) {
+        throw new Error(
+          'Storage snapshot codec requires an accumulator',
+        );
+      }
+
+      return accumulator;
+    };
+
+    const getEntityDescriptors = (
+      entities: readonly EntityDesriptor[],
+    ): EntityDescriptor[] =>
+      entities.map((entity) => {
         const codec = getFixedSizeCodec(
           entity.codec,
           `Storage entity "${entity.kind}:${entity.name}"`,
@@ -628,9 +645,13 @@ export const snapshot_V1_0 = singleValueCodecDefinition<{
     };
 
     return {
-      getSize: ({ chunkSets }): number => {
-        const descriptors = getEntityDescriptors();
-        const stringCodec = getStringCodec();
+      getSize: (
+        { chunkSets },
+        accumulatorValue,
+      ): number => {
+        const accumulator = getAccumulator(accumulatorValue);
+
+        const descriptors = getEntityDescriptors(accumulator.entities);
 
         if (chunkSets.length > 0xffffffff) {
           throw new RangeError(
@@ -653,9 +674,11 @@ export const snapshot_V1_0 = singleValueCodecDefinition<{
         offset,
         view,
         { chunkSets },
+        accumulatorValue,
       ) => {
-        const descriptors = getEntityDescriptors();
-        const stringCodec = getStringCodec();
+        const accumulator = getAccumulator(accumulatorValue);
+
+        const descriptors = getEntityDescriptors(accumulator.entities);
 
         if (chunkSets.length > 0xffffffff) {
           throw new RangeError(

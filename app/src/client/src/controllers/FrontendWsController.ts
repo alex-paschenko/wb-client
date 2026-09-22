@@ -128,7 +128,7 @@ export class FrontendWsController {
           message.type ===
           FRONTEND_WS_CONTROL_MESSAGE_TYPES.storageEntitiesLoaded
         ) {
-          globalStateService.addStorageEntities(message.params.entities);
+          globalStateService.setStorageEntities(message.params.entities);
 
           appContext.logger.debug(
             'log.messages.storageEntitiesLoaded',

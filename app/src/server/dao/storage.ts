@@ -5,6 +5,8 @@ import type {
   StoragePersistenceSnapshot,
 } from '../../shared/types/storage.js';
 
+export interface StorageArchiveRow extends StoragePersistenceSnapshot {}
+
 interface StorageSnapshotInsertRow {
   market_name: string;
   started_at: number;
@@ -78,6 +80,32 @@ export class StorageDao {
     await this.q`
       delete from storage_alive
       where market_name = ${marketName}
+    `;
+  }
+
+  public async getArchiveMarketNames(): Promise<string[]> {
+    const rows = await this.q<{ marketName: string }[]>`
+      select distinct
+        market_name as "marketName"
+      from storage_archive
+      order by market_name
+    `;
+
+    return rows.map((row) => row.marketName);
+  }
+
+  public async getArchiveByMarketName(
+    marketName: string,
+  ): Promise<StorageArchiveRow[]> {
+    return this.q<StorageArchiveRow[]>`
+      select
+        market_name as "marketName",
+        started_at as "startedAt",
+        ended_at as "endedAt",
+        data
+      from storage_archive
+      where market_name = ${marketName}
+      order by ended_at
     `;
   }
 

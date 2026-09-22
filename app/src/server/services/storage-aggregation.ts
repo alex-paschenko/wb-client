@@ -86,55 +86,55 @@ export class StorageAggregationService {
     // TODO Remove it! For testing purpose only!
     const storages = this.storagesByMarket;
 
-    setInterval(() => {
-      let marketName = '---';
-      let numOfPoints = 0;
-      let size = 0;
+    // setInterval(() => {
+    //   let marketName = '---';
+    //   let numOfPoints = 0;
+    //   let size = 0;
 
-      for (const [currentMarketName, storage] of storages.entries()) {
-        const currentNumOfPoints =
-          storage.size - storage.levelBoundaries[0];
+    //   for (const [currentMarketName, storage] of storages.entries()) {
+    //     const currentNumOfPoints =
+    //       storage.size - storage.levelBoundaries[0];
 
-        if (currentNumOfPoints > numOfPoints) {
-          size = storage.size;
-          numOfPoints = currentNumOfPoints;
-          marketName = currentMarketName;
-        }
-      }
+    //     if (currentNumOfPoints > numOfPoints) {
+    //       size = storage.size;
+    //       numOfPoints = currentNumOfPoints;
+    //       marketName = currentMarketName;
+    //     }
+    //   }
 
-      console.log(
-        `Most active market: ${marketName} (L0: ${numOfPoints}, size: ${size})`,
-      );
+    //   console.log(
+    //     `Most active market: ${marketName} (L0: ${numOfPoints}, size: ${size})`,
+    //   );
 
-      if (marketName === '---') {
-        return;
-      }
+    //   if (marketName === '---') {
+    //     return;
+    //   }
 
-      this.freezingByMarket.cool(marketName);
+    //   this.freezingByMarket.cool(marketName);
 
-      const storage = this.getOrCreateStorage(marketName);
-      const data: any[] = [];
-      const accessors = storage.getAccessors();
-      const candles = accessors['candles'][CANDLE_NAME] as LazyArray<MarketCandle>;
-      const indicators = accessors['indicators'];
+    //   const storage = this.getOrCreateStorage(marketName);
+    //   const data: any[] = [];
+    //   const accessors = storage.getAccessors();
+    //   const candles = accessors['candles'][CANDLE_NAME] as LazyArray<MarketCandle>;
+    //   const indicators = accessors['indicators'];
 
-      for (let index = 0; index < storage.size; index++) {
-        const dataItem = {
-          candle: candles.get(index),
-          marketPhase: indicators['phase-30s'].get(index),
-        };
+    //   for (let index = 0; index < storage.size; index++) {
+    //     const dataItem = {
+    //       candle: candles.get(index),
+    //       marketPhase: indicators['phase-30s'].get(index),
+    //     };
 
-        data.push(dataItem);
-      }
+    //     data.push(dataItem);
+    //   }
 
-      writeFile(
-        `./logs/${marketName}.json`,
-        JSON.stringify({ data, levelBoundaries: storage.levelBoundaries }, null, 2),
-        'utf8',
-      );
+    //   writeFile(
+    //     `./logs/${marketName}.json`,
+    //     JSON.stringify({ data, levelBoundaries: storage.levelBoundaries }, null, 2),
+    //     'utf8',
+    //   );
 
-      this.freezingByMarket.warm(marketName);
-    }, 30_000);
+    //   this.freezingByMarket.warm(marketName);
+    // }, 30_000);
   }
 
   private handleTickReceived(

@@ -1,3 +1,5 @@
+// app/src/shared/utilities/codecs/definitions/market-phase-v1_0.ts
+
 import type { MarketPhaseValue } from '../../../types/data-types';
 import { fixedCountArrayCodecDefinition } from './codec-definition-helpers';
 

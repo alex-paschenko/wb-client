@@ -25,3 +25,11 @@ export interface MarketPhaseValue {
   surprise: number;
   residualVariance: number;
 }
+
+export interface MarketForecastValue {
+  expectedReturn10s: IndicatorValue;
+  expectedReturn30s: IndicatorValue;
+  expectedReturn1m: IndicatorValue;
+  expectedReturn2m: IndicatorValue;
+  expectedReturn5m: IndicatorValue;
+}

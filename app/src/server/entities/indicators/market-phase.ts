@@ -11,6 +11,8 @@ import type {
 } from '../../../shared/types/data-types.js';
 import type { StorageAccessors } from '../../../shared/types/storage.js';
 import { convertIntervalToTimeWithUnit } from '../../../shared/utilities/time.js';
+import { buildPhaseIndicatorName } from '../../utilities/entity.js';
+import { getMarketPhaseTau } from '../../utilities/time.js';
 import { BaseEntity } from '../base-entity.js';
 
 interface MarketPhaseIndicatorParams {
@@ -30,19 +32,13 @@ interface SurpriseState {
 }
 
 const DAMPING = 0.7;
-const DAMPED_FREQUENCY =
-  Math.sqrt(1 - DAMPING * DAMPING);
+const DAMPED_FREQUENCY = Math.sqrt(1 - DAMPING * DAMPING);
 
-const POSITION_SCALE =
-  RELATIVE_SPEED_SCALE / TIME_DERIVATIVE_SCALE;
+const POSITION_SCALE = RELATIVE_SPEED_SCALE / TIME_DERIVATIVE_SCALE;
 
 const SMALL_NORMALIZED_INTERVAL = 1e-3;
 
-// First 90% crossing of the speed step response at damping = 0.7.
-const SPEED_RESPONSE_90_TAU_RATIO = 1.401164;
-
-export class MarketPhaseIndicator
-extends BaseEntity<MarketPhaseValue> {
+export class MarketPhaseIndicator extends BaseEntity<MarketPhaseValue> {
   private readonly tau: number;
   private readonly surpriseTau: number;
 
@@ -50,7 +46,7 @@ extends BaseEntity<MarketPhaseValue> {
     params: MarketPhaseIndicatorParams,
   ) {
     const { responseTime, surpriseTau } = params;
-    const tau = responseTime / SPEED_RESPONSE_90_TAU_RATIO;
+    const tau = getMarketPhaseTau(responseTime);
 
     if (!Number.isFinite(tau) || tau <= 0) {
       throw new Error(
@@ -68,11 +64,9 @@ extends BaseEntity<MarketPhaseValue> {
       );
     }
 
-    const { count, abbreviation } = convertIntervalToTimeWithUnit(responseTime);
-
     super({
       kind: 'indicators',
-      name: `phase-${count}${abbreviation}`,
+      name: buildPhaseIndicatorName(responseTime),
       codec: 'market phase v1.0',
       data: [
         { kind: 'line', group: 'marketPhase', key: 'speed' },

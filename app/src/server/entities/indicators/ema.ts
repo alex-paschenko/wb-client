@@ -16,20 +16,19 @@ interface EmaIndicatorState {
 
 export class EmaIndicator
 extends IncrementalIndicator<EmaIndicatorState> {
-  protected readonly infiniteRange = true;
+  private readonly period: number;
 
   public constructor(params: EmaIndicatorParams) {
-    super(
-      params.period,
-      {
-        kind: 'indicators',
-        name: `ema-${params.period}`,
-        codec: 'float32 (nullable) v1.0',
-        data: [{ kind: 'line', group: 'candles' }],
-        requiresRemovedValues: false,
-        empty: null,
-      },
-    );
+    super({
+      kind: 'indicators',
+      name: `ema-${params.period}`,
+      codec: 'float32 (nullable) v1.0',
+      data: [{ kind: 'line', group: 'candles' }],
+      requiresRemovedValues: false,
+      empty: null,
+    });
+
+    this.period = params.period;
   }
 
   protected fullCalculate(
@@ -38,7 +37,7 @@ extends IncrementalIndicator<EmaIndicatorState> {
   ): number | null {
     const candles = this.getCandles(accessors);
 
-    if (candles.length < this.affectedValuesCount) {
+    if (candles.length < this.period) {
       return null;
     }
 
@@ -55,7 +54,7 @@ extends IncrementalIndicator<EmaIndicatorState> {
 
   protected incrementalCalculate(
     accessors: StorageAccessors,
-     marketName: string,
+    marketName: string,
   ): number | null {
     const state = this.stateByMarket.get(marketName);
     const candles = this.getCandles(accessors);
@@ -67,7 +66,8 @@ extends IncrementalIndicator<EmaIndicatorState> {
     const newestCandle = candles.get(candles.length - 1);
     const alpha = this.getAlpha();
 
-    const value = state.value + alpha * (newestCandle.close - state.value);
+    const value =
+      state.value + alpha * (newestCandle.close - state.value);
 
     this.stateByMarket.set(marketName, { value });
 
@@ -107,7 +107,11 @@ extends IncrementalIndicator<EmaIndicatorState> {
     let previousValue =
       this.getPreviousStoredValue(accessors, range.startIndex);
 
-    for (let index = range.startIndex; index <= range.endIndex; index++) {
+    for (
+      let index = range.startIndex;
+      index <= range.endIndex;
+      index++
+    ) {
       const candle = candles.get(index);
 
       if (previousValue === null) {
@@ -141,7 +145,7 @@ extends IncrementalIndicator<EmaIndicatorState> {
     accessors: StorageAccessors,
     index: number,
   ): number | null {
-    const firstIndex = index - this.affectedValuesCount + 1;
+    const firstIndex = index - this.period + 1;
 
     if (firstIndex < 0) {
       return null;
@@ -151,20 +155,28 @@ extends IncrementalIndicator<EmaIndicatorState> {
 
     let sum = 0;
 
-    for (let currentIndex = firstIndex; currentIndex <= index; currentIndex++) {
+    for (
+      let currentIndex = firstIndex;
+      currentIndex <= index;
+      currentIndex++
+    ) {
       sum += candles.get(currentIndex, 'close');
     }
 
-    return sum / this.affectedValuesCount;
+    return sum / this.period;
   }
 
   private getCandles(
     accessors: StorageAccessors,
   ) {
-    return this.getEntityValues<MarketCandle>(accessors, 'candles', CANDLE_NAME);
+    return this.getEntityValues<MarketCandle>(
+      accessors,
+      'candles',
+      CANDLE_NAME,
+    );
   }
 
   private getAlpha(): number {
-    return 2 / (this.affectedValuesCount + 1);
+    return 2 / (this.period + 1);
   }
 }

@@ -107,24 +107,6 @@ export abstract class BaseEntity<T> implements Entity<T> {
     return this.mergeAffectedRanges(ranges);
   }
 
-  protected buildInfiniteAffectedRanges(
-    accessors: StorageAccessors,
-    changedIntervals?: readonly ChangedInterval[],
-  ): EntityAffectedRange[] {
-    const values = this.getValues(accessors);
-    const intervals = changedIntervals ?? this.getChangedIntervals(accessors);
-
-    if (values.length === 0 || intervals.length === 0) {
-      return [];
-    }
-
-    return [{
-      startIndex:
-        intervals[0][changedIntervalIndexes.startFlatAscIndex],
-      endIndex: values.length - 1,
-    }];
-  }
-
   private mergeChangedIntervals(
     intervals: readonly ChangedInterval[],
   ): ChangedInterval[] {

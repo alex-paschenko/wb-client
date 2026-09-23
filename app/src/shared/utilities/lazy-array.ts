@@ -18,7 +18,7 @@ import { ChangedIntervals } from './changed-intervals.js';
 import { entityBinaryCodec } from './codecs/codecs.js';
 
 type ObjectType = Record<string, unknown>;
-
+//
 export class LazyArray<T = unknown> {
   private cache: T[];
 

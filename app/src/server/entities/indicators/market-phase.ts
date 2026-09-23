@@ -103,8 +103,9 @@ export class MarketPhaseIndicator extends BaseEntity<MarketPhaseValue> {
       return;
     }
 
-    const affectedRanges = this.buildInfiniteAffectedRanges(
+    const affectedRanges = this.buildFiniteAffectedRanges(
       accessors,
+      1,
       changedIntervals,
     );
 

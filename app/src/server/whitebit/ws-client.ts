@@ -25,7 +25,7 @@ export interface WhitebitWSClientHandlers {
   onClose?: (code: number, reason: string) => void;
 }
 
-const DEFAULT_WHITEBIT_WS_URL = 'wss://api.whitebit.com/ws';
+const DEFAULT_WHITEBIT_WS_URL = 'wss://wss.whitebit.com/ws';
 
 const DEFAULT_RECONNECT_DELAY_MS = 5 * SECONDS;
 const DEFAULT_PING_INTERVAL_MS = 50 * SECONDS;

@@ -86,25 +86,25 @@ export class StorageAggregationService {
     // TODO Remove it! For testing purpose only!
     const storages = this.storagesByMarket;
 
-    // setInterval(() => {
-    //   let marketName = '---';
-    //   let numOfPoints = 0;
-    //   let size = 0;
+    setInterval(() => {
+      let marketName = '---';
+      let numOfPoints = 0;
+      let size = 0;
 
-    //   for (const [currentMarketName, storage] of storages.entries()) {
-    //     const currentNumOfPoints =
-    //       storage.size - storage.levelBoundaries[0];
+      for (const [currentMarketName, storage] of storages.entries()) {
+        const currentNumOfPoints =
+          storage.size - storage.levelBoundaries[0];
 
-    //     if (currentNumOfPoints > numOfPoints) {
-    //       size = storage.size;
-    //       numOfPoints = currentNumOfPoints;
-    //       marketName = currentMarketName;
-    //     }
-    //   }
+        if (currentNumOfPoints > numOfPoints) {
+          size = storage.size;
+          numOfPoints = currentNumOfPoints;
+          marketName = currentMarketName;
+        }
+      }
 
-    //   console.log(
-    //     `Most active market: ${marketName} (L0: ${numOfPoints}, size: ${size})`,
-    //   );
+      console.log(
+        `Most active market: ${marketName} (L0: ${numOfPoints}, size: ${size})`,
+      );
 
     //   if (marketName === '---') {
     //     return;
@@ -134,7 +134,7 @@ export class StorageAggregationService {
     //   );
 
     //   this.freezingByMarket.warm(marketName);
-    // }, 30_000);
+    }, 30_000);
   }
 
   private handleTickReceived(

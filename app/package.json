@@ -13,6 +13,8 @@
     "research:market-phase-normalized-acceleration": "node --import tsx src/server/research/market-phase-normalized-acceleration.ts",
     "research:market-phase-online-oos": "node --import tsx src/server/research/market-phase-online-oos-analysis.ts",
     "research:market-phase-forecast": "node --import tsx src/server/research/market-phase-forecast-analysis.ts",
+    "research:market-forecast-reliability": "node --import tsx src/server/research/market-forecast-reliability-analysis.ts",
+    "research:simple-trading-emulate": "node --import tsx src/server/research/market-forecast-strategy-analysis.ts",
     "build": "tsc --noEmit",
     "migrate:create": "node-pg-migrate create --migrations-dir src/server/db/migrations --migration-file-language ts",
     "migrate:up": "tsx ./node_modules/node-pg-migrate/bin/node-pg-migrate up --migrations-dir src/server/db/migrations --database-url \"$DATABASE_URL\"",

@@ -8,10 +8,7 @@ import { StatefulEntity } from '../stateful-entity.js';
 
 export abstract class IncrementalIndicator<TState = never>
 extends StatefulEntity<IndicatorValue, TState> {
-  protected abstract readonly infiniteRange: boolean;
-
   protected constructor(
-    protected readonly affectedValuesCount: number,
     descriptor: EntityDesriptor<IndicatorValue>,
     dependencies: readonly string[] = [],
   ) {
@@ -47,13 +44,11 @@ extends StatefulEntity<IndicatorValue, TState> {
       return;
     }
 
-    const affectedRanges = this.infiniteRange
-      ? this.buildInfiniteAffectedRanges(accessors, changedIntervals)
-      : this.buildFiniteAffectedRanges(
-          accessors,
-          this.affectedValuesCount,
-          changedIntervals,
-        );
+    const affectedRanges = this.buildFiniteAffectedRanges(
+      accessors,
+      1,
+      changedIntervals,
+    );
 
     this.rangeCalculate(accessors, marketName, affectedRanges);
   }

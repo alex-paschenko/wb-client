@@ -44,7 +44,7 @@ export class CandleEntity extends BaseEntity<MarketCandle> {
   ): void {
     const candles = this.getValues(accessors);
     const deletedItems = candles.getDeleted();
-    const ranges = this.buildFiniteAffectedRanges(accessors, 2);
+    const ranges = this.buildFiniteAffectedRanges(accessors, 1);
 
     for (const range of ranges) {
       for (let index = range.startIndex; index <= range.endIndex; index++) {
@@ -57,21 +57,6 @@ export class CandleEntity extends BaseEntity<MarketCandle> {
           ? this.calculateAggregatedPrice(deleted.values, previous)
           : candle.price;
 
-if (
-  deleted &&
-  previous &&
-  deleted.values.length > 0 &&
-  previous.receivedAt >= deleted.values[0]!.receivedAt
-) {
-  console.error('INVALID PREVIOUS FOR DELETED CANDLES', {
-    index,
-    previous,
-    firstDeleted: deleted.values[0],
-    lastDeleted: deleted.values.at(-1),
-    deleted,
-  });
-}
-
 
         const speed = calculateSpeed(
           previous?.receivedAt,
@@ -79,18 +64,6 @@ if (
           candle.receivedAt,
           price,
         );
-
-
-if (!Number.isFinite(speed)) {
-  console.error('INVALID CANDLE SPEED', {
-    index,
-    previous,
-    candle,
-    price,
-    speed,
-  });
-}
-
 
         const acceleration = calculateTimeDerivative(
           previous?.receivedAt,
@@ -146,21 +119,7 @@ if (!Number.isFinite(speed)) {
       previousReceivedAt = candle.receivedAt;
     }
 
-
-const price = weightedPrice / summaryInterval;
-
-if (!Number.isFinite(price)) {
-  console.error('INVALID AGGREGATED PRICE', {
-    previousCandle,
-    candles,
-    weightedPrice,
-    summaryInterval,
-  });
-}
-
-return price;
-
-    // return weightedPrice / summaryInterval;
+    return weightedPrice / summaryInterval;
   }
 }
 

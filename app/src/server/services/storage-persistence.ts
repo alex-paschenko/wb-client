@@ -549,8 +549,20 @@ export class StoragePersistenceService {
           process.memoryUsage().rss / 1024 / 1024,
         ),
 
+        heapTotalMb: Math.round(
+          process.memoryUsage().heapTotal / 1024 / 1024,
+        ),
+
         heapUsedMb: Math.round(
           process.memoryUsage().heapUsed / 1024 / 1024,
+        ),
+
+        externalMemoryMb: Math.round(
+          process.memoryUsage().external / 1024 / 1024,
+        ),
+
+        arrayBufferMb: Math.round(
+          process.memoryUsage().arrayBuffers / 1024 / 1024,
         ),
 
         workerBusy: this.workerBusy,

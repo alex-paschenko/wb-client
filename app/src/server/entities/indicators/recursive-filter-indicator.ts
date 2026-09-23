@@ -16,23 +16,18 @@ interface RecursiveFilterState {
 
 export abstract class RecursiveFilterIndicator
 extends IncrementalIndicator<RecursiveFilterState> {
-  protected readonly infiniteRange = true;
-
   protected constructor(
     protected readonly tau: number,
     name: string,
   ) {
-    super(
-      0,
-      {
-        kind: 'indicators',
-        name,
-        codec: 'float32 (nullable) v1.0',
-        data: [{ kind: 'line', group: 'recursiveFilter' }],
-        requiresRemovedValues: false,
-        empty: null,
-      },
-    );
+    super({
+      kind: 'indicators',
+      name,
+      codec: 'float32 (nullable) v1.0',
+      data: [{ kind: 'line', group: 'recursiveFilter' }],
+      requiresRemovedValues: false,
+      empty: null,
+    });
 
     if (!Number.isFinite(tau) || tau <= 0) {
       throw new Error(
@@ -149,7 +144,11 @@ extends IncrementalIndicator<RecursiveFilterState> {
         ? candles.get(range.startIndex - 1, 'receivedAt')
         : null;
 
-    for (let index = range.startIndex; index <= range.endIndex; index++) {
+    for (
+      let index = range.startIndex;
+      index <= range.endIndex;
+      index++
+    ) {
       const candle = candles.get(index);
 
       previousValue = this.calculateNextValue(

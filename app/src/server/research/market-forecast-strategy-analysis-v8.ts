@@ -1,7 +1,11 @@
 // app/src/server/research/market-forecast-strategy-analysis.ts
-// v7: train a new table on EMA-to-EMA returns; raw-price execution.
+// v8: EMA lag diagnostics and constant-price control; raw-price execution.
 // Research only: local simulation, no exchange order submission.
 // Run from app with node --import tsx; append --self-test for offline tests.
+// MF_PRICE_EMA_TAU_MS=7000 selects a 7-second EMA (default: 10000).
+// MF_DATA_END caps raw observations by receivedAt for repeatable comparisons.
+// Pin MF_SPLIT_AT as well; compare metadata.observationsSha256 between runs.
+// Lag diagnostics are retrospective and never feed execution decisions.
 import 'dotenv/config';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -14,14 +18,15 @@ import type { LazyArray } from '../../shared/utilities/lazy-array.js';
 import { getMarketPhaseTau } from '../utilities/time.js';
 
 const BASE_CURRENCY = 'USDT';
-const PRICE_EMA_TAU_MS = 6_000;
-const PRICE_EMA_WARMUP_MS = 5 * PRICE_EMA_TAU_MS;
+const PRICE_EMA_TAU_MS = integer('MF_PRICE_EMA_TAU_MS', 10_000, 1, 60_000);
+// Keep the 7s and 10s comparisons on the same warmup window.
+const PRICE_EMA_WARMUP_MS = Math.max(50_000, 5 * PRICE_EMA_TAU_MS);
 const TARGET_DEFINITION = {
   kind: 'price-ema-to-price-ema', tauMs: PRICE_EMA_TAU_MS,
   warmupMs: PRICE_EMA_WARMUP_MS,
   formula: '1000 * ln(EMA(target) / EMA(origin))',
   update: 'alpha=-expm1(-dt/tau); E += alpha*(price-E)',
-  initialization: 'first valid price per market; exclude first 5 tau from labels',
+  initialization: 'first valid price per market; exclude max(50s,5*tau) from labels',
   gaps: 'continuous time update across gaps; no synthetic ticks or resets',
   phaseInput: 'unchanged stored marketPhase; EMA is for labels only',
 };
@@ -46,10 +51,11 @@ const QUALITY_BLOCKS = 3;
 const QUALITY_MIN_BLOCK_SAMPLES = 30;
 const EQUITY_INTERVAL = 300_000;
 const MAX_BLOB = integer('MF_MAX_SNAPSHOT_MB', 64, 1, 1024) * 1024 ** 2;
+const DATA_END = dateEnv('MF_DATA_END');
 const REQUESTED_SPLIT = dateEnv('MF_SPLIT_AT');
 const REQUESTED_START = dateEnv('MF_TEST_START');
 const REQUESTED_END = dateEnv('MF_TEST_END');
-const OUTPUT = resolve('research-output/market-forecast-strategy-v7');
+const OUTPUT = resolve(`research-output/market-forecast-strategy-v8/tau-${PRICE_EMA_TAU_MS}ms`);
 const PAGE = 2048;
 const SPEED_BINS = [0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 5, 8];
 const ACCEL_BINS = [-4, -2, -1, -0.5, -0.2, 0, 0.2, 0.5, 1, 2, 4];
@@ -141,8 +147,9 @@ class PriceEma {
   }
 }
 
-function smoothMarket(db: DatabaseSync, market: number) {
-  const query = db.prepare(`SELECT t,p FROM observations
+function smoothMarket(db: DatabaseSync, market: number,
+  fingerprint?: ReturnType<typeof createHash>) {
+  const query = db.prepare(`SELECT t,p,cell,sign FROM observations
     WHERE market=? AND t>? ORDER BY t LIMIT ${PAGE}`);
   const update = db.prepare('UPDATE observations SET e=? WHERE market=? AND t=?');
   const ema = new PriceEma();
@@ -150,11 +157,12 @@ function smoothMarket(db: DatabaseSync, market: number) {
   let ready = 0;
   let warmup = 0;
   for (;;) {
-    const rows = query.all(market, last) as { t: number; p: number }[];
+    const rows = query.all(market, last) as Row[];
     if (!rows.length) break;
     db.exec('BEGIN');
     try {
       for (const row of rows) {
+        fingerprint?.update(JSON.stringify([row.t, row.p, row.cell, row.sign]) + '\n');
         const e = ema.update(row.t, row.p);
         update.run(e, market, row.t);
         if (e === null) warmup++; else ready++;
@@ -863,6 +871,43 @@ async function diagnostics(db: DatabaseSync, market: Market, table: Float64Array
   }
 }
 
+// The constant-price control is known at the origin for a fixed horizon.
+function constantPriceEma(price: number, ema: number, elapsed: number) {
+  return price + (ema - price) * Math.exp(-elapsed / PRICE_EMA_TAU_MS);
+}
+function lagMetrics(a: Row, b: Row, forecast: number) {
+  assert.ok(a.e != null && b.e != null);
+  const flat60 = constantPriceEma(a.p, a.e, HORIZON);
+  const flatTarget = constantPriceEma(a.p, a.e, b.t - a.t);
+  const rawReturn = logReturn(a.p, b.p);
+  const emaReturn = logReturn(a.e, b.e);
+  const originGap = logReturn(a.e, a.p);
+  const targetGap = logReturn(b.e, b.p);
+  const constant60 = logReturn(a.e, flat60);
+  const constantTarget = logReturn(a.e, flatTarget);
+  return { rawReturn, emaReturn, originGap, targetGap, constant60,
+    constantTarget, residual: emaReturn - constantTarget,
+    forecastExcess: forecast - constant60,
+    forecastError: forecast - emaReturn,
+    baselineError: constant60 - emaReturn, flat60, flatTarget };
+}
+const LAG_KEYS = ['rawReturn', 'emaReturn', 'originGap', 'targetGap',
+  'constant60', 'constantTarget', 'residual', 'forecastExcess'] as const;
+const LAG_SUMMARY_HEADERS = [
+  'market', 'direction', 'absForecastThreshold', 'validTargets',
+  'meanForecastPermille',
+  ...LAG_KEYS.map((key) => `mean_${key}_permille`),
+  'forecastMAEPermille', 'constantPriceMAEPermille',
+  'forecastRMSEPermille', 'constantPriceRMSEPermille',
+  'constantPriceCorrectDirection', 'meanTargetDelayMs',
+];
+const LAG_SIGNAL_HEADERS = [
+  'market', 'signalAt', 'targetAt', 'targetDelayMs', 'cell', 'speedSign',
+  'forecastPermille', 'priceOrigin', 'emaOrigin', 'priceTarget', 'emaTarget',
+  'constantPriceEma60s', 'constantPriceEmaAtTarget',
+  ...LAG_KEYS.map((key) => `${key}Permille`),
+];
+
 const CALIBRATION_HEADERS = [
   'market', 'priceBasis', 'direction', 'absForecastThreshold', 'samples', 'validTargets',
   'horizonAfterEnd', 'noTarget', 'lateTarget', 'emaUnavailable', 'meanForecastPermille',
@@ -870,10 +915,13 @@ const CALIBRATION_HEADERS = [
   'wrongDirection', 'flat', 'directionAccuracy',
 ];
 async function calibrate(db: DatabaseSync, market: Market, table: Float64Array,
-  start: number, end: number, csv: Csv, basis: 'ema' | 'raw') {
+  start: number, end: number, csv: Csv, basis: 'ema' | 'raw',
+  lagSummary?: Csv, lagSignals?: Csv) {
   const groups = [-1, 1].flatMap((sign) => [0, 1, 2, 2.5, 3, 3.5, 4].map(
     (threshold) => ({ sign, threshold, samples: 0, counts: [0, 0, 0, 0],
-      unavailable: 0, forecast: 0, actual: 0, correct: 0, wrong: 0, flat: 0 })));
+      unavailable: 0, forecast: 0, actual: 0, correct: 0, wrong: 0, flat: 0,
+      lag: new Float64Array(LAG_KEYS.length), forecastAbs: 0, baselineAbs: 0,
+      forecastSq: 0, baselineSq: 0, baselineCorrect: 0, delay: 0 })));
   const reader = new Reader(db, market.id, start - 1);
   const query = db.prepare(`SELECT t,p,cell,sign,e FROM observations
     WHERE market=? AND t>=? AND t<=? ORDER BY t`);
@@ -883,6 +931,14 @@ async function calibrate(db: DatabaseSync, market: Market, table: Float64Array,
     if (!Number.isFinite(f) || f === 0) continue;
     const due = r.t + HORIZON;
     const label = labelAt(due > end ? null : reader.after(due), due, end);
+    const lm = basis === 'ema' && label.status === 'valid' &&
+      r.e != null && label.row!.e != null ? lagMetrics(r, label.row!, f) : null;
+    if (lm && lagSignals && Math.abs(f) >= Math.min(...ENTRY_THRESHOLDS)) {
+      const b = label.row!;
+      await lagSignals.row([market.name, r.t, b.t, b.t - due, r.cell, r.sign,
+        f, r.p, r.e, b.p, b.e, lm.flat60, lm.flatTarget,
+        ...LAG_KEYS.map((key) => lm[key])]);
+    }
     for (const g of groups) {
       if (Math.sign(f) !== g.sign || Math.abs(f) < g.threshold) continue;
       g.samples++;
@@ -899,6 +955,15 @@ async function calibrate(db: DatabaseSync, market: Market, table: Float64Array,
       g.correct += Number(actual * g.sign > 0);
       g.wrong += Number(actual * g.sign < 0);
       g.flat += Number(actual === 0);
+      if (lm) {
+        LAG_KEYS.forEach((key, i) => { g.lag[i] += lm[key]; });
+        g.forecastAbs += Math.abs(lm.forecastError);
+        g.baselineAbs += Math.abs(lm.baselineError);
+        g.forecastSq += lm.forecastError ** 2;
+        g.baselineSq += lm.baselineError ** 2;
+        g.baselineCorrect += Number(lm.constant60 * lm.emaReturn > 0);
+        g.delay += label.row!.t - due;
+      }
     }
   }
   for (const g of groups) {
@@ -907,6 +972,15 @@ async function calibrate(db: DatabaseSync, market: Market, table: Float64Array,
       g.samples, ...g.counts, g.unavailable, n ? g.forecast / n : null,
       n ? g.actual / n : null, n ? g.actual * g.sign / n : null,
       g.correct, g.wrong, g.flat, n ? g.correct / n : null]);
+    if (basis === 'ema' && lagSummary) {
+      await lagSummary.row([market.name, g.sign > 0 ? 'up' : 'down', g.threshold,
+        n, n ? g.forecast / n : null,
+        ...Array.from(g.lag, (v) => n ? v / n : NaN),
+        n ? g.forecastAbs / n : null, n ? g.baselineAbs / n : null,
+        n ? Math.sqrt(g.forecastSq / n) : null,
+        n ? Math.sqrt(g.baselineSq / n) : null,
+        g.baselineCorrect, n ? g.delay / n : null]);
+    }
   }
 }
 
@@ -1001,6 +1075,7 @@ async function main() {
                     rejectedRows++;
                     continue;
                   }
+                  if (DATA_END !== null && candle.receivedAt > DATA_END) continue;
                   const cell = phase ? phaseCell(phase) : -1;
                   insert.run(id, candle.receivedAt, candle.price, cell,
                     cell < 0 ? 0 : Math.sign(phase!.speed));
@@ -1017,14 +1092,17 @@ async function main() {
       }
     });
     db.exec('ALTER TABLE observations ADD COLUMN e REAL');
+    const fingerprint = createHash('sha256');
     let emaReady = 0;
     let emaWarmup = 0;
     for (const market of markets) {
-      const c = smoothMarket(db, market.id);
+      fingerprint.update(JSON.stringify(market.name) + '\n');
+      const c = smoothMarket(db, market.id, fingerprint);
       emaReady += c.ready;
       emaWarmup += c.warmup;
       console.log(`EMA: ${market.name}, ready=${c.ready}, warmup=${c.warmup}`);
     }
+    const observationsSha256 = fingerprint.digest('hex');
     const range = db.prepare(`
       SELECT min(t) AS first, max(t) AS last, count(*) AS n FROM observations
     `).get() as { first: number | null; last: number | null; n: number };
@@ -1096,7 +1174,7 @@ async function main() {
     ]);
     const frozen = JSON.stringify({
       version: 2, source: 'current archive, chronological training',
-      targetDefinition: TARGET_DEFINITION, phaseName: PHASE_NAME, horizonMs: HORIZON,
+      observationsSha256, targetDefinition: TARGET_DEFINITION, phaseName: PHASE_NAME, horizonMs: HORIZON,
       responseTimeMs: RESPONSE_TIME, tauMinutes: TAU,
       splitAt: new Date(splitAt).toISOString(), trainSamples,
       lastTrainTarget: new Date(lastTrainTarget).toISOString(),
@@ -1118,6 +1196,8 @@ async function main() {
     const diagnosticSummary = await output('diagnostic-summary.csv', DIAGNOSTIC_HEADERS);
     const buyAttempts = await output('buy-attempts.csv', ATTEMPT_HEADERS);
     const calibration = await output('forecast-calibration.csv', CALIBRATION_HEADERS);
+    const lagSummary = await output('ema-lag-summary.csv', LAG_SUMMARY_HEADERS);
+    const lagSignals = await output('ema-lag-signals.csv', LAG_SIGNAL_HEADERS);
     const recordAttempt = attemptRecorder(db);
     for (const market of selected) {
       db.exec('DELETE FROM buy_attempts; BEGIN');
@@ -1130,17 +1210,30 @@ async function main() {
       }
       await diagnostics(db, market, table, start, end, diagnosticSummary, buyAttempts);
       await writeSignalQuality(db, market, table, cells, quality, start, end, signalQuality);
-      await calibrate(db, market, table, start, end, calibration, 'ema');
+      await calibrate(db, market, table, start, end, calibration, 'ema',
+        lagSummary, lagSignals);
       await calibrate(db, market, table, start, end, calibration, 'raw');
       console.log(`Simulated: ${market.name}`);
     }
     while (files.length) await files.pop()!.close();
     await writeFile(resolve(directory, 'metadata.json'), JSON.stringify({
-      version: 7, status: 'complete', generatedAt: new Date().toISOString(),
+      version: 8, status: 'complete', generatedAt: new Date().toISOString(),
       elapsedMs: Date.now() - started, baseCurrency: BASE_CURRENCY,
       initialCashPerMarketAndScenario: INITIAL_CASH,
       observations: range, snapshots, rejectedRows,
       targetDefinition: TARGET_DEFINITION, emaReady, emaWarmup,
+      dataEnd: DATA_END, observationsSha256,
+      fingerprint: 'SHA256 of ordered market names and deduplicated [t,p,cell,sign]; excludes EMA',
+      emaLag: {
+        summary: 'ema-lag-summary.csv: all calibration cohorts, identical valid labels',
+        detail: 'ema-lag-signals.csv: valid test labels with abs(forecast)>=2; both signs; once per origin',
+        gap: '1000*ln(raw/EMA); emaReturn=rawReturn+originGap-targetGap',
+        constantPrice: 'Eflat(dt)=P0+(E0-P0)*exp(-dt/tau)',
+        baseline: 'constantPrice60sReturn uses only origin data; compare its MAE/RMSE with forecast on the same EMA outcomes',
+        matchedTime: 'constantPriceTargetReturn uses actual selected target elapsed time (60-70s), retrospective decomposition only',
+        residual: 'emaReturn-constantPriceTargetReturn; not an executable return',
+        interpretation: 'diagnostic only; does not change table training or strategy signals',
+      },
       largestSnapshotBytes: largestSnapshot, trainingMarkets: markets.length,
       tradingMarkets: selected.map((m) => m.name),
       splitAt: new Date(splitAt).toISOString(),
@@ -1162,7 +1255,7 @@ async function main() {
       exitPriority: 'latched exit retry first; otherwise protective stop, target, forecast<=0; each triggers a market sell subject to latency and data availability, never guaranteed execution at a level',
       expiredExit: 'once triggered, an exit remains latched until filled; after expiry reissue on the next tick, even if price or forecast recovers; original exit reason preserved',
       comparison: 'independent inventories; exits change subsequent entries; cost scenarios can have different exit times because levels are anchored to their own buy execution prices',
-      maxHoldScope: 'no maximum holding time; MF_MAX_HOLD_MS is ignored in v7',
+      maxHoldScope: 'no maximum holding time; MF_MAX_HOLD_MS is ignored in v8',
       strategy: 'spot long/cash, one position and one pending order; signal checked on each received tick; missing forecast disables only forecast exit; targets and stops remain active; no short sales',
       horizon: 'rolling next-minute forecast; positions need not last one minute',
       baseline: 'buy-and-hold starts at first test tick and uses same latency/cost/expiry model; expired entry retries on a later tick; USDT cash baseline is 0%',
@@ -1212,13 +1305,31 @@ async function main() {
 async function selfTest() {
   const step = new PriceEma();
   assert.equal(step.update(0, 100), null);
-  assert.equal(step.update(49_000, 100), null);
-  assert.equal(step.update(50_000, 100), 100);
-  assert.ok(Math.abs(step.update(53_700, 110)! -
-    (100 + (1 - Math.exp(-0.37)) * 10)) < 1e-12);
-  assert.throws(() => step.update(53_700, 110));
+  assert.equal(step.update(PRICE_EMA_WARMUP_MS - 1, 100), null);
+  assert.equal(step.update(PRICE_EMA_WARMUP_MS, 100), 100);
+  assert.ok(Math.abs(step.update(PRICE_EMA_WARMUP_MS + 3700, 110)! -
+    (100 + (1 - Math.exp(-3700 / PRICE_EMA_TAU_MS)) * 10)) < 1e-12);
+  assert.throws(() => step.update(PRICE_EMA_WARMUP_MS + 3700, 110));
 
   const row = (t: number, p: number): Row => ({ t, p, cell: 0, sign: 1 });
+  // EMA can rise while the executable reference price falls.
+  const origin = { ...row(0, 100), e: 99.7 };
+  const target = { ...row(65_000, 99.9), e: 99.89 };
+  const lag = lagMetrics(origin, target, 3);
+  assert.ok(lag.emaReturn > 0 && lag.rawReturn < 0);
+  assert.ok(Math.abs(lag.emaReturn - lag.rawReturn -
+    lag.originGap + lag.targetGap) < 1e-10);
+  assert.ok(Math.abs(lag.emaReturn - lag.constantTarget - lag.residual) < 1e-10);
+  const fixed = { ...row(65_000, 100),
+    e: constantPriceEma(100, 99.7, 65_000) };
+  assert.ok(Math.abs(lagMetrics(origin, fixed, 3).residual) < 1e-10);
+  // Splitting the constant-price interval must produce the same EMA.
+  const splitFlat = constantPriceEma(100,
+    constantPriceEma(100, 99.7, 1700), 63300);
+  assert.ok(Math.abs(splitFlat - fixed.e) < 1e-12);
+  const alteredTarget = lagMetrics(origin, { ...target, p: 110, e: 109 }, 3);
+  assert.equal(lag.constant60, alteredTarget.constant60);
+  assert.equal(lag.forecastExcess, alteredTarget.forecastExcess);
   const qcheck = new CellQuality(0, 300000);
   const testCells = newCells();
   qcheck.beginMarket();
@@ -1351,16 +1462,17 @@ async function selfTest() {
     const training = fitMarket(db, 0, 0, 120_000, before,
       (a, b, v) => qualityBefore.observe(a, b, v));
     qualityBefore.endMarket('A');
-    assert.equal(training.accepted, 10);
-    assert.equal(training.emaUnavailable, 50);
+    const warmupTicks = Math.min(60, Math.ceil(PRICE_EMA_WARMUP_MS / 1000));
+    assert.equal(training.accepted, 60 - warmupTicks);
+    assert.equal(training.emaUnavailable, warmupTicks);
     assert.equal(training.purged, 60);
-    assert.equal(training.lastTarget, 119_000);
+    assert.equal(training.lastTarget, warmupTicks < 60 ? 119_000 : -Infinity);
     const endpoints = db.prepare('SELECT t,e,p FROM observations ORDER BY t')
       .all() as { t: number; e: number | null; p: number }[];
-    const expected = endpoints.slice(50, 60).reduce((sum, a) =>
-      sum + 1000 * Math.log(endpoints[a.t / 1000 + 60].e! / a.e!), 0) / 10;
+    const expected = endpoints.slice(warmupTicks, 60).reduce((sum, a) =>
+      sum + 1000 * Math.log(endpoints[a.t / 1000 + 60].e! / a.e!), 0) / Math.max(1, 60 - warmupTicks);
     assert.ok(Math.abs(before.mean[0] - expected) < 1e-10);
-    assert.ok(Math.abs(before.mean[0] - 6) > 1e-4);
+
     db.exec('UPDATE observations SET p=p*10 WHERE t>=120000');
     smoothMarket(db, 0);
     const after = newCells();
@@ -1432,12 +1544,16 @@ async function selfTest() {
         Number(r.endpointShiftPermille)) < 1e-9);
     }
     const calibrationFile = await Csv.create(resolve(directory, 'calibration.csv'), CALIBRATION_HEADERS);
+    const lagFile = await Csv.create(resolve(directory, 'lag.csv'), LAG_SUMMARY_HEADERS);
+    const lagDetail = await Csv.create(resolve(directory, 'lag-detail.csv'), LAG_SIGNAL_HEADERS);
     try {
       await calibrate(db, { id: 0, name: 'A_USDT', stock: 'A', money: 'USDT' },
         table, 120000, 200000, calibrationFile, 'raw');
       await calibrate(db, { id: 0, name: 'A_USDT', stock: 'A', money: 'USDT' },
-        table, 120000, 200000, calibrationFile, 'ema');
-    } finally { await calibrationFile.close(); }
+        table, 120000, 200000, calibrationFile, 'ema', lagFile, lagDetail);
+    } finally {
+      await calibrationFile.close(); await lagFile.close(); await lagDetail.close();
+    }
     const calibrationRows = parse(await readFile(resolve(directory, 'calibration.csv'), 'utf8'));
     const up = calibrationRows.find((r) => r.priceBasis === 'raw' && r.direction === 'up' && r.absForecastThreshold === '2')!;
     assert.equal(Number(up.validTargets), 21);
@@ -1451,6 +1567,21 @@ async function selfTest() {
       r.direction === 'up' && r.absForecastThreshold === '2')!;
     assert.equal(Number(emaUp.validTargets), Number(up.validTargets));
     assert.ok(Number(emaUp.meanActualPermille) > 5.99);
+    const lagRows = parse(await readFile(resolve(directory, 'lag.csv'), 'utf8'));
+    const lagUp = lagRows.find((r) => r.direction === 'up' && r.absForecastThreshold === '2')!;
+    assert.equal(Number(lagUp.validTargets), Number(emaUp.validTargets));
+    assert.ok(Math.abs(Number(lagUp.mean_emaReturn_permille) -
+      Number(emaUp.meanActualPermille)) < 1e-10);
+    const lagDetails = parse(await readFile(resolve(directory, 'lag-detail.csv'), 'utf8'));
+    assert.equal(lagDetails.length, 21);
+    for (const r of lagDetails) {
+      assert.ok(Math.abs(Number(r.emaReturnPermille) - Number(r.rawReturnPermille) -
+        Number(r.originGapPermille) + Number(r.targetGapPermille)) < 1e-10);
+      assert.ok(Number(r.priceOrigin) !== Number(r.emaOrigin));
+    }
+    const errorMean = lagDetails.reduce((sum, r) => sum +
+      Math.abs(Number(r.forecastPermille) - Number(r.emaReturnPermille)), 0) / lagDetails.length;
+    assert.ok(Math.abs(errorMean - Number(lagUp.forecastMAEPermille)) < 1e-10);
     const summaries = parse(await readFile(resolve(directory, 'summary.csv'), 'utf8'));
     assert.equal(summaries.length, COSTS.length * (STRATEGIES.length + 1));
     for (const r of summaries) {
@@ -1478,7 +1609,7 @@ async function selfTest() {
     parse(await readFile(resolve(directory, 'equity.csv'), 'utf8'));
     console.log('Self-test passed: chronological training, future-data isolation,');
     console.log('delayed fills, costs, expiry, inventory, terminal valuation and CSV replay.');
-    console.log('v7: EMA targets, warmup, future isolation and 25 strategy variants.');
+    console.log('v8: EMA lag identity, constant-price control and parameterized tau.');
   } finally {
     db.close();
     await rm(directory, { recursive: true, force: true });

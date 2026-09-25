@@ -317,16 +317,16 @@ export class Storage {
     return this.accessors;
   }
 
-public getBinarySnapshot(): Uint8Array {
-  if (!this.clientSnapshot) {
-    this.clientSnapshot = this.encodeSnapshot(
-      this.chunkSets,
-      globalStateService.getClientStorageEntities(),
-    );
-  }
+  public getBinarySnapshot(): Uint8Array {
+    if (!this.clientSnapshot) {
+      this.clientSnapshot = this.encodeSnapshot(
+        this.chunkSets,
+        globalStateService.getClientStorageEntities(),
+      );
+    }
 
-  return this.clientSnapshot;
-}
+    return this.clientSnapshot;
+  }
 
   public applySnapshot(snapshot: PredecodedBinary): void {
     if (this.chunkSets.length > 0) {
@@ -359,9 +359,21 @@ public getBinarySnapshot(): Uint8Array {
 
   public getPersistenceSnapshot(
     snapshots: SnapshotTypes,
+    archiveStartIndex: number,
+    archiveStartedAt: number,
   ): ExtendedStoragePersistenceSnapshot[] {
     if (this.isPersistenceSnapshotBeenTaken || this.chunkSets.length === 0) {
       return [];
+    }
+
+    if (
+      !Number.isSafeInteger(archiveStartIndex) ||
+      archiveStartIndex < 0 ||
+      archiveStartIndex >= this.size
+    ) {
+      throw new RangeError(
+        `Invalid archive start index: ${archiveStartIndex}`,
+      );
     }
 
     const firstChunkSet = this.chunkSets[0];
@@ -376,27 +388,31 @@ public getBinarySnapshot(): Uint8Array {
           endedAt: lastChunkSet.endedAt,
           data: this.getPersistenceSnapshotBinary(),
         }]
-        : [];
+      : [];
 
-    const firstLevel0ChunkSet =
-      this.chunkSets[this.startLevel0Index];
+    const firstArchiveChunkSetIndex =
+      this.findChunkSetIndex(archiveStartIndex);
 
-    if (firstLevel0ChunkSet?.level === 0) {
-      const level0ChunkSets = this.chunkSets.slice(
-        this.startLevel0Index,
-      );
+    const archiveChunkSets = this.chunkSets.slice(
+      firstArchiveChunkSetIndex,
+    );
 
-      result.push({
-        snapshotType: 'archive',
-        marketName: this.marketName,
-        startedAt: firstLevel0ChunkSet.startedAt,
-        endedAt: lastChunkSet.endedAt,
-        data: this.encodeSnapshot(
-          level0ChunkSets,
-          globalStateService.getStorageEntities(),
-        ),
-      });
-    }
+    archiveChunkSets[0] = this.cutChunkSetBy(
+      archiveChunkSets[0],
+      archiveStartIndex,
+      archiveStartedAt,
+    );
+
+    result.push({
+      snapshotType: 'archive',
+      marketName: this.marketName,
+      startedAt: archiveStartedAt,
+      endedAt: lastChunkSet.endedAt,
+      data: this.encodeSnapshot(
+        archiveChunkSets,
+        globalStateService.getStorageEntities(),
+      ),
+    });
 
     this.isPersistenceSnapshotBeenTaken = true;
 
@@ -805,6 +821,33 @@ public getBinarySnapshot(): Uint8Array {
     );
 
     this.incrementFlatEndsFrom(chunkSetIndex + 1, size);
+  }
+
+  private cutChunkSetBy(
+    chunkSet: StorageChunkSet,
+    startFlatIndex: number,
+    startedAt: number,
+  ): StorageChunkSet {
+    const chunkSetIndex = this.findChunkSetIndex(startFlatIndex);
+    const previousFlatEnd = chunkSetIndex === 0
+      ? 0
+      : this.chunkSetFlatEnds[chunkSetIndex - 1];
+
+    const start = chunkSet.start + startFlatIndex - previousFlatEnd;
+
+    if (start < chunkSet.start || start >= chunkSet.end) {
+      throw new RangeError(
+        `Invalid cut position ${startFlatIndex} for ` +
+        this.chunkSetDescription(chunkSet),
+      );
+    }
+
+    return {
+      ...chunkSet,
+      start,
+      size: chunkSet.end - start,
+      startedAt,
+    };
   }
 
   private incrementFlatEndsFrom(index: number, delta: number): void {

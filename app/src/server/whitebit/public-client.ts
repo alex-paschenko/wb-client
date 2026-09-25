@@ -1,5 +1,6 @@
-import { apiLogsService } from '../services/api-logs.js';
-import { WhitebitMarket } from '../../shared/types/whitebit-api.js';
+// app/src/server/whitebit/public-client.ts
+import type { WhitebitMarket } from '../../shared/types/whitebit-api.js';
+import { whitebitFetchClient } from './fetch-client.js';
 
 export class WhitebitClient {
   public constructor(
@@ -9,86 +10,51 @@ export class WhitebitClient {
   public async getMarkets(): Promise<WhitebitMarket[]> {
     const endpoint = '/public/markets';
 
-    const startedAtMs = Date.now();
-
-    try {
-      const response = await fetch(
-        `${this.baseUrl}${endpoint}`,
-      );
-
-      const responseBody =
-        await response.json();
-
-      await apiLogsService.logExternalApiCall({
-        service: 'whitebit',
-        endpoint,
-        method: 'GET',
-        startedAtMs,
-        statusCode: response.status,
-        responseBody,
-      });
-
-      if (!response.ok) {
-        throw new Error(
-          `WhiteBIT request failed: ${response.status}`,
-        );
-      }
-
-      return responseBody;
-    } catch (error) {
-      await apiLogsService.logExternalApiCall({
-        service: 'whitebit',
-        endpoint,
-        method: 'GET',
-        startedAtMs,
-        error,
-      });
-
-      throw error;
-    }
-  }
-
-public async getMarketActivity(): Promise<unknown> {
-  const endpoint = '/public/ticker';
-
-  const startedAtMs = Date.now();
-
-  try {
-    const response = await fetch(
+    const response = await whitebitFetchClient.fetch(
       `${this.baseUrl}${endpoint}`,
+      undefined,
+      {
+        service: 'whitebit',
+        endpoint,
+        method: 'GET',
+      },
     );
 
-    const responseBody =
-      await response.json();
-
-    await apiLogsService.logExternalApiCall({
-      service: 'whitebit',
-      endpoint,
-      method: 'GET',
-      startedAtMs,
-      statusCode: response.status,
-      responseBody,
-    });
+    const responseBody = await response.json();
 
     if (!response.ok) {
       throw new Error(
-        `WhiteBIT request failed: ${response.status} ${response.statusText}`,
+        `WhiteBIT request failed: ${response.status}`,
+      );
+    }
+
+    return responseBody as WhitebitMarket[];
+  }
+
+  public async getMarketActivity(): Promise<unknown> {
+    const endpoint = '/public/ticker';
+
+    const response = await whitebitFetchClient.fetch(
+      `${this.baseUrl}${endpoint}`,
+      undefined,
+      {
+        service: 'whitebit',
+        endpoint,
+        method: 'GET',
+      },
+    );
+
+    const responseBody = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        `WhiteBIT request failed: ` +
+        `${response.status} ${response.statusText}`,
       );
     }
 
     return responseBody;
-  } catch (error) {
-    await apiLogsService.logExternalApiCall({
-      service: 'whitebit',
-      endpoint,
-      method: 'GET',
-      startedAtMs,
-      error,
-    });
-
-    throw error;
   }
-}
 }
 
 export const whitebitClient = new WhitebitClient(

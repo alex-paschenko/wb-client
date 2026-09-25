@@ -83,6 +83,18 @@ export class StorageDao {
     `;
   }
 
+  public async getLastArchiveEndedAt(
+    marketName: string,
+  ): Promise<number> {
+    const [row] = await this.q<{ endedAt: number }[]>`
+      select coalesce(max(ended_at), 0) as "endedAt"
+      from storage_archive
+      where market_name = ${marketName}
+    `;
+
+    return row?.endedAt ?? 0;
+  }
+
   public async getArchiveMarketNames(): Promise<string[]> {
     const rows = await this.q<{ marketName: string }[]>`
       select distinct

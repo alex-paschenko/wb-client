@@ -5,10 +5,7 @@ import { writeFile } from 'node:fs/promises';
 import { storageConfig } from '../../shared/services/storage-config.js';
 import { globalStateService } from '../../shared/services/global-state.js';
 import { Storage } from '../../shared/services/storage.js';
-import type {
-  SnapshotTypes,
-  StorageItemValues,
-} from '../../shared/types/storage.js';
+import type { StorageItemValues } from '../../shared/types/storage.js';
 import type { MarketCandle } from '../../shared/types/data-types.js';
 import type { LazyArray } from '../../shared/utilities/lazy-array.js';
 import { Awaiters, waitFor } from '../../shared/utilities/awaiters.js';
@@ -49,6 +46,10 @@ export class StorageAggregationService {
 
   private readonly entitiesRecalculatedAwaiters =
     new Awaiters<string, EntitiesRecalculatedEvent>();
+
+  private readonly lastEndedAtByMarket = new Map<string, number>();
+
+  private snapshotWorkerBusy = false;
 
   private readonly snapshotScheduledAt = new Map<string, number>();
 
@@ -637,6 +638,7 @@ export class StorageAggregationService {
     this.storagesByMarket.delete(marketName);
     this.tickBuffersByMarket.delete(marketName);
     this.snapshotScheduledAt.delete(marketName);
+    this.lastEndedAtByMarket.delete(marketName);
 
     eventBus.emit(SERVER_EVENT.marketRemoved, { marketName });
   }
@@ -683,70 +685,143 @@ export class StorageAggregationService {
     }
 
     this.snapshotWorkerTimer = setInterval(
-      () => { this.snapshotWorkerTick(); },
+      () => { void this.snapshotWorkerTick(); },
       SNAPSHOT_WORKER_INTERVAL,
     );
   }
 
-  private snapshotWorkerTick(): void {
-    const now = Date.now();
+  private async snapshotWorkerTick(): Promise<void> {
+    if (this.snapshotWorkerBusy) {
+      return;
+    }
 
-    for (const [marketName, storage] of this.storagesByMarket) {
-      const scheduledAt = this.snapshotScheduledAt.get(marketName);
+    this.snapshotWorkerBusy = true;
 
-      if (scheduledAt === undefined || scheduledAt > now) {
-        continue;
-      }
+    try {
+      const now = Date.now();
 
-      const isIcy = this.freezingByMarket.isIcy(marketName);
-      if (isIcy === null) {
-        throw new Error(
-          `The "${marketName}" market storage has never been processed`,
-        );
-      }
+      for (const [marketName, storage] of this.storagesByMarket) {
+        const scheduledAt = this.snapshotScheduledAt.get(marketName);
 
-      /*
-       * Never snapshot a storage while its current tick is being processed.
-       * The next worker pass will try again.
-       */
-      if (isIcy) {
-        continue;
-      }
+        if (scheduledAt === undefined || scheduledAt > now) {
+          continue;
+        }
 
-      this.freezingByMarket.cool(marketName);
-
-      const isAliveMarket = globalStateService.hasMarket(marketName);
-
-      try {
-        let snapshots = storage.getPersistenceSnapshot(
-          isAliveMarket ? 'both snapshots' : 'archive snapshot only',
-        );
-
-        if (snapshots.length > 0) {
-          eventBus.emit(
-            SERVER_EVENT.storageSnapshoted,
-            { snapshots },
+        const isIcy = this.freezingByMarket.isIcy(marketName);
+        if (isIcy === null) {
+          throw new Error(
+            `The "${marketName}" market storage has never been processed`,
           );
         }
-      } finally {
+
         /*
-        * Snapshot encoding is synchronous. Lower the freeze immediately
-        * after Storage has returned the immutable binary snapshots.
+        * Never snapshot a storage while its current tick is being processed.
+        * The next worker pass will try again.
         */
-        this.freezingByMarket.warm(marketName);
+        if (isIcy) {
+          continue;
+        }
+
+        this.freezingByMarket.cool(marketName);
+
+        const isAliveMarket = globalStateService.hasMarket(marketName);
+
+        try {
+          let lastEndedAt = this.lastEndedAtByMarket.get(marketName);
+
+          if (lastEndedAt === undefined) {
+            lastEndedAt =
+              await storagePersistenceService.getLastArchiveEndedAt(
+                marketName,
+              );
+
+            this.lastEndedAtByMarket.set(marketName, lastEndedAt);
+          }
+
+          const storageEndedAt = storage.endedAt;
+
+          if (storageEndedAt !== null && storageEndedAt > lastEndedAt) {
+            const candles = this.getCandlesAccessor(storage);
+            const archiveStartIndex = this.findFirstEndedAfter(
+              candles,
+              lastEndedAt,
+            );
+
+            if (archiveStartIndex < storage.size) {
+              const archiveStartedAt = candles.get(
+                archiveStartIndex,
+                'startedAt',
+              );
+
+              const snapshots = storage.getPersistenceSnapshot(
+                isAliveMarket
+                  ? 'both snapshots'
+                  : 'archive snapshot only',
+                archiveStartIndex,
+                archiveStartedAt,
+              );
+
+              if (snapshots.length > 0) {
+                eventBus.emit(
+                  SERVER_EVENT.storageSnapshoted,
+                  { snapshots },
+                );
+
+                const archiveSnapshot = snapshots.find(
+                  (snapshot) => snapshot.snapshotType === 'archive',
+                );
+
+                if (archiveSnapshot) {
+                  this.lastEndedAtByMarket.set(
+                    marketName,
+                    archiveSnapshot.endedAt,
+                  );
+                }
+              }
+            }
+          }
+        } finally {
+          /*
+          * Snapshot encoding is synchronous. The only asynchronous operation
+          * above is the initial archive boundary lookup, while the storage
+          * remains cooled and incoming ticks are buffered.
+          */
+          this.freezingByMarket.warm(marketName);
+        }
+
+        if (isAliveMarket) {
+          this.snapshotScheduledAt.set(
+            marketName,
+            now + this.getNextSnapshotInterval(),
+          );
+        } else {
+          void storagePersistenceService.deleteAlives(marketName);
+          this.removeMarketStorage(marketName);
+        }
       }
+    } finally {
+      this.snapshotWorkerBusy = false;
+    }
+  }
 
+  private findFirstEndedAfter(
+    candles: LazyArray<MarketCandle>,
+    endedAt: number,
+  ): number {
+    let left = 0;
+    let right = candles.length;
 
-      if (isAliveMarket) {
-        this.snapshotScheduledAt.set(
-          marketName,
-          now + this.getNextSnapshotInterval(),
-        );
+    while (left < right) {
+      const middle = (left + right) >>> 1;
+
+      if (candles.get(middle, 'endedAt') <= endedAt) {
+        left = middle + 1;
       } else {
-        storagePersistenceService.deleteAlives(marketName);
-        this.removeMarketStorage(marketName);
+        right = middle;
       }
     }
+
+    return left;
   }
 
   private getNextSnapshotInterval(): number {

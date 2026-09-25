@@ -178,6 +178,12 @@ export class StoragePersistenceService {
     return storageDao.getAliveForRestore(marketNames);
   }
 
+  public async getLastArchiveEndedAt(
+    marketName: string,
+  ): Promise<number> {
+    return storageDao.getLastArchiveEndedAt(marketName);
+  }
+
   private handleStorageSnapshoted(
     event: StorageSnapshotedEvent,
   ): void {

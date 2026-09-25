@@ -1,6 +1,9 @@
 // app/src/server/whitebit/private-client.ts
 import crypto from 'node:crypto';
 
+import type { FetchOptions } from '../services/fetch-client.js';
+import { whitebitFetchClient } from './fetch-client.js';
+
 export interface WhitebitTradingBalance {
   [asset: string]: {
     available: string;
@@ -45,36 +48,50 @@ export class WhitebitPrivateClient {
       throw new Error('WhiteBIT API key or secret is missing');
     }
 
-    const payloadBody = {
-      request: `/api/v4${endpoint}`,
-      nonce: String(Date.now()),
-      ...body,
-    };
+    let requestBody: Record<string, unknown>;
 
-    const jsonPayload = JSON.stringify(payloadBody);
-    const payload = Buffer.from(jsonPayload).toString('base64');
+    const response = await whitebitFetchClient.fetch(
+      `${this.baseUrl}${endpoint}`,
+      (): FetchOptions => {
+        requestBody = {
+          request: `/api/v4${endpoint}`,
+          nonce: String(Date.now()),
+          ...body,
+        };
 
-    const signature = crypto
-      .createHmac('sha512', this.apiSecret)
-      .update(payload)
-      .digest('hex');
+        const jsonPayload = JSON.stringify(requestBody);
+        const payload = Buffer.from(jsonPayload).toString('base64');
 
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-TXC-APIKEY': this.apiKey,
-        'X-TXC-PAYLOAD': payload,
-        'X-TXC-SIGNATURE': signature,
+        const signature = crypto
+          .createHmac('sha512', this.apiSecret)
+          .update(payload)
+          .digest('hex');
+
+        return {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-TXC-APIKEY': this.apiKey,
+            'X-TXC-PAYLOAD': payload,
+            'X-TXC-SIGNATURE': signature,
+          },
+          body: jsonPayload,
+        };
       },
-      body: jsonPayload,
-    });
+      () => ({
+        service: 'whitebit',
+        endpoint,
+        method: 'POST',
+        requestBody,
+      }),
+    );
 
     const responseBody = await response.json();
 
     if (!response.ok) {
       throw new Error(
-        `WhiteBIT private request failed: ${response.status} ${JSON.stringify(responseBody)}`,
+        `WhiteBIT private request failed: ` +
+        `${response.status} ${JSON.stringify(responseBody)}`,
       );
     }
 

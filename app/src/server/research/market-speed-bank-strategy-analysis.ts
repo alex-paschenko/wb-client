@@ -1,10 +1,10 @@
-// app/src/server/research/market-forecast-strategy-analysis.ts
-// v8: EMA lag diagnostics and constant-price control; raw-price execution.
+// app/src/server/research/market-speed-bank-strategy-analysis.ts
+// v1: replace stored MarketPhase features with a causal multi-timescale speed bank.
+// Keeps the v11 target, chronological split, reliability gates and strategy replay.
 // Research only: local simulation, no exchange order submission.
 // Run from app with node --import tsx; append --self-test for offline tests.
-// MF_PRICE_EMA_TAU_MS=7000 selects a 7-second EMA (default: 10000).
-// MF_DATA_END caps raw observations by receivedAt for repeatable comparisons.
-// Pin MF_SPLIT_AT as well; compare metadata.observationsSha256 between runs.
+// Edit the constants below; no shell loop or EMA/date environment variables.
+// All tau runs share the same extracted observations and chronological split.
 // Lag diagnostics are retrospective and never feed execution decisions.
 import 'dotenv/config';
 import assert from 'node:assert/strict';
@@ -13,32 +13,43 @@ import { mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { MarketCandle, MarketPhaseValue } from '../../shared/types/data-types.js';
+import type { MarketCandle } from '../../shared/types/data-types.js';
 import type { LazyArray } from '../../shared/utilities/lazy-array.js';
-import { getMarketPhaseTau } from '../utilities/time.js';
 
 const BASE_CURRENCY = 'USDT';
-const PRICE_EMA_TAU_MS = integer('MF_PRICE_EMA_TAU_MS', 10_000, 1, 60_000);
-// Keep the 7s and 10s comparisons on the same warmup window.
-const PRICE_EMA_WARMUP_MS = Math.max(50_000, 5 * PRICE_EMA_TAU_MS);
-const TARGET_DEFINITION = {
-  kind: 'price-ema-to-price-ema', tauMs: PRICE_EMA_TAU_MS,
+const PRICE_EMA_TAUS_MS: number[] = [10_000, 7_000, 4_000];
+// Use null for all available history / automatic 70% training split.
+const DATA_END_ISO: string | null = null;
+const SPLIT_AT_ISO: string | null = null;
+const TEST_START_ISO: string | null = null;
+const TEST_END_ISO: string | null = null;
+
+// One common warmup for all tau values; active tau changes sequentially only.
+const PRICE_EMA_WARMUP_MS = Math.max(50_000, ...PRICE_EMA_TAUS_MS.map((t) => 5 * t));
+let PRICE_EMA_TAU_MS = PRICE_EMA_TAUS_MS[0];
+function targetDefinition() { return {
+  kind: 'ema-residual-over-constant-price', tauMs: PRICE_EMA_TAU_MS,
   warmupMs: PRICE_EMA_WARMUP_MS,
-  formula: '1000 * ln(EMA(target) / EMA(origin))',
+  formula: '1000 * ln(EMA(target) / Eflat(target-origin))',
+  control: 'Eflat(dt)=price(origin)+(EMA(origin)-price(origin))*exp(-dt/tau)',
+  targetTime: 'actual first tick at or after origin+60s, at most 10s late',
+  meaning: 'EMA return minus its constant-price return; not raw executable return',
   update: 'alpha=-expm1(-dt/tau); E += alpha*(price-E)',
-  initialization: 'first valid price per market; exclude max(50s,5*tau) from labels',
+  initialization: 'first valid price per market; common warmup max(50s,5*max(configured taus))',
   gaps: 'continuous time update across gaps; no synthetic ticks or resets',
-  phaseInput: 'unchanged stored marketPhase; EMA is for labels only',
-};
+  featureInput: 'causal 7s/15s/30s speed bank replayed from deduplicated raw prices; EMA is for labels only',
+}; }
 // Empty means all archived spot markets quoted in BASE_CURRENCY.
 // Example: ['BTC_USDT', 'ETH_USDT']. This affects trading, not training.
 const MARKET_NAMES: string[] = [];
 const INITIAL_CASH = 1000;
 const TRAIN_FRACTION = 0.7;
 const HORIZON = 60_000;
-const RESPONSE_TIME = 30_000;
-const PHASE_NAME = 'phase-30s';
-const TAU = getMarketPhaseTau(RESPONSE_TIME) / 60_000;
+const SPEED_BANK_TAUS_MS = [7_000, 15_000, 30_000] as const;
+const SPEED_BANK_WARMUP_MS = Math.max(
+  50_000,
+  ...SPEED_BANK_TAUS_MS.map((tau) => 5 * tau),
+);
 const MAX_TARGET_DELAY = 10_000;
 const MIN_TRAIN_SAMPLES = integer('MF_MIN_TRAIN_SAMPLES', 30, 1, 1_000_000);
 const LATENCY = integer('MF_LATENCY_MS', 250, 0, 60_000);
@@ -47,24 +58,30 @@ const ENTRY_THRESHOLDS = [2, 2.5, 3, 3.5, 4];
 const STOP_FRACTION = 0.5;
 // Diagnostic thresholds only: they do not suppress strategy entries.
 const QUALITY_MIN_SAMPLES = 100;
+const ENTRY_MIN_NONOVERLAPPING = 100;
+const ENTRY_MIN_SPACED_MEAN_RATIO = 0.5;
 const QUALITY_BLOCKS = 3;
 const QUALITY_MIN_BLOCK_SAMPLES = 30;
 const EQUITY_INTERVAL = 300_000;
 const MAX_BLOB = integer('MF_MAX_SNAPSHOT_MB', 64, 1, 1024) * 1024 ** 2;
-const DATA_END = dateEnv('MF_DATA_END');
-const REQUESTED_SPLIT = dateEnv('MF_SPLIT_AT');
-const REQUESTED_START = dateEnv('MF_TEST_START');
-const REQUESTED_END = dateEnv('MF_TEST_END');
-const OUTPUT = resolve(`research-output/market-forecast-strategy-v8/tau-${PRICE_EMA_TAU_MS}ms`);
+const DATA_END = dateSetting(DATA_END_ISO, 'DATA_END_ISO');
+const REQUESTED_SPLIT = dateSetting(SPLIT_AT_ISO, 'SPLIT_AT_ISO');
+const REQUESTED_START = dateSetting(TEST_START_ISO, 'TEST_START_ISO');
+const REQUESTED_END = dateSetting(TEST_END_ISO, 'TEST_END_ISO');
+const OUTPUT = resolve('research-output/market-speed-bank-strategy-v1');
 const PAGE = 2048;
-const SPEED_BINS = [0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 5, 8];
-const ACCEL_BINS = [-4, -2, -1, -0.5, -0.2, 0, 0.2, 0.5, 1, 2, 4];
-const SURPRISE_BINS = [
-  -5, -3, -2, -1.5, -1, -0.75, -0.5, -0.25, 0,
-  0.25, 0.5, 0.75, 1, 1.5, 2, 3, 5,
+// Speeds are permille log-return per minute. Fast and medium channels are
+// aligned to the slow-channel direction; the slow channel is absolute.
+// 24 * 24 * 13 = 7488 cells, close to the 7300 occupied phase cells in v11.
+const ALIGNED_SPEED_BINS = [
+  -8, -5, -3, -2, -1.5, -1, -0.75, -0.5, -0.3, -0.2, -0.1, 0,
+  0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 5, 8,
 ];
-const STATE_COUNT = (SPEED_BINS.length + 1) *
-  (ACCEL_BINS.length + 1) * (SURPRISE_BINS.length + 1);
+const SLOW_SPEED_BINS = [
+  0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 5, 8,
+];
+const STATE_COUNT = (ALIGNED_SPEED_BINS.length + 1) ** 2 *
+  (SLOW_SPEED_BINS.length + 1);
 
 // All costs below are assumed scenarios, NOT current exchange fee quotes.
 // Units: permille, so fee=1 means 0.1% per execution, spread=1 means 0.1% full spread.
@@ -77,8 +94,8 @@ const COSTS = [
 // Fixed research variants, not selected by test-period profitability.
 type Strategy = { id: string; entry: number; exit: number | null;
   exitMode: string; targetMode: 'none' | 'threshold' | 'initial-forecast';
-  stopPermille: number };
-const STRATEGIES: Strategy[] = ENTRY_THRESHOLDS.flatMap((entry) => [
+  stopPermille: number; qualityGate?: boolean };
+const BASE_STRATEGIES: Strategy[] = ENTRY_THRESHOLDS.flatMap((entry) => [
   { suffix: 'target-threshold', targetMode: 'threshold' as const, exit: null },
   { suffix: 'target-forecast', targetMode: 'initial-forecast' as const, exit: null },
   { suffix: 'forecast-zero', targetMode: 'none' as const, exit: 0 },
@@ -88,6 +105,11 @@ const STRATEGIES: Strategy[] = ENTRY_THRESHOLDS.flatMap((entry) => [
   id: `entry-${entry}-${suffix}`, entry, exit, exitMode: suffix,
   targetMode, stopPermille: entry * STOP_FRACTION,
 })));
+
+const STRATEGIES: Strategy[] = BASE_STRATEGIES.flatMap((s) => [
+  { ...s, qualityGate: false },
+  { ...s, id: `${s.id}-reliable`, qualityGate: true },
+]);
 
 type Cost = typeof COSTS[number];
 type Market = { id: number; name: string; stock: string; money: string };
@@ -101,8 +123,7 @@ function integer(name: string, fallback: number, min: number, max: number) {
   return n;
 }
 
-function dateEnv(name: string): number | null {
-  const text = process.env[name];
+function dateSetting(text: string | null, name: string): number | null {
   if (!text) return null;
   if (!/^\d{4}-\d\d-\d\dT.*(?:Z|[+-]\d\d:\d\d)$/.test(text)) {
     throw new Error(`${name}: use ISO datetime with explicit timezone`);
@@ -117,15 +138,81 @@ function bin(value: number, boundaries: readonly number[]) {
   return index < 0 ? boundaries.length : index;
 }
 
-function phaseCell(phase: MarketPhaseValue): number {
-  const { speed: v, acceleration: a, surprise: s, residualVariance: vr } = phase;
-  if (![v, a, s, vr].every(Number.isFinite) || v === 0 || vr <= 0) return -1;
-  const features = [Math.abs(v) * TAU / Math.sqrt(vr), a * TAU / v,
-    s * Math.sign(v)];
-  if (!features.every(Number.isFinite)) return -1;
-  return (bin(features[0], SPEED_BINS) * (ACCEL_BINS.length + 1) +
-    bin(features[1], ACCEL_BINS)) * (SURPRISE_BINS.length + 1) +
-    bin(features[2], SURPRISE_BINS);
+function speedBankCell(speeds: readonly number[]): { cell: number; sign: number } {
+  if (speeds.length !== SPEED_BANK_TAUS_MS.length ||
+    !speeds.every(Number.isFinite)) return { cell: -1, sign: 0 };
+  const slow = speeds[speeds.length - 1];
+  if (slow === 0) return { cell: -1, sign: 0 };
+  const sign = Math.sign(slow);
+  const fast = speeds[0] * sign;
+  const medium = speeds[1] * sign;
+  const slowAbs = Math.abs(slow);
+  const cell = (bin(fast, ALIGNED_SPEED_BINS) *
+    (ALIGNED_SPEED_BINS.length + 1) +
+    bin(medium, ALIGNED_SPEED_BINS)) *
+    (SLOW_SPEED_BINS.length + 1) + bin(slowAbs, SLOW_SPEED_BINS);
+  return { cell, sign };
+}
+
+class SpeedBank {
+  private readonly ema = new Float64Array(SPEED_BANK_TAUS_MS.length);
+  private previous = NaN;
+  private first = NaN;
+
+  update(t: number, price: number): { cell: number; sign: number } | null {
+    const x = 1000 * Math.log(price);
+    if (!Number.isFinite(this.previous)) {
+      this.ema.fill(x);
+      this.first = t;
+    } else {
+      if (t <= this.previous) throw new Error('Speed bank needs increasing timestamps');
+      const dt = t - this.previous;
+      for (let i = 0; i < SPEED_BANK_TAUS_MS.length; i++) {
+        const alpha = -Math.expm1(-dt / SPEED_BANK_TAUS_MS[i]);
+        this.ema[i] += alpha * (x - this.ema[i]);
+      }
+    }
+    this.previous = t;
+    if (t - this.first < SPEED_BANK_WARMUP_MS) return null;
+    const speeds = SPEED_BANK_TAUS_MS.map((tau, i) =>
+      (x - this.ema[i]) / (tau / 60_000));
+    return speedBankCell(speeds);
+  }
+}
+
+function buildSpeedBankMarket(db: DatabaseSync, market: number) {
+  const query = db.prepare(`SELECT t,p FROM observations
+    WHERE market=? AND t>? ORDER BY t LIMIT ${PAGE}`);
+  const update = db.prepare('UPDATE observations SET cell=?, sign=? WHERE market=? AND t=?');
+  const bank = new SpeedBank();
+  let last = -Number.MAX_SAFE_INTEGER;
+  let ready = 0;
+  let warmup = 0;
+  let invalid = 0;
+  for (;;) {
+    const rows = query.all(market, last) as Pick<Row, 't' | 'p'>[];
+    if (!rows.length) break;
+    db.exec('BEGIN');
+    try {
+      for (const row of rows) {
+        const state = bank.update(row.t, row.p);
+        if (state === null) {
+          warmup++;
+        } else if (state.cell < 0) {
+          invalid++;
+        } else {
+          ready++;
+        }
+        update.run(state?.cell ?? -1, state?.sign ?? 0, market, row.t);
+        last = row.t;
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+  return { ready, warmup, invalid };
 }
 
 // One state and one bounded page per market. Never smooth archive duplicates.
@@ -270,13 +357,13 @@ function fitMarket(db: DatabaseSync, market: number, first: number,
     SELECT t, p, cell, sign, e FROM observations
     WHERE market = ? AND t >= ? AND t < ? ORDER BY t
   `);
-  const c = { origins: 0, invalidPhase: 0, purged: 0, noTarget: 0,
+  const c = { origins: 0, invalidBank: 0, purged: 0, noTarget: 0,
     lateTarget: 0, emaUnavailable: 0, accepted: 0, firstOrigin: Infinity, lastOrigin: -Infinity,
     firstTarget: Infinity, lastTarget: -Infinity };
   for (const raw of query.iterate(market, first, splitAt)) {
     const a = raw as Row;
     c.origins++;
-    if (a.cell < 0) { c.invalidPhase++; continue; }
+    if (a.cell < 0) { c.invalidBank++; continue; }
     if (a.t + HORIZON >= splitAt) { c.purged++; continue; }
     const b = target.after(a.t + HORIZON);
     if (!b) { c.noTarget++; continue; }
@@ -285,7 +372,7 @@ function fitMarket(db: DatabaseSync, market: number, first: number,
       c.lateTarget++; continue;
     }
     if (a.e == null || b.e == null) { c.emaUnavailable++; continue; }
-    const value = a.sign * 1000 * (Math.log(b.e) - Math.log(a.e));
+    const value = a.sign * residualReturn(a, b);
     const n = ++cells.count[a.cell];
     const delta = value - cells.mean[a.cell];
     cells.mean[a.cell] += delta / n;
@@ -369,6 +456,21 @@ class CellQuality {
     return flags.join('|') || 'no-listed-flags';
   }
 }
+function entryQualityReasons(cell: number, cells: ReturnType<typeof newCells>,
+  quality: CellQuality): string[] {
+  const diagnostic = quality.flags(cell, cells);
+  const reasons = diagnostic === 'no-listed-flags' ? [] : diagnostic.split('|');
+  const mean = cells.mean[cell];
+  const spaced = quality.spaced.mean[cell];
+  if (quality.spaced.count[cell] < ENTRY_MIN_NONOVERLAPPING) reasons.push('few-nonoverlapping');
+  if (!Number.isFinite(mean) || mean === 0 || Math.sign(spaced) !== Math.sign(mean)) {
+    reasons.push('nonoverlapping-sign-disagreement');
+  } else if (Math.abs(spaced) < ENTRY_MIN_SPACED_MEAN_RATIO * Math.abs(mean)) {
+    reasons.push('nonoverlapping-effect-collapse');
+  }
+  return reasons;
+}
+
 async function writeQuality(quality: CellQuality, cells: ReturnType<typeof newCells>,
   table: Float64Array, csv: Csv, blocks: Csv) {
   for (let cell = 0; cell < STATE_COUNT; cell++) {
@@ -472,7 +574,8 @@ class Simulation {
     this.maxDrawdown = Math.max(this.maxDrawdown, 1 - equity / this.peak);
   }
 
-  tick(row: Row, forecast: number): OrderEvent | null {
+  blockedEntries = 0;
+  tick(row: Row, forecast: number, entryAllowed = true): OrderEvent | null {
     if (this.last && row.t <= this.last.t) throw new Error('Unordered replay');
     if (!this.first) this.first = row;
     if (this.last && this.units > 0) this.exposedMs += row.t - this.last.t;
@@ -550,6 +653,10 @@ class Simulation {
       if (this.units === 0) { side = 'buy'; reason = 'buy-and-hold'; }
     } else if (this.units === 0) {
       if (Number.isFinite(forecast) && forecast >= this.strategy.entry) {
+        if (this.strategy.qualityGate && !entryAllowed) {
+          this.blockedEntries++;
+          return null;
+        }
         side = 'buy'; reason = 'entry-threshold';
       }
     } else {
@@ -612,7 +719,7 @@ const SUMMARY_HEADERS = [
   'market', 'strategy', 'costScenario', 'horizonMs', 'entryPermille',
   'exitPermille', 'exitMode', 'targetMode', 'stopPermille',
   'feePermille', 'fullSpreadPermille', 'slipPerSidePermille',
-  'initialCash', 'testTicks', 'validForecastTicks', 'invalidPhaseTicks',
+  'initialCash', 'testTicks', 'validForecastTicks', 'invalidBankTicks',
   'missingCellTicks', 'firstTick', 'lastTick', 'terminalPriceAgeMs',
   'buys', 'sells', 'expiredOrders', 'unfilledAtEnd', 'openPosition',
   'closedWins', 'closedWinRate', 'closedProfitFactor', 'closedPnlQuote',
@@ -621,8 +728,35 @@ const SUMMARY_HEADERS = [
   'buyHoldReturnPct', 'excessOverBuyHoldPctPoints',
   'executedFeesQuote', 'estimatedTerminalExitFeeQuote', 'turnoverQuote',
   'meanClosedHoldingMs', 'openHoldingMs', 'exposureFractionObservedPeriod',
-  'targetExits', 'stopExits', 'forecastExits',
+  'targetExits', 'stopExits', 'forecastExits', 'qualityBlockedEntryTicks',
 ];
+
+// Fixed-size aggregation: never reread large order or summary files.
+class OrdersSummary {
+  private readonly sums = new Map<string, { sum: number; count: number }>();
+  add(tau: number, strategy: string, cost: string, roi: number | null) {
+    if (roi === null) return;
+    assert.ok(Number.isFinite(roi));
+    const key = `${tau}/${strategy}/${cost}`;
+    const item = this.sums.get(key) ?? { sum: 0, count: 0 };
+    item.sum += roi;
+    item.count++;
+    this.sums.set(key, item);
+  }
+  async write(path: string, taus: number[]) {
+    const columns = taus.flatMap((tau) => COSTS.map((cost) => ({ tau, cost: cost.id })));
+    const csv = await Csv.create(path, ['strategy', ...columns.map(({ tau, cost }) =>
+      `tau_${tau}ms_${cost}_netReturnPct`)]);
+    try {
+      for (const strategy of [...STRATEGIES.map((s) => s.id), 'buy-and-hold']) {
+        await csv.row([strategy, ...columns.map(({ tau, cost }) => {
+          const item = this.sums.get(`${tau}/${strategy}/${cost}`);
+          return item ? item.sum / item.count : null;
+        })]);
+      }
+    } finally { await csv.close(); }
+  }
+}
 
 async function writeOrder(csv: Csv, market: string, s: Simulation, e: OrderEvent) {
   await csv.row([market, s.id, s.cost.id, e.order.side, e.order.reason, e.status,
@@ -642,7 +776,9 @@ async function writeEquity(csv: Csv, market: string, s: Simulation, f: number) {
 
 async function replay(db: DatabaseSync, market: Market, table: Float64Array,
   start: number, end: number, summary: Csv, orders: Csv, equity: Csv,
-  onOrder?: (s: Simulation, e: OrderEvent) => void) {
+  onOrder?: (s: Simulation, e: OrderEvent) => void,
+  onResult?: (s: Simulation, roi: number | null) => void,
+  entryMask?: Uint8Array) {
   const simulations = COSTS.flatMap((cost) =>
     [...STRATEGIES, null].map((strategy) => new Simulation(strategy, cost)));
   const query = db.prepare(`
@@ -665,7 +801,7 @@ async function replay(db: DatabaseSync, market: Market, table: Float64Array,
     else if (!Number.isFinite(f)) missing++;
     else valid++;
     for (const s of simulations) {
-      const event = s.tick(row, f);
+      const event = s.tick(row, f, row.cell >= 0 && entryMask?.[row.cell] === 1);
       if (event) {
         onOrder?.(s, event);
         await writeOrder(orders, market.name, s, event);
@@ -690,6 +826,7 @@ async function replay(db: DatabaseSync, market: Market, table: Float64Array,
     const price = s.last?.p;
     const final = price === undefined ? null : s.equity(price);
     const netReturn = final === null ? null : 100 * (final / INITIAL_CASH - 1);
+    onResult?.(s, netReturn);
     const baseline = simulations.find((b) => b.cost.id === s.cost.id &&
       b.strategy === null)!;
     const baselineReturn = price === undefined ? null :
@@ -712,7 +849,7 @@ async function replay(db: DatabaseSync, market: Market, table: Float64Array,
       s.fees, price === undefined ? null : s.terminalExitFee(price), s.turnover,
       s.sells ? s.closedHoldingMs / s.sells : null, s.openHoldingMs(),
       elapsed ? s.exposedMs / elapsed : null,
-      s.targetExits, s.stopExits, s.forecastExits,
+      s.targetExits, s.stopExits, s.forecastExits, s.blockedEntries,
     ]);
   }
 }
@@ -875,6 +1012,10 @@ async function diagnostics(db: DatabaseSync, market: Market, table: Float64Array
 function constantPriceEma(price: number, ema: number, elapsed: number) {
   return price + (ema - price) * Math.exp(-elapsed / PRICE_EMA_TAU_MS);
 }
+function residualReturn(a: Row, b: Row) {
+  assert.ok(a.e != null && b.e != null);
+  return logReturn(constantPriceEma(a.p, a.e, b.t - a.t), b.e);
+}
 function lagMetrics(a: Row, b: Row, forecast: number) {
   assert.ok(a.e != null && b.e != null);
   const flat60 = constantPriceEma(a.p, a.e, HORIZON);
@@ -885,24 +1026,25 @@ function lagMetrics(a: Row, b: Row, forecast: number) {
   const targetGap = logReturn(b.e, b.p);
   const constant60 = logReturn(a.e, flat60);
   const constantTarget = logReturn(a.e, flatTarget);
+  const residual = residualReturn(a, b);
   return { rawReturn, emaReturn, originGap, targetGap, constant60,
-    constantTarget, residual: emaReturn - constantTarget,
-    forecastExcess: forecast - constant60,
-    forecastError: forecast - emaReturn,
-    baselineError: constant60 - emaReturn, flat60, flatTarget };
+    constantTarget, residual,
+    reconstructedEmaForecast: forecast + constant60,
+    forecastError: forecast - residual,
+    baselineError: -residual, flat60, flatTarget };
 }
 const LAG_KEYS = ['rawReturn', 'emaReturn', 'originGap', 'targetGap',
-  'constant60', 'constantTarget', 'residual', 'forecastExcess'] as const;
+  'constant60', 'constantTarget', 'residual', 'reconstructedEmaForecast'] as const;
 const LAG_SUMMARY_HEADERS = [
   'market', 'direction', 'absForecastThreshold', 'validTargets',
   'meanForecastPermille',
   ...LAG_KEYS.map((key) => `mean_${key}_permille`),
-  'forecastMAEPermille', 'constantPriceMAEPermille',
-  'forecastRMSEPermille', 'constantPriceRMSEPermille',
-  'constantPriceCorrectDirection', 'meanTargetDelayMs',
+  'residualForecastMAEPermille', 'zeroResidualMAEPermille',
+  'residualForecastRMSEPermille', 'zeroResidualRMSEPermille',
+  'reconstructedEmaCorrectDirection', 'meanTargetDelayMs',
 ];
 const LAG_SIGNAL_HEADERS = [
-  'market', 'signalAt', 'targetAt', 'targetDelayMs', 'cell', 'speedSign',
+  'market', 'signalAt', 'targetAt', 'targetDelayMs', 'cell', 'slowSpeedSign',
   'forecastPermille', 'priceOrigin', 'emaOrigin', 'priceTarget', 'emaTarget',
   'constantPriceEma60s', 'constantPriceEmaAtTarget',
   ...LAG_KEYS.map((key) => `${key}Permille`),
@@ -915,7 +1057,7 @@ const CALIBRATION_HEADERS = [
   'wrongDirection', 'flat', 'directionAccuracy',
 ];
 async function calibrate(db: DatabaseSync, market: Market, table: Float64Array,
-  start: number, end: number, csv: Csv, basis: 'ema' | 'raw',
+  start: number, end: number, csv: Csv, basis: 'ema-residual' | 'raw',
   lagSummary?: Csv, lagSignals?: Csv) {
   const groups = [-1, 1].flatMap((sign) => [0, 1, 2, 2.5, 3, 3.5, 4].map(
     (threshold) => ({ sign, threshold, samples: 0, counts: [0, 0, 0, 0],
@@ -931,7 +1073,7 @@ async function calibrate(db: DatabaseSync, market: Market, table: Float64Array,
     if (!Number.isFinite(f) || f === 0) continue;
     const due = r.t + HORIZON;
     const label = labelAt(due > end ? null : reader.after(due), due, end);
-    const lm = basis === 'ema' && label.status === 'valid' &&
+    const lm = basis === 'ema-residual' && label.status === 'valid' &&
       r.e != null && label.row!.e != null ? lagMetrics(r, label.row!, f) : null;
     if (lm && lagSignals && Math.abs(f) >= Math.min(...ENTRY_THRESHOLDS)) {
       const b = label.row!;
@@ -948,7 +1090,7 @@ async function calibrate(db: DatabaseSync, market: Market, table: Float64Array,
       }
       g.counts[LABEL_STATUSES.indexOf(label.status)]++;
       if (label.status !== 'valid') continue;
-      const actual = basis === 'ema' ? logReturn(r.e!, label.row!.e!) :
+      const actual = basis === 'ema-residual' ? residualReturn(r, label.row!) :
         logReturn(r.p, label.row!.p);
       g.forecast += f;
       g.actual += actual;
@@ -961,7 +1103,7 @@ async function calibrate(db: DatabaseSync, market: Market, table: Float64Array,
         g.baselineAbs += Math.abs(lm.baselineError);
         g.forecastSq += lm.forecastError ** 2;
         g.baselineSq += lm.baselineError ** 2;
-        g.baselineCorrect += Number(lm.constant60 * lm.emaReturn > 0);
+        g.baselineCorrect += Number(lm.reconstructedEmaForecast * lm.emaReturn > 0);
         g.delay += label.row!.t - due;
       }
     }
@@ -972,7 +1114,7 @@ async function calibrate(db: DatabaseSync, market: Market, table: Float64Array,
       g.samples, ...g.counts, g.unavailable, n ? g.forecast / n : null,
       n ? g.actual / n : null, n ? g.actual * g.sign / n : null,
       g.correct, g.wrong, g.flat, n ? g.correct / n : null]);
-    if (basis === 'ema' && lagSummary) {
+    if (basis === 'ema-residual' && lagSummary) {
       await lagSummary.row([market.name, g.sign > 0 ? 'up' : 'down', g.threshold,
         n, n ? g.forecast / n : null,
         ...Array.from(g.lag, (v) => n ? v / n : NaN),
@@ -1002,8 +1144,10 @@ async function main() {
     }
   }
   await mkdir(OUTPUT, { recursive: true });
-  const directory = await mkdtemp(resolve(OUTPUT, 'run-'));
-  const cache = resolve(directory, 'observations.sqlite');
+  const runDirectory = await mkdtemp(resolve(OUTPUT, 'run-'));
+  const cache = resolve(runDirectory, 'observations.sqlite');
+  const returns = new OrdersSummary();
+  let sharedFingerprint: string | null = null;
   const db = new DatabaseSync(cache);
   const files: Csv[] = [];
   const started = Date.now();
@@ -1015,14 +1159,14 @@ async function main() {
       PRAGMA temp_store = FILE;
       CREATE TABLE observations (
         market INTEGER NOT NULL, t INTEGER NOT NULL,
-        p REAL NOT NULL, cell INTEGER NOT NULL, sign INTEGER NOT NULL,
+        p REAL NOT NULL, cell INTEGER NOT NULL DEFAULT -1,
+        sign INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (market, t)
       ) WITHOUT ROWID;
     `);
     const insert = db.prepare(`
-      INSERT INTO observations VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT (market, t) DO UPDATE SET
-        p = excluded.p, cell = excluded.cell, sign = excluded.sign
+      INSERT INTO observations (market, t, p) VALUES (?, ?, ?)
+      ON CONFLICT (market, t) DO UPDATE SET p = excluded.p
     `);
     serverGlobalStateService.start();
     entityManager.start();
@@ -1061,24 +1205,19 @@ async function main() {
             storage.applySnapshot({ codecName: entire.codecName, data: entire.data });
             const accessors = storage.getAccessors();
             const candles = accessors.candles[CANDLE_NAME] as LazyArray<MarketCandle>;
-            const phases = accessors.indicators[PHASE_NAME] as
-              LazyArray<MarketPhaseValue> | undefined;
             for (let start = storage.levelBoundaries[0];
               start < storage.size; start += PAGE) {
               db.exec('BEGIN');
               try {
                 for (let i = start; i < Math.min(start + PAGE, storage.size); i++) {
                   const candle = candles.get(i);
-                  const phase = phases?.get(i);
                   if (!Number.isSafeInteger(candle.receivedAt) ||
                     !Number.isFinite(candle.price) || candle.price <= 0) {
                     rejectedRows++;
                     continue;
                   }
                   if (DATA_END !== null && candle.receivedAt > DATA_END) continue;
-                  const cell = phase ? phaseCell(phase) : -1;
-                  insert.run(id, candle.receivedAt, candle.price, cell,
-                    cell < 0 ? 0 : Math.sign(phase!.speed));
+                  insert.run(id, candle.receivedAt, candle.price);
                 }
                 db.exec('COMMIT');
               } catch (error) {
@@ -1091,207 +1230,271 @@ async function main() {
         console.log(`Extracted ${id + 1}/${rows.length}: ${market.name}`);
       }
     });
+    let bankReady = 0;
+    let bankWarmup = 0;
+    let bankInvalid = 0;
+    for (const market of markets) {
+      const c = buildSpeedBankMarket(db, market.id);
+      bankReady += c.ready;
+      bankWarmup += c.warmup;
+      bankInvalid += c.invalid;
+      console.log(`Speed bank: ${market.name}, ready=${c.ready}, ` +
+        `warmup=${c.warmup}, invalid=${c.invalid}`);
+    }
     db.exec('ALTER TABLE observations ADD COLUMN e REAL');
-    const fingerprint = createHash('sha256');
-    let emaReady = 0;
-    let emaWarmup = 0;
-    for (const market of markets) {
-      fingerprint.update(JSON.stringify(market.name) + '\n');
-      const c = smoothMarket(db, market.id, fingerprint);
-      emaReady += c.ready;
-      emaWarmup += c.warmup;
-      console.log(`EMA: ${market.name}, ready=${c.ready}, warmup=${c.warmup}`);
-    }
-    const observationsSha256 = fingerprint.digest('hex');
-    const range = db.prepare(`
-      SELECT min(t) AS first, max(t) AS last, count(*) AS n FROM observations
-    `).get() as { first: number | null; last: number | null; n: number };
-    if (range.first === null || range.last === null) throw new Error('No ticks');
-    const splitAt = REQUESTED_SPLIT ?? Math.ceil(
-      range.first + TRAIN_FRACTION * (range.last - range.first));
-    const start = REQUESTED_START ?? splitAt;
-    const end = REQUESTED_END ?? range.last;
-    if (splitAt <= range.first || splitAt >= range.last ||
-      start < splitAt || start >= end || end > range.last) {
-      throw new Error('Invalid chronological train/test boundaries');
-    }
-    const requestedNames = process.env.MF_MARKETS === undefined ? MARKET_NAMES :
-      process.env.MF_MARKETS.split(',').map((x) => x.trim()).filter(Boolean);
-    const eligible = markets.filter((m) => m.money === BASE_CURRENCY &&
-      m.stock !== BASE_CURRENCY);
-    for (const name of requestedNames) {
-      if (!eligible.some((m) => m.name === name)) {
-        throw new Error(`No archived spot market quoted in ${BASE_CURRENCY}: ${name}`);
+    for (const tau of PRICE_EMA_TAUS_MS) {
+      PRICE_EMA_TAU_MS = tau;
+      const directory = resolve(runDirectory, `tau-${tau}ms`);
+      await mkdir(directory);
+      console.log(`Starting tau=${tau}ms`);
+      const fingerprint = createHash('sha256');
+      let emaReady = 0;
+      let emaWarmup = 0;
+      for (const market of markets) {
+        fingerprint.update(JSON.stringify(market.name) + '\n');
+        const c = smoothMarket(db, market.id, fingerprint);
+        emaReady += c.ready;
+        emaWarmup += c.warmup;
+        console.log(`EMA: ${market.name}, ready=${c.ready}, warmup=${c.warmup}`);
       }
-    }
-    const selected = eligible.filter((m) => !requestedNames.length ||
-      requestedNames.includes(m.name));
-    if (!selected.length) throw new Error('No markets selected for simulation');
-    async function output(name: string, headers: string[]) {
-      const csv = await Csv.create(resolve(directory, name), headers);
-      files.push(csv);
-      return csv;
-    }
-    const trainCoverage = await output('training.csv', [
-      'market', 'origins', 'invalidPhase', 'purged', 'noTarget', 'lateTarget',
-      'emaUnavailable', 'accepted', 'firstOrigin', 'lastOrigin', 'firstTarget', 'lastTarget',
-    ]);
-    const cells = newCells();
-    const quality = new CellQuality(range.first, splitAt);
-    let trainSamples = 0;
-    let lastTrainTarget = -Infinity;
-    for (const market of markets) {
-      quality.beginMarket();
-      const c = fitMarket(db, market.id, range.first, splitAt, cells,
-        (a, b, value) => quality.observe(a, b, value));
-      quality.endMarket(market.name);
-      trainSamples += c.accepted;
-      lastTrainTarget = Math.max(lastTrainTarget, c.lastTarget);
-      await trainCoverage.row([market.name, ...Object.values(c)]);
-      console.log(`Training: ${market.name}, samples=${c.accepted}`);
-    }
-    const table = Float64Array.from(cells.mean, (mean, i) =>
-      cells.count[i] >= MIN_TRAIN_SAMPLES ? mean : NaN);
-    if (!table.some(Number.isFinite)) throw new Error('No usable trained cells');
-    assert.ok(lastTrainTarget < splitAt);
-    const cellQuality = await output('cell-quality.csv', [
-      'cell', 'forecastEnabled', 'trainSamples', 'alignedMeanPermille',
-      'sampleStdDevPermille', 'minPermille', 'maxPermille', 'positiveFraction',
-      'trainingMarkets', 'largestMarket', 'largestMarketSampleShare',
-      'nonOverlappingSamples', 'nonOverlappingAlignedMeanPermille',
-      'nonOverlappingStdDevPermille', 'blockBoundaryPurged', 'flags',
-    ]);
-    const blockQuality = await output('cell-time-blocks.csv', [
-      'cell', 'block', 'startInclusive', 'endExclusive', 'samples',
-      'alignedMeanPermille', 'sampleStdDevPermille', 'enoughBlockSamples',
-    ]);
-    await writeQuality(quality, cells, table, cellQuality, blockQuality);
-    const signalQuality = await output('signal-quality.csv', [
-      'market', 'signalAt', 'signalPrice', 'cell', 'speedSign', 'forecastPermille',
-      'trainSamples', 'nonOverlappingSamples', 'flags',
-      ...Array.from({ length: QUALITY_BLOCKS }, (_, i) =>
-        [`block${i + 1}Samples`, `block${i + 1}NaturalMeanPermille`]).flat(),
-    ]);
-    const frozen = JSON.stringify({
-      version: 2, source: 'current archive, chronological training',
-      observationsSha256, targetDefinition: TARGET_DEFINITION, phaseName: PHASE_NAME, horizonMs: HORIZON,
-      responseTimeMs: RESPONSE_TIME, tauMinutes: TAU,
-      splitAt: new Date(splitAt).toISOString(), trainSamples,
-      lastTrainTarget: new Date(lastTrainTarget).toISOString(),
-      minTrainSamples: MIN_TRAIN_SAMPLES,
-      trainingMarkets: markets, tradingMarkets: selected.map((m) => m.name),
-      coordinate: 'aligned to sign(speed); permille log-return',
-      target: 'first tick >= origin+horizon, delay <= maxTargetDelayMs, target < splitAt',
-      maxTargetDelayMs: MAX_TARGET_DELAY,
-      bins: { speed: SPEED_BINS, acceleration: ACCEL_BINS, surprise: SURPRISE_BINS },
-      layout: '(speedIndex * accelerationCount + accelerationIndex) * surpriseCount + surpriseIndex',
-      mean: Array.from(table), count: Array.from(cells.count),
-      variance: Array.from(cells.count, (n, i) => n ? cells.m2[i] / n : null),
-    }, null, 2) + '\n';
-    await writeFile(resolve(directory, 'frozen-table.json'), frozen);
-    const tableHash = createHash('sha256').update(frozen).digest('hex');
-    const summary = await output('summary.csv', SUMMARY_HEADERS);
-    const orders = await output('orders.csv', ORDER_HEADERS);
-    const equity = await output('equity.csv', EQUITY_HEADERS);
-    const diagnosticSummary = await output('diagnostic-summary.csv', DIAGNOSTIC_HEADERS);
-    const buyAttempts = await output('buy-attempts.csv', ATTEMPT_HEADERS);
-    const calibration = await output('forecast-calibration.csv', CALIBRATION_HEADERS);
-    const lagSummary = await output('ema-lag-summary.csv', LAG_SUMMARY_HEADERS);
-    const lagSignals = await output('ema-lag-signals.csv', LAG_SIGNAL_HEADERS);
-    const recordAttempt = attemptRecorder(db);
-    for (const market of selected) {
-      db.exec('DELETE FROM buy_attempts; BEGIN');
-      try {
-        await replay(db, market, table, start, end, summary, orders, equity, recordAttempt);
-        db.exec('COMMIT');
-      } catch (error) {
-        db.exec('ROLLBACK');
-        throw error;
+      const observationsSha256 = fingerprint.digest('hex');
+      if (sharedFingerprint !== null) assert.equal(observationsSha256, sharedFingerprint);
+      sharedFingerprint = observationsSha256;
+      const range = db.prepare(`
+        SELECT min(t) AS first, max(t) AS last, count(*) AS n FROM observations
+      `).get() as { first: number | null; last: number | null; n: number };
+      if (range.first === null || range.last === null) throw new Error('No ticks');
+      const splitAt = REQUESTED_SPLIT ?? Math.ceil(
+        range.first + TRAIN_FRACTION * (range.last - range.first));
+      const start = REQUESTED_START ?? splitAt;
+      const end = REQUESTED_END ?? range.last;
+      if (splitAt <= range.first || splitAt >= range.last ||
+        start < splitAt || start >= end || end > range.last) {
+        throw new Error('Invalid chronological train/test boundaries');
       }
-      await diagnostics(db, market, table, start, end, diagnosticSummary, buyAttempts);
-      await writeSignalQuality(db, market, table, cells, quality, start, end, signalQuality);
-      await calibrate(db, market, table, start, end, calibration, 'ema',
-        lagSummary, lagSignals);
-      await calibrate(db, market, table, start, end, calibration, 'raw');
-      console.log(`Simulated: ${market.name}`);
+      const requestedNames = process.env.MF_MARKETS === undefined ? MARKET_NAMES :
+        process.env.MF_MARKETS.split(',').map((x) => x.trim()).filter(Boolean);
+      const eligible = markets.filter((m) => m.money === BASE_CURRENCY &&
+        m.stock !== BASE_CURRENCY);
+      for (const name of requestedNames) {
+        if (!eligible.some((m) => m.name === name)) {
+          throw new Error(`No archived spot market quoted in ${BASE_CURRENCY}: ${name}`);
+        }
+      }
+      const selected = eligible.filter((m) => !requestedNames.length ||
+        requestedNames.includes(m.name));
+      if (!selected.length) throw new Error('No markets selected for simulation');
+      async function output(name: string, headers: string[]) {
+        const csv = await Csv.create(resolve(directory, name), headers);
+        files.push(csv);
+        return csv;
+      }
+      const trainCoverage = await output('training.csv', [
+        'market', 'origins', 'invalidBank', 'purged', 'noTarget', 'lateTarget',
+        'emaUnavailable', 'accepted', 'firstOrigin', 'lastOrigin', 'firstTarget', 'lastTarget',
+      ]);
+      const cells = newCells();
+      const quality = new CellQuality(range.first, splitAt);
+      let trainSamples = 0;
+      let lastTrainTarget = -Infinity;
+      for (const market of markets) {
+        quality.beginMarket();
+        const c = fitMarket(db, market.id, range.first, splitAt, cells,
+          (a, b, value) => quality.observe(a, b, value));
+        quality.endMarket(market.name);
+        trainSamples += c.accepted;
+        lastTrainTarget = Math.max(lastTrainTarget, c.lastTarget);
+        await trainCoverage.row([market.name, ...Object.values(c)]);
+        console.log(`Training: ${market.name}, samples=${c.accepted}`);
+      }
+      const table = Float64Array.from(cells.mean, (mean, i) =>
+        cells.count[i] >= MIN_TRAIN_SAMPLES ? mean : NaN);
+      if (!table.some(Number.isFinite)) throw new Error('No usable trained cells');
+      assert.ok(lastTrainTarget < splitAt);
+      const cellQuality = await output('cell-quality.csv', [
+        'cell', 'forecastEnabled', 'trainSamples', 'alignedMeanPermille',
+        'sampleStdDevPermille', 'minPermille', 'maxPermille', 'positiveFraction',
+        'trainingMarkets', 'largestMarket', 'largestMarketSampleShare',
+        'nonOverlappingSamples', 'nonOverlappingAlignedMeanPermille',
+        'nonOverlappingStdDevPermille', 'blockBoundaryPurged', 'flags',
+      ]);
+      const blockQuality = await output('cell-time-blocks.csv', [
+        'cell', 'block', 'startInclusive', 'endExclusive', 'samples',
+        'alignedMeanPermille', 'sampleStdDevPermille', 'enoughBlockSamples',
+      ]);
+      await writeQuality(quality, cells, table, cellQuality, blockQuality);
+      const signalQuality = await output('signal-quality.csv', [
+        'market', 'signalAt', 'signalPrice', 'cell', 'slowSpeedSign', 'forecastPermille',
+        'trainSamples', 'nonOverlappingSamples', 'flags',
+        ...Array.from({ length: QUALITY_BLOCKS }, (_, i) =>
+          [`block${i + 1}Samples`, `block${i + 1}NaturalMeanPermille`]).flat(),
+      ]);
+      const frozen = JSON.stringify({
+        version: 1, source: 'current archive, chronological training',
+        observationsSha256, targetDefinition: targetDefinition(), horizonMs: HORIZON,
+        speedBankTausMs: SPEED_BANK_TAUS_MS, speedBankWarmupMs: SPEED_BANK_WARMUP_MS,
+        splitAt: new Date(splitAt).toISOString(), trainSamples,
+        lastTrainTarget: new Date(lastTrainTarget).toISOString(),
+        minTrainSamples: MIN_TRAIN_SAMPLES,
+        trainingMarkets: markets, tradingMarkets: selected.map((m) => m.name),
+        coordinate: 'aligned to sign(slowest speed); target is permille log-return',
+        target: 'first tick >= origin+horizon, delay <= maxTargetDelayMs, target < splitAt',
+        maxTargetDelayMs: MAX_TARGET_DELAY,
+        bins: { alignedFast: ALIGNED_SPEED_BINS, alignedMedium: ALIGNED_SPEED_BINS, slowAbs: SLOW_SPEED_BINS },
+        layout: '(alignedFastIndex * alignedMediumCount + alignedMediumIndex) * slowAbsCount + slowAbsIndex',
+        mean: Array.from(table), count: Array.from(cells.count),
+        variance: Array.from(cells.count, (n, i) => n ? cells.m2[i] / n : null),
+      }, null, 2) + '\n';
+      await writeFile(resolve(directory, 'frozen-table.json'), frozen);
+      const tableHash = createHash('sha256').update(frozen).digest('hex');
+      const summary = await output('summary.csv', SUMMARY_HEADERS);
+      const orders = await output('orders.csv', ORDER_HEADERS);
+      const equity = await output('equity.csv', EQUITY_HEADERS);
+      const diagnosticSummary = await output('diagnostic-summary.csv', DIAGNOSTIC_HEADERS);
+      const buyAttempts = await output('buy-attempts.csv', ATTEMPT_HEADERS);
+      const calibration = await output('forecast-calibration.csv', CALIBRATION_HEADERS);
+      const lagSummary = await output('ema-lag-summary.csv', LAG_SUMMARY_HEADERS);
+      const lagSignals = await output('ema-lag-signals.csv', LAG_SIGNAL_HEADERS);
+      const entryMask = new Uint8Array(STATE_COUNT);
+      const entryQuality = await output('entry-quality.csv', [
+        'cell', 'entryAllowed', 'reasons', 'trainSamples', 'nonOverlappingSamples',
+        'alignedMeanPermille', 'nonOverlappingAlignedMeanPermille',
+      ]);
+      for (let cell = 0; cell < STATE_COUNT; cell++) {
+        const reasons = entryQualityReasons(cell, cells, quality);
+        if (!Number.isFinite(table[cell])) reasons.push('no-forecast');
+        entryMask[cell] = Number(reasons.length === 0);
+        await entryQuality.row([cell, Boolean(entryMask[cell]), reasons.join('|'),
+          cells.count[cell], quality.spaced.count[cell], cells.mean[cell],
+          quality.spaced.mean[cell]]);
+      }
+      const recordAttempt = attemptRecorder(db);
+      for (const market of selected) {
+        db.exec('DELETE FROM buy_attempts; BEGIN');
+        try {
+          await replay(db, market, table, start, end, summary, orders, equity, recordAttempt,
+            (s, roi) => returns.add(PRICE_EMA_TAU_MS, s.id, s.cost.id, roi), entryMask);
+          db.exec('COMMIT');
+        } catch (error) {
+          db.exec('ROLLBACK');
+          throw error;
+        }
+        await diagnostics(db, market, table, start, end, diagnosticSummary, buyAttempts);
+        await writeSignalQuality(db, market, table, cells, quality, start, end, signalQuality);
+        await calibrate(db, market, table, start, end, calibration, 'ema-residual',
+          lagSummary, lagSignals);
+        await calibrate(db, market, table, start, end, calibration, 'raw');
+        console.log(`Simulated: ${market.name}`);
+      }
+      await returns.write(resolve(directory, 'orders_summary.csv'), [PRICE_EMA_TAU_MS]);
+      while (files.length) await files.pop()!.close();
+      await writeFile(resolve(directory, 'metadata.json'), JSON.stringify({
+        version: 1, status: 'complete', generatedAt: new Date().toISOString(),
+        elapsedMs: Date.now() - started, baseCurrency: BASE_CURRENCY,
+        initialCashPerMarketAndScenario: INITIAL_CASH,
+        observations: range, snapshots, rejectedRows,
+        targetDefinition: targetDefinition(), emaReady, emaWarmup,
+        speedBank: { tausMs: SPEED_BANK_TAUS_MS, warmupMs: SPEED_BANK_WARMUP_MS,
+          ready: bankReady, warmup: bankWarmup, invalid: bankInvalid,
+          formula: 'v_tau=(1000*ln(price)-EMA_tau(1000*ln(price)))/(tau/60000)',
+          alignment: 'sign=sign(v_slowest); features=[v_fast*sign,v_medium*sign,abs(v_slowest)]',
+          stateCount: STATE_COUNT },
+        configuredTausMs: PRICE_EMA_TAUS_MS,
+        entryReliability: {
+          originalSuffix: 'unchanged original ids', filteredSuffix: '-reliable',
+          minSamples: QUALITY_MIN_SAMPLES,
+          minSamplesPerBlock: QUALITY_MIN_BLOCK_SAMPLES, blocks: QUALITY_BLOCKS,
+          maxLargestMarketShare: 0.5,
+          minNonOverlapping: ENTRY_MIN_NONOVERLAPPING,
+          minSpacedMeanRatio: ENTRY_MIN_SPACED_MEAN_RATIO,
+          signs: 'each populated time block and nonoverlapping mean must share overall mean sign',
+          scope: 'new buy decisions only; pending orders and all exits unchanged; forecasts not masked',
+          blockedCount: 'eligible flat-state entry ticks rejected by gate, not independent opportunities',
+          selection: 'fixed heuristics based on training only, not a confidence guarantee',
+          calibration: 'forecast-calibration and lag summaries remain unfiltered; buy-attempt diagnostics include both variants',
+        },
+        ordersSummary: 'arithmetic mean of netReturnPct across markets with test ticks, including zero-trade markets; equal initial capital per market; terminal liquidation valuation included; percent for the entire test, not per trade; blank means unavailable',
+        archiveExtraction: 'one extraction and one causal speed-bank replay shared by all target-EMA tau runs; only target EMA column recomputed',
+
+        dataEnd: DATA_END, observationsSha256,
+        fingerprint: 'SHA256 of ordered market names and deduplicated [t,p,cell,sign]; excludes EMA',
+        emaLag: {
+          summary: 'ema-lag-summary.csv: all calibration cohorts, identical valid labels',
+          detail: 'ema-lag-signals.csv: valid test labels with abs(forecast)>=2; both signs; once per origin',
+          gap: '1000*ln(raw/EMA); emaReturn=rawReturn+originGap-targetGap',
+          constantPrice: 'Eflat(dt)=P0+(E0-P0)*exp(-dt/tau)',
+          baseline: 'zero residual predicts EMA follows constant-price control; compare residual MAE/RMSE on identical outcomes',
+          matchedTime: 'constantPriceTargetReturn uses actual selected target elapsed time (60-70s) for training and evaluation; future values never feed runtime signals',
+          residual: 'emaReturn-constantPriceTargetReturn; not an executable return',
+          interpretation: 'table predicts residual; reconstructedEmaForecast=residualForecast+constant60 is diagnostic only and never feeds strategy',
+        },
+        largestSnapshotBytes: largestSnapshot, trainingMarkets: markets.length,
+        tradingMarkets: selected.map((m) => m.name),
+        splitAt: new Date(splitAt).toISOString(),
+        testStart: new Date(start).toISOString(), testEnd: new Date(end).toISOString(),
+        horizonMs: HORIZON, minTrainSamples: MIN_TRAIN_SAMPLES,
+        trainSamples, lastTrainTarget, tableSha256: tableHash,
+        strategies: STRATEGIES, costs: COSTS, latencyMs: LATENCY,
+        maxFillWaitMs: MAX_FILL_WAIT, maxHoldMs: null,
+        equityIntervalMs: EQUITY_INTERVAL,
+        costUnits: 'permille; fee=1 means 0.1% on executed notional per side',
+        costsSource: 'explicit assumed scenarios; not exchange/account fee history',
+        priceModel: 'last trade used as midpoint proxy; buy=P*exp((spread/2+slip)/1000), sell=P/exp((spread/2+slip)/1000)',
+        feeModel: 'quote-equivalent fee; buy qty=cash/(executionPrice*(1+feeRate)); sell cash=qty*executionPrice*(1-feeRate)',
+        execution: 'first subsequent tick at or after signal+latency, at most maxFillWaitMs later; otherwise modeled order expires without fill',
+        executionLimitation: 'expiry represents unavailable execution data, not actual exchange rejection; fills are hypothetical, all-or-none, unlimited liquidity',
+        omittedRules: 'no order-book depth, partial fills, quantity rounding, min notional/amount, historical listing/trading restrictions or account fee tiers',
+        targets: 'fixed at buy fill: threshold or forecast from original buy signal; never updated by subsequent forecasts',
+        levels: 'log-return permille, target=buyExecutionPrice*exp(targetPermille/1000), stop=buyExecutionPrice*exp(-entryThreshold*0.5/1000); trigger against observed raw price; subsequent sell execution also applies spread/slip and fees',
+        exitPriority: 'latched exit retry first; otherwise protective stop, target, forecast<=0; each triggers a market sell subject to latency and data availability, never guaranteed execution at a level',
+        expiredExit: 'once triggered, an exit remains latched until filled; after expiry reissue on the next tick, even if price or forecast recovers; original exit reason preserved',
+        comparison: 'independent inventories; exits change subsequent entries; cost scenarios can have different exit times because levels are anchored to their own buy execution prices',
+        maxHoldScope: 'no maximum holding time; MF_MAX_HOLD_MS is ignored',
+        strategy: 'spot long/cash, one position and one pending order; signal checked on each received tick; missing forecast disables only forecast exit; targets and stops remain active; no short sales',
+        horizon: 'rolling next-minute EMA residual forecast; entry, forecast-zero exit and original-forecast target use residual; positions need not last one minute',
+        baseline: 'buy-and-hold starts at first test tick and uses same latency/cost/expiry model; expired entry retries on a later tick; USDT cash baseline is 0%',
+        terminal: 'positions remain open; final equity includes hypothetical sell spread, slip and fee at last observed price; no forced terminal fill',
+        drawdown: 'peak-to-trough liquidation equity evaluated on every archived test tick, including initial cash as initial peak',
+        coverage: 'market first/last ticks and terminal price age are reported; long gaps and sparse data can bias execution and valuation',
+        interpretation: 'each market/scenario has independent capital; no combined portfolio; do not choose winners on this test and call that out-of-sample',
+        validation: 'chronological holdout for this run; speed bank is replayed causally from deduplicated archived prices; period may have been inspected previously',
+        extraction: 'all archived spot markets, raw level 0, including unchanged ticks; last archive price wins duplicate market/timestamp; speed bank is built only after deduplication',
+        cellQuality: {
+          mode: '25 original strategies plus 25 reliable variants; train-only gate affects new buy signals only',
+          refit: 'table retrained every run, frozen only within that run',
+          minSamplesFlag: QUALITY_MIN_SAMPLES,
+          blocks: QUALITY_BLOCKS, minBlockSamples: QUALITY_MIN_BLOCK_SAMPLES,
+          periods: 'equal-duration global training blocks; origins and actual targets must both fall within block; crossing targets excluded from block statistics only',
+          units: 'cell and block returns aligned to slow-speed sign; signal block means converted to natural market direction',
+          nonOverlapping: 'greedy per market and cell, next origin >= previous accepted actual target; not a count of independent events; cross-market dependence remains',
+          dispersion: 'sample standard deviation describes outcome dispersion, not confidence of mean; no IID confidence interval claimed',
+          flags: 'heuristic descriptions, not a statistical guarantee; no-listed-flags does not certify reliability; computed exclusively from training',
+          signalJoin: 'signal-quality records all forecastable test ticks >= smallest entry threshold, independent of inventory; join attempts/orders on market and signalAt',
+        },
+        calibration: 'paired ema-residual and raw labels on identical test ticks; forecast predicts residual, raw comparison measures economic relevance; warmup excluded from both',
+        diagnostics: {
+          units: 'gross raw reference-price log returns; forecasts are EMA residuals and are not the same target; excluding execution costs',
+          timing: 'retrospective only, computed after replay; no labels feed trading decisions',
+          target: 'first tick >= origin+60000ms, at most 10000ms late and within testEnd',
+          cohorts: 'all-positive-ticks at each entry threshold; zero-cost-control buy attempts grouped by strategy and resolution status, including failed and still-open entries',
+          weighting: 'equal weight per tick or attempt within each market; overlapping horizons and repeated ticks are dependent observations, not independent trials; thresholds overlap',
+          common: 'all five component means and meanForecastCommon use exactly the same filled attempts with both valid targets',
+          identities: 'signalToTarget = signalToFill + fillToSignalTarget; fillToFillTarget = fillToSignalTarget + endpointShift',
+          missing: 'blank metrics are unavailable, never zero; late target times/prices retained for coverage only; no-target includes missing observations before testEnd',
+          files: ['diagnostic-summary.csv', 'buy-attempts.csv'],
+        },
+        memory: '32 MiB SQLite cache plus bounded pages, one decoded snapshot, one speed-bank state per market pass, fixed training arrays and 204 simulation states per market; files written sequentially',
+      }, null, 2) + '\n');
+      console.log(`Results: ${directory}`);
     }
-    while (files.length) await files.pop()!.close();
-    await writeFile(resolve(directory, 'metadata.json'), JSON.stringify({
-      version: 8, status: 'complete', generatedAt: new Date().toISOString(),
-      elapsedMs: Date.now() - started, baseCurrency: BASE_CURRENCY,
-      initialCashPerMarketAndScenario: INITIAL_CASH,
-      observations: range, snapshots, rejectedRows,
-      targetDefinition: TARGET_DEFINITION, emaReady, emaWarmup,
-      dataEnd: DATA_END, observationsSha256,
-      fingerprint: 'SHA256 of ordered market names and deduplicated [t,p,cell,sign]; excludes EMA',
-      emaLag: {
-        summary: 'ema-lag-summary.csv: all calibration cohorts, identical valid labels',
-        detail: 'ema-lag-signals.csv: valid test labels with abs(forecast)>=2; both signs; once per origin',
-        gap: '1000*ln(raw/EMA); emaReturn=rawReturn+originGap-targetGap',
-        constantPrice: 'Eflat(dt)=P0+(E0-P0)*exp(-dt/tau)',
-        baseline: 'constantPrice60sReturn uses only origin data; compare its MAE/RMSE with forecast on the same EMA outcomes',
-        matchedTime: 'constantPriceTargetReturn uses actual selected target elapsed time (60-70s), retrospective decomposition only',
-        residual: 'emaReturn-constantPriceTargetReturn; not an executable return',
-        interpretation: 'diagnostic only; does not change table training or strategy signals',
-      },
-      largestSnapshotBytes: largestSnapshot, trainingMarkets: markets.length,
-      tradingMarkets: selected.map((m) => m.name),
-      splitAt: new Date(splitAt).toISOString(),
-      testStart: new Date(start).toISOString(), testEnd: new Date(end).toISOString(),
-      horizonMs: HORIZON, minTrainSamples: MIN_TRAIN_SAMPLES,
-      trainSamples, lastTrainTarget, tableSha256: tableHash,
-      strategies: STRATEGIES, costs: COSTS, latencyMs: LATENCY,
-      maxFillWaitMs: MAX_FILL_WAIT, maxHoldMs: null,
-      equityIntervalMs: EQUITY_INTERVAL,
-      costUnits: 'permille; fee=1 means 0.1% on executed notional per side',
-      costsSource: 'explicit assumed scenarios; not exchange/account fee history',
-      priceModel: 'last trade used as midpoint proxy; buy=P*exp((spread/2+slip)/1000), sell=P/exp((spread/2+slip)/1000)',
-      feeModel: 'quote-equivalent fee; buy qty=cash/(executionPrice*(1+feeRate)); sell cash=qty*executionPrice*(1-feeRate)',
-      execution: 'first subsequent tick at or after signal+latency, at most maxFillWaitMs later; otherwise modeled order expires without fill',
-      executionLimitation: 'expiry represents unavailable execution data, not actual exchange rejection; fills are hypothetical, all-or-none, unlimited liquidity',
-      omittedRules: 'no order-book depth, partial fills, quantity rounding, min notional/amount, historical listing/trading restrictions or account fee tiers',
-      targets: 'fixed at buy fill: threshold or forecast from original buy signal; never updated by subsequent forecasts',
-      levels: 'log-return permille, target=buyExecutionPrice*exp(targetPermille/1000), stop=buyExecutionPrice*exp(-entryThreshold*0.5/1000); trigger against observed raw price; subsequent sell execution also applies spread/slip and fees',
-      exitPriority: 'latched exit retry first; otherwise protective stop, target, forecast<=0; each triggers a market sell subject to latency and data availability, never guaranteed execution at a level',
-      expiredExit: 'once triggered, an exit remains latched until filled; after expiry reissue on the next tick, even if price or forecast recovers; original exit reason preserved',
-      comparison: 'independent inventories; exits change subsequent entries; cost scenarios can have different exit times because levels are anchored to their own buy execution prices',
-      maxHoldScope: 'no maximum holding time; MF_MAX_HOLD_MS is ignored in v8',
-      strategy: 'spot long/cash, one position and one pending order; signal checked on each received tick; missing forecast disables only forecast exit; targets and stops remain active; no short sales',
-      horizon: 'rolling next-minute forecast; positions need not last one minute',
-      baseline: 'buy-and-hold starts at first test tick and uses same latency/cost/expiry model; expired entry retries on a later tick; USDT cash baseline is 0%',
-      terminal: 'positions remain open; final equity includes hypothetical sell spread, slip and fee at last observed price; no forced terminal fill',
-      drawdown: 'peak-to-trough liquidation equity evaluated on every archived test tick, including initial cash as initial peak',
-      coverage: 'market first/last ticks and terminal price age are reported; long gaps and sparse data can bias execution and valuation',
-      interpretation: 'each market/scenario has independent capital; no combined portfolio; do not choose winners on this test and call that out-of-sample',
-      validation: 'chronological holdout for this run; historical stored phases, not a full causal indicator replay; period may have been inspected previously',
-      extraction: 'all archived spot markets, raw level 0, including unchanged ticks; last archive value wins duplicate market/timestamp',
-      cellQuality: {
-        mode: 'diagnostic only; no extra entry filter; all 25 strategies unchanged',
-        refit: 'table retrained every run, frozen only within that run',
-        minSamplesFlag: QUALITY_MIN_SAMPLES,
-        blocks: QUALITY_BLOCKS, minBlockSamples: QUALITY_MIN_BLOCK_SAMPLES,
-        periods: 'equal-duration global training blocks; origins and actual targets must both fall within block; crossing targets excluded from block statistics only',
-        units: 'cell and block returns aligned to speed sign; signal block means converted to natural market direction',
-        nonOverlapping: 'greedy per market and cell, next origin >= previous accepted actual target; not a count of independent events; cross-market dependence remains',
-        dispersion: 'sample standard deviation describes outcome dispersion, not confidence of mean; no IID confidence interval claimed',
-        flags: 'heuristic descriptions, not a statistical guarantee; no-listed-flags does not certify reliability; computed exclusively from training',
-        signalJoin: 'signal-quality records all forecastable test ticks >= smallest entry threshold, independent of inventory; join attempts/orders on market and signalAt',
-      },
-      calibration: 'paired EMA and raw returns on the same valid test labels; forecast predicts EMA change, not executable raw return; warmup labels excluded from both',
-      diagnostics: {
-        units: 'gross permille log returns using raw reference prices, excluding execution costs',
-        timing: 'retrospective only, computed after replay; no labels feed trading decisions',
-        target: 'first tick >= origin+60000ms, at most 10000ms late and within testEnd',
-        cohorts: 'all-positive-ticks at each entry threshold; zero-cost-control buy attempts grouped by strategy and resolution status, including failed and still-open entries',
-        weighting: 'equal weight per tick or attempt within each market; overlapping horizons and repeated ticks are dependent observations, not independent trials; thresholds overlap',
-        common: 'all five component means and meanForecastCommon use exactly the same filled attempts with both valid targets',
-        identities: 'signalToTarget = signalToFill + fillToSignalTarget; fillToFillTarget = fillToSignalTarget + endpointShift',
-        missing: 'blank metrics are unavailable, never zero; late target times/prices retained for coverage only; no-target includes missing observations before testEnd',
-        files: ['diagnostic-summary.csv', 'buy-attempts.csv'],
-      },
-      memory: '32 MiB SQLite cache plus bounded pages, one decoded snapshot, fixed training arrays and 104 simulation states per market; files written sequentially',
+    await returns.write(resolve(runDirectory, 'orders_summary.csv'), PRICE_EMA_TAUS_MS);
+    await writeFile(resolve(runDirectory, 'comparison.json'), JSON.stringify({
+      version: 1, status: 'complete', tausMs: PRICE_EMA_TAUS_MS,
+      observationsSha256: sharedFingerprint,
+      dataEnd: DATA_END_ISO, splitAt: SPLIT_AT_ISO,
+      summary: 'orders_summary.csv: strategy rows; tau/cost columns; mean netReturnPct across markets with test ticks, including idle markets; equal initial capital',
     }, null, 2) + '\n');
-    console.log(`Results: ${directory}`);
+    console.log(`Comparison: ${runDirectory}`);
   } finally {
     await Promise.allSettled(files.map((file) => file.close()));
     db.close();
@@ -1303,6 +1506,22 @@ async function main() {
   }
 }
 async function selfTest() {
+  assert.equal(STATE_COUNT, 7488);
+  const bankUp = speedBankCell([2, 1, 0.5]);
+  const bankDown = speedBankCell([-2, -1, -0.5]);
+  assert.equal(bankUp.cell, bankDown.cell);
+  assert.equal(bankUp.sign, 1);
+  assert.equal(bankDown.sign, -1);
+  const reversal = speedBankCell([-2, 0.25, 0.5]);
+  const continuation = speedBankCell([2, 0.25, 0.5]);
+  assert.equal(reversal.sign, 1);
+  assert.notEqual(reversal.cell, continuation.cell);
+  const bank = new SpeedBank();
+  assert.equal(bank.update(0, 100), null);
+  assert.equal(bank.update(SPEED_BANK_WARMUP_MS - 1, 100), null);
+  assert.deepEqual(bank.update(SPEED_BANK_WARMUP_MS, 100), { cell: -1, sign: 0 });
+  assert.throws(() => bank.update(SPEED_BANK_WARMUP_MS, 100));
+
   const step = new PriceEma();
   assert.equal(step.update(0, 100), null);
   assert.equal(step.update(PRICE_EMA_WARMUP_MS - 1, 100), null);
@@ -1329,7 +1548,46 @@ async function selfTest() {
   assert.ok(Math.abs(splitFlat - fixed.e) < 1e-12);
   const alteredTarget = lagMetrics(origin, { ...target, p: 110, e: 109 }, 3);
   assert.equal(lag.constant60, alteredTarget.constant60);
-  assert.equal(lag.forecastExcess, alteredTarget.forecastExcess);
+  assert.equal(lag.reconstructedEmaForecast, alteredTarget.reconstructedEmaForecast);
+  const gateCells = newCells();
+  const gateQuality = new CellQuality(0, 300000);
+  gateCells.count[0] = 300;
+  gateCells.mean[0] = -2;
+  gateQuality.spaced.count[0] = 100;
+  gateQuality.spaced.mean[0] = -1;
+  gateQuality.largestMarketCount[0] = 150;
+  for (const block of gateQuality.blocks) {
+    block.count[0] = 100;
+    block.mean[0] = -2;
+  }
+  assert.deepEqual(entryQualityReasons(0, gateCells, gateQuality), []);
+  gateQuality.spaced.mean[0] = -0.99;
+  assert.ok(entryQualityReasons(0, gateCells, gateQuality)
+    .includes('nonoverlapping-effect-collapse'));
+  gateQuality.spaced.mean[0] = 1;
+  assert.ok(entryQualityReasons(0, gateCells, gateQuality)
+    .includes('nonoverlapping-sign-disagreement'));
+  gateQuality.spaced.mean[0] = -1;
+  gateQuality.blocks[0].count[0] = 29;
+  assert.ok(entryQualityReasons(0, gateCells, gateQuality).includes('sparse-time-blocks'));
+  gateQuality.blocks[0].count[0] = 100;
+  gateQuality.blocks[0].mean[0] = 1;
+  assert.ok(entryQualityReasons(0, gateCells, gateQuality).includes('block-sign-disagreement'));
+  const gated = STRATEGIES.find((s) => s.qualityGate && s.exitMode === 'forecast-zero')!;
+  const filtered = new Simulation(gated, COSTS[0], 250, 2000);
+  filtered.tick(row(0, 100), 4, false);
+  assert.equal(Boolean(filtered.pending), false);
+  assert.equal(filtered.blockedEntries, 1);
+  filtered.tick(row(1000, 100), 4, true);
+  filtered.tick(row(1250, 100), 4, false);
+  assert.equal(filtered.buys, 1);
+  filtered.tick(row(1500, 100), 0, false);
+  assert.equal(filtered.pending?.reason, 'forecast-faded');
+  filtered.tick(row(1750, 100), 0, false);
+  assert.equal(filtered.sells, 1);
+  const original = new Simulation(BASE_STRATEGIES[0], COSTS[0], 250, 2000);
+  original.tick(row(0, 100), 4, false);
+  assert.equal(original.pending?.side, 'buy');
   const qcheck = new CellQuality(0, 300000);
   const testCells = newCells();
   qcheck.beginMarket();
@@ -1352,8 +1610,8 @@ async function selfTest() {
   assert.equal(qcheck.spaced.count[0], 5);
   assert.equal(qcheck.marketCount[0], 2);
   assert.throws(() => qcheck.observe(row(290000, 100), row(350000, 100), 1));
-  assert.equal(STRATEGIES.length, 25);
-  assert.equal(new Set(STRATEGIES.map((x) => x.id)).size, 25);
+  assert.equal(STRATEGIES.length, 50);
+  assert.equal(new Set(STRATEGIES.map((x) => x.id)).size, 50);
   for (const strategy of STRATEGIES) {
     const s = new Simulation(strategy, COSTS[0], 250, 2000);
     s.tick(row(0, 99), 4.7);
@@ -1456,6 +1714,17 @@ async function selfTest() {
     }
     db.exec('ALTER TABLE observations ADD COLUMN e REAL');
     smoothMarket(db, 0);
+    const insertConstant = db.prepare(`INSERT INTO observations
+      (market,t,p,cell,sign) VALUES (1,?,?,0,1)`);
+    for (let t = 0; t <= 200_000; t += 1000) {
+      insertConstant.run(t, t === 0 ? 110 : 100);
+    }
+    smoothMarket(db, 1);
+    const constantCells = newCells();
+    const constantFit = fitMarket(db, 1, 0, 120_000, constantCells);
+    assert.ok(constantFit.accepted > 0);
+    assert.ok(Math.abs(constantCells.mean[0]) < 1e-10);
+    assert.ok(constantCells.m2[0] < 1e-16);
     const before = newCells();
     const qualityBefore = new CellQuality(0, 120000);
     qualityBefore.beginMarket();
@@ -1467,10 +1736,11 @@ async function selfTest() {
     assert.equal(training.emaUnavailable, warmupTicks);
     assert.equal(training.purged, 60);
     assert.equal(training.lastTarget, warmupTicks < 60 ? 119_000 : -Infinity);
-    const endpoints = db.prepare('SELECT t,e,p FROM observations ORDER BY t')
+    const endpoints = db.prepare('SELECT t,e,p FROM observations WHERE market=0 ORDER BY t')
       .all() as { t: number; e: number | null; p: number }[];
     const expected = endpoints.slice(warmupTicks, 60).reduce((sum, a) =>
-      sum + 1000 * Math.log(endpoints[a.t / 1000 + 60].e! / a.e!), 0) / Math.max(1, 60 - warmupTicks);
+      sum + 1000 * Math.log(endpoints[a.t / 1000 + 60].e! /
+        constantPriceEma(a.p, a.e!, HORIZON)), 0) / Math.max(1, 60 - warmupTicks);
     assert.ok(Math.abs(before.mean[0] - expected) < 1e-10);
 
     db.exec('UPDATE observations SET p=p*10 WHERE t>=120000');
@@ -1492,9 +1762,11 @@ async function selfTest() {
     const table = new Float64Array(STATE_COUNT).fill(NaN);
     table[0] = 3.7;
     const recorder = attemptRecorder(db);
+    const compact = new OrdersSummary();
     try {
       await replay(db, { id: 0, name: 'A_USDT', stock: 'A', money: 'USDT' },
-        table, 120_000, 200_000, summary, orders, equity, recorder);
+        table, 120_000, 200_000, summary, orders, equity, recorder,
+        (s, roi) => compact.add(PRICE_EMA_TAU_MS, s.id, s.cost.id, roi));
     } finally { await summary.close(); await orders.close(); await equity.close(); }
     const parse = (text: string) => {
       const lines = text.trim().split('\n').map((line) =>
@@ -1550,7 +1822,7 @@ async function selfTest() {
       await calibrate(db, { id: 0, name: 'A_USDT', stock: 'A', money: 'USDT' },
         table, 120000, 200000, calibrationFile, 'raw');
       await calibrate(db, { id: 0, name: 'A_USDT', stock: 'A', money: 'USDT' },
-        table, 120000, 200000, calibrationFile, 'ema', lagFile, lagDetail);
+        table, 120000, 200000, calibrationFile, 'ema-residual', lagFile, lagDetail);
     } finally {
       await calibrationFile.close(); await lagFile.close(); await lagDetail.close();
     }
@@ -1563,14 +1835,15 @@ async function selfTest() {
     assert.equal(Number(down.samples), 41);
     assert.equal(Number(down.validTargets), 0);
     assert.equal(Number(down.horizonAfterEnd), 41);
-    const emaUp = calibrationRows.find((r) => r.priceBasis === 'ema' &&
+    const emaUp = calibrationRows.find((r) => r.priceBasis === 'ema-residual' &&
       r.direction === 'up' && r.absForecastThreshold === '2')!;
     assert.equal(Number(emaUp.validTargets), Number(up.validTargets));
-    assert.ok(Number(emaUp.meanActualPermille) > 5.99);
+    assert.ok(Number(emaUp.meanActualPermille) > 4 &&
+      Number(emaUp.meanActualPermille) < 6);
     const lagRows = parse(await readFile(resolve(directory, 'lag.csv'), 'utf8'));
     const lagUp = lagRows.find((r) => r.direction === 'up' && r.absForecastThreshold === '2')!;
     assert.equal(Number(lagUp.validTargets), Number(emaUp.validTargets));
-    assert.ok(Math.abs(Number(lagUp.mean_emaReturn_permille) -
+    assert.ok(Math.abs(Number(lagUp.mean_residual_permille) -
       Number(emaUp.meanActualPermille)) < 1e-10);
     const lagDetails = parse(await readFile(resolve(directory, 'lag-detail.csv'), 'utf8'));
     assert.equal(lagDetails.length, 21);
@@ -1580,8 +1853,8 @@ async function selfTest() {
       assert.ok(Number(r.priceOrigin) !== Number(r.emaOrigin));
     }
     const errorMean = lagDetails.reduce((sum, r) => sum +
-      Math.abs(Number(r.forecastPermille) - Number(r.emaReturnPermille)), 0) / lagDetails.length;
-    assert.ok(Math.abs(errorMean - Number(lagUp.forecastMAEPermille)) < 1e-10);
+      Math.abs(Number(r.forecastPermille) - Number(r.residualPermille)), 0) / lagDetails.length;
+    assert.ok(Math.abs(errorMean - Number(lagUp.residualForecastMAEPermille)) < 1e-10);
     const summaries = parse(await readFile(resolve(directory, 'summary.csv'), 'utf8'));
     assert.equal(summaries.length, COSTS.length * (STRATEGIES.length + 1));
     for (const r of summaries) {
@@ -1593,6 +1866,25 @@ async function selfTest() {
       assert.equal(Number(r.sells), Number(r.targetExits) + Number(r.stopExits) +
         Number(r.forecastExits));
     }
+    await compact.write(resolve(directory, 'orders_summary.csv'), [PRICE_EMA_TAU_MS]);
+    const compactRows = parse(await readFile(resolve(directory, 'orders_summary.csv'), 'utf8'));
+    assert.equal(compactRows.length, STRATEGIES.length + 1);
+    for (const r of summaries) {
+      const c = compactRows.find((item) => item.strategy === r.strategy)!;
+      assert.equal(Number(c[`tau_${PRICE_EMA_TAU_MS}ms_${r.costScenario}_netReturnPct`]),
+        Number(r.netReturnPct));
+    }
+    const fixture = new OrdersSummary();
+    const id = STRATEGIES[0].id;
+    fixture.add(10_000, id, 'moderate', 4);
+    fixture.add(10_000, id, 'moderate', 0);
+    fixture.add(10_000, id, 'moderate', null);
+    fixture.add(7_000, id, 'moderate', -1);
+    await fixture.write(resolve(directory, 'comparison.csv'), [10_000, 7_000]);
+    const pivot = parse(await readFile(resolve(directory, 'comparison.csv'), 'utf8'))[0];
+    assert.equal(Number(pivot.tau_10000ms_moderate_netReturnPct), 2);
+    assert.equal(Number(pivot.tau_7000ms_moderate_netReturnPct), -1);
+    assert.equal(pivot['tau_10000ms_fee-only_netReturnPct'], '');
     const events = parse(await readFile(resolve(directory, 'orders.csv'), 'utf8'));
     for (const e of events.filter((e) => e.status === 'filled')) {
       assert.ok(Number(e.resolvedAt) > Number(e.signalAt));
@@ -1609,14 +1901,32 @@ async function selfTest() {
     parse(await readFile(resolve(directory, 'equity.csv'), 'utf8'));
     console.log('Self-test passed: chronological training, future-data isolation,');
     console.log('delayed fills, costs, expiry, inventory, terminal valuation and CSV replay.');
-    console.log('v8: EMA lag identity, constant-price control and parameterized tau.');
+    console.log('speed-bank v1: causal 7s/15s/30s bank, residual labels and train-only gates.');
   } finally {
     db.close();
     await rm(directory, { recursive: true, force: true });
   }
 }
 
-void (process.argv.includes('--self-test') ? selfTest() : main())
+async function run() {
+  if (SPEED_BANK_TAUS_MS.length !== 3 ||
+    !SPEED_BANK_TAUS_MS.every((tau, i) => Number.isSafeInteger(tau) && tau > 0 &&
+      (i === 0 || tau > SPEED_BANK_TAUS_MS[i - 1]))) {
+    throw new Error('SPEED_BANK_TAUS_MS: use three increasing positive integer values');
+  }
+  if (!PRICE_EMA_TAUS_MS.length || new Set(PRICE_EMA_TAUS_MS).size !== PRICE_EMA_TAUS_MS.length ||
+    PRICE_EMA_TAUS_MS.some((t) => !Number.isSafeInteger(t) || t < 1 || t > 60_000)) {
+    throw new Error('PRICE_EMA_TAUS_MS: use unique integer values in [1, 60000]');
+  }
+  if (!process.argv.includes('--self-test')) return main();
+  for (const tau of PRICE_EMA_TAUS_MS) {
+    PRICE_EMA_TAU_MS = tau;
+    console.log(`Self-test tau=${tau}ms`);
+    await selfTest();
+  }
+}
+
+void run()
   .catch((error: unknown) => {
     console.error(error);
     process.exitCode = 1;

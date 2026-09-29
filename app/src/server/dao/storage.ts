@@ -92,7 +92,7 @@ export class StorageDao {
       where market_name = ${marketName}
     `;
 
-    return row?.endedAt ?? 0;
+    return Number(row?.endedAt ?? 0);
   }
 
   public async getArchiveMarketNames(): Promise<string[]> {
@@ -108,8 +108,10 @@ export class StorageDao {
 
   public async getArchiveByMarketName(
     marketName: string,
+    afterEndedAt?: number,
+    limit?: number,
   ): Promise<StorageArchiveRow[]> {
-    return this.q<StorageArchiveRow[]>`
+    const rows = await this.q<StorageArchiveRow[]>`
       select
         market_name as "marketName",
         started_at as "startedAt",
@@ -117,8 +119,51 @@ export class StorageDao {
         data
       from storage_archive
       where market_name = ${marketName}
+        ${afterEndedAt === undefined ? this.q`` :
+          this.q`and ended_at > ${afterEndedAt}`}
       order by ended_at
+      ${limit === undefined ? this.q`` : this.q`limit ${limit}`}
     `;
+
+    return rows.map((row) => ({
+      ...row,
+      startedAt: Number(row.startedAt),
+      endedAt: Number(row.endedAt),
+    }));
+  }
+
+  public async replaceArchiveBatch(
+    marketName: string,
+    oldEndedAts: readonly number[],
+    replacement: StoragePersistenceSnapshot | null,
+  ): Promise<void> {
+    if (oldEndedAts.length === 0) {
+      throw new Error('Empty archive replacement batch');
+    }
+
+    await this.q.begin(async (tx) => {
+      const deleted = await tx<{ endedAt: number }[]>`
+        delete from storage_archive
+        where market_name = ${marketName}
+          and ended_at = any(${[...oldEndedAts]}::bigint[])
+        returning ended_at as "endedAt"
+      `;
+
+      if (deleted.length !== oldEndedAts.length) {
+        throw new Error(`Archive changed during repack: ${marketName}`);
+      }
+
+      if (replacement) {
+        await tx`
+          insert into storage_archive
+            (market_name, started_at, ended_at, data)
+          values (
+            ${marketName}, ${replacement.startedAt},
+            ${replacement.endedAt}, ${replacement.data}
+          )
+        `;
+      }
+    });
   }
 
   public async insertArchive(

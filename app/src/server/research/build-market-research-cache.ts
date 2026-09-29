@@ -48,6 +48,8 @@ import type {
 import {
   decodeEntireBinary,
 } from '../../shared/utilities/codecs/entire-binary-codec.js';
+import { decodeCodec } from '../../shared/utilities/codecs/codecs.js';
+import type { MarketTick } from '../../shared/types/ticks.js';
 import { q } from '../db/client.js';
 import { entityManager } from '../services/entity-manager.js';
 import {
@@ -745,26 +747,31 @@ async function main(): Promise<void> {
 
           codecNames.add(entire.codecName);
 
-          const storage =
-            new Storage(market.name);
+          let observations: MarketTick[];
 
-          storage.applySnapshot({
-            codecName: entire.codecName,
-            data: entire.data,
-          });
+          if (entire.codecName === 'ticks v1.0') {
+            observations = decodeCodec('ticks v1.0', entire.data);
+          } else if (entire.codecName === 'snapshot v1.0') {
+            const storage = new Storage(market.name);
+            storage.applySnapshot({
+              codecName: entire.codecName,
+              data: entire.data,
+            });
 
-          const candles =
-            storage
-              .getAccessors()
-              .candles[CANDLE_NAME] as
-                LazyArray<MarketCandle>;
+            const candles = storage.getAccessors()
+              .candles[CANDLE_NAME] as LazyArray<MarketCandle>;
+            observations = [];
 
-          for (
-            let index = 0;
-            index < storage.size;
-            index++
-          ) {
-            const candle = candles.get(index);
+            for (let index = storage.levelBoundaries[0];
+              index < storage.size; index++) {
+              const { receivedAt, price } = candles.get(index);
+              observations.push({ receivedAt, price });
+            }
+          } else {
+            throw new Error(`Unsupported archive codec: ${entire.codecName}`);
+          }
+
+          for (const candle of observations) {
 
             stats.sourceObservationCount++;
 

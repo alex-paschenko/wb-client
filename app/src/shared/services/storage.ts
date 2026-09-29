@@ -32,6 +32,9 @@ import type {
   StorageStructuralChange,
 } from '../types/storage-delta.js';
 import { EntityDesriptor } from '../types/storage-entities.js';
+import { CANDLE_NAME } from '../constants/storage-entities.js';
+import type { MarketCandle } from '../types/data-types.js';
+import type { MarketTick } from '../types/ticks.js';
 
 const SNAPSHOT_CODEC = 'snapshot v1.0' as const;
 const SNAPSHOT_BINARY_KIND = 'snapshot' satisfies BinaryKind;
@@ -335,6 +338,13 @@ export class Storage {
       );
     }
 
+    if (snapshot.codecName !== SNAPSHOT_CODEC) {
+      throw new TypeError(
+        `Storage snapshot requires "${SNAPSHOT_CODEC}", ` +
+        `got "${snapshot.codecName}". Archive ticks require replay.`,
+      );
+    }
+
     const { chunkSets } = decodeCodec(
       snapshot.codecName,
       snapshot.data,
@@ -390,28 +400,30 @@ export class Storage {
         }]
       : [];
 
-    const firstArchiveChunkSetIndex =
-      this.findChunkSetIndex(archiveStartIndex);
+    const candles = this.accessors.candles[CANDLE_NAME] as
+      LazyArray<MarketCandle>;
+    const ticks: MarketTick[] = [];
 
-    const archiveChunkSets = this.chunkSets.slice(
-      firstArchiveChunkSetIndex,
-    );
+    for (let index = archiveStartIndex; index < this.size; index++) {
+      const { receivedAt, price } = candles.get(index);
+      ticks.push({ receivedAt, price });
+    }
 
-    archiveChunkSets[0] = this.cutChunkSetBy(
-      archiveChunkSets[0],
-      archiveStartIndex,
-      archiveStartedAt,
-    );
+    if (ticks[0].receivedAt !== archiveStartedAt) {
+      throw new RangeError('Archive start does not match first tick');
+    }
 
     result.push({
       snapshotType: 'archive',
       marketName: this.marketName,
-      startedAt: archiveStartedAt,
-      endedAt: lastChunkSet.endedAt,
-      data: this.encodeSnapshot(
-        archiveChunkSets,
-        globalStateService.getStorageEntities(),
-      ),
+      startedAt: ticks[0].receivedAt,
+      endedAt: ticks.at(-1)!.receivedAt,
+      data: encodeEntireBinary({
+        codecName: 'ticks v1.0',
+        binaryKind: SNAPSHOT_BINARY_KIND,
+        parameters: { marketName: this.marketName },
+        data: ticks,
+      }),
     });
 
     this.isPersistenceSnapshotBeenTaken = true;

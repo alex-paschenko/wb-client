@@ -13,8 +13,6 @@ import { mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { MarketCandle } from '../../shared/types/data-types.js';
-import type { LazyArray } from '../../shared/utilities/lazy-array.js';
 
 const BASE_CURRENCY = 'USDT';
 const PRICE_EMA_TAUS_MS: number[] = [10_000, 7_000, 4_000];
@@ -1127,10 +1125,7 @@ async function calibrate(db: DatabaseSync, market: Market, table: Float64Array,
 }
 
 async function main() {
-  const { CANDLE_NAME } = await import('../../shared/constants/storage-entities.js');
-  const { Storage } = await import('../../shared/services/storage.js');
-  const { decodeEntireBinary } = await import(
-    '../../shared/utilities/codecs/entire-binary-codec.js');
+  const { readArchiveTicks } = await import('../utilities/archive-ticks.js');
   const { q } = await import('../db/client.js');
   const { entityManager } = await import('../services/entity-manager.js');
   const { serverGlobalStateService } = await import('../services/global-state.js');
@@ -1200,17 +1195,12 @@ async function main() {
         `.cursor(1)) {
           for (const row of batch) {
             snapshots++;
-            const entire = decodeEntireBinary(row.data);
-            const storage = new Storage(market.name);
-            storage.applySnapshot({ codecName: entire.codecName, data: entire.data });
-            const accessors = storage.getAccessors();
-            const candles = accessors.candles[CANDLE_NAME] as LazyArray<MarketCandle>;
-            for (let start = storage.levelBoundaries[0];
-              start < storage.size; start += PAGE) {
+            const ticks = readArchiveTicks(row.data, market.name);
+            for (let start = 0; start < ticks.length; start += PAGE) {
               db.exec('BEGIN');
               try {
-                for (let i = start; i < Math.min(start + PAGE, storage.size); i++) {
-                  const candle = candles.get(i);
+                for (let i = start; i < Math.min(start + PAGE, ticks.length); i++) {
+                  const candle = ticks[i];
                   if (!Number.isSafeInteger(candle.receivedAt) ||
                     !Number.isFinite(candle.price) || candle.price <= 0) {
                     rejectedRows++;

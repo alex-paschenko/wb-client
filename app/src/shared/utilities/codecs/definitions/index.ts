@@ -20,6 +20,7 @@ import { snapshot_V1_0 } from './snapshot-v1_0.js';
 import { nullableTypedObject_V1_0 } from './nullable-typed-object-v1_0.js';
 import { marketPhase_V1_0 } from './market-phase-v1_0.js';
 import { marketForecast_V1_0 } from './market-forecast-v1_0.js';
+import { ticks_V1_0 } from './ticks-v1_0.js';
 
 export const CODEC_DEFINITIONS = {
   'string (2^16) v1.0': string2To16_V1_0,
@@ -47,6 +48,8 @@ export const CODEC_DEFINITIONS = {
   'market forecast v1.0': marketForecast_V1_0,
 
   'snapshot v1.0': snapshot_V1_0,
+
+  'ticks v1.0': ticks_V1_0,
 
   'delta v1.0': delta_V1_0,
 

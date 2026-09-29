@@ -7,7 +7,12 @@ import {
 } from '../../../constants/storage-entities';
 import { globalStateService } from '../../../services/global-state';
 import type { FixedSizeCodec, SingleValueCodec } from '../../../types/codecs';
-import type { StorageChunk, StorageChunks, StorageChunkSet } from '../../../types/storage';
+import type {
+  StorageChunk,
+  StorageChunks,
+  StorageChunkSet,
+  WritableStorageStructure,
+} from '../../../types/storage';
 import type { EntityDesriptor } from '../../../types/storage-entities';
 import { singleValueCodecDefinition } from './codec-definition-helpers';
 import { getCodec } from '../codecs';
@@ -410,8 +415,15 @@ export const snapshot_V1_0 = singleValueCodecDefinition<
       return offset;
     };
 
-    const createChunks = (): StorageChunks =>
-      globalStateService.mapStorageEntities((entity) => {
+    const createChunks = (
+      targetEntities: readonly EntityDesriptor[],
+    ): StorageChunks => {
+      const chunks: WritableStorageStructure<StorageChunk> = {
+        candles: {},
+        indicators: {},
+      };
+
+      for (const entity of targetEntities) {
         const codec = getFixedSizeCodec(
           entity.codec,
           `Storage entity "${entity.kind}:${entity.name}"`,
@@ -419,7 +431,7 @@ export const snapshot_V1_0 = singleValueCodecDefinition<
 
         const data = new Uint8Array(STORAGE_CHUNK_CAPACITY * codec.size);
 
-        return {
+        chunks[entity.kind][entity.name] = {
           data,
           view: new DataView(
             data.buffer,
@@ -427,15 +439,15 @@ export const snapshot_V1_0 = singleValueCodecDefinition<
             data.byteLength,
           ),
         } satisfies StorageChunk;
-      });
+      }
+
+      return chunks;
+    };
 
     const buildRestorePlan = (
       descriptors: readonly EntityDescriptor[],
+      currentEntities: readonly EntityDesriptor[],
     ): RestorePlan => {
-      const currentEntities = globalStateService.getStorageEntities();
-
-      const currentStructure = globalStateService.getStorageEntitiesStructure();
-
       const matchedEntities = new Set<EntityDesriptor>();
       const entities: EntityRestorePlan[] = [];
 
@@ -450,7 +462,10 @@ export const snapshot_V1_0 = singleValueCodecDefinition<
           continue;
         }
 
-        const entity = currentStructure[kind][descriptor.name] ?? null;
+        const entity = currentEntities.find(
+          (candidate) => candidate.kind === kind &&
+            candidate.name === descriptor.name,
+        ) ?? null;
 
         if (entity === null) {
           entities.push(
@@ -600,6 +615,7 @@ export const snapshot_V1_0 = singleValueCodecDefinition<
       offset: number,
       view: DataView,
       restorePlan: RestorePlan,
+      targetEntities: readonly EntityDesriptor[],
     ): { value: StorageChunkSet; nextOffset: number; } => {
       ensureAvailable(offset, CHUNK_SET_HEADER_SIZE, view, 'Chunk set header');
 
@@ -622,7 +638,7 @@ export const snapshot_V1_0 = singleValueCodecDefinition<
       const endedAt = view.getFloat64(offset, true);
       offset += FLOAT64_SIZE;
 
-      const chunks = createChunks();
+      const chunks = createChunks(targetEntities);
 
       for (const entityPlan of restorePlan.entities) {
         offset = restoreEntity(offset, view, size, chunks, entityPlan);
@@ -701,7 +717,7 @@ export const snapshot_V1_0 = singleValueCodecDefinition<
         };
       },
 
-      read: (offset, view) => {
+      read: (offset, view, accumulator) => {
         const descriptorResult = readEntityDescriptors(offset, view);
 
         const descriptors = descriptorResult.value;
@@ -713,12 +729,22 @@ export const snapshot_V1_0 = singleValueCodecDefinition<
 
         offset += UINT32_SIZE;
 
-        const restorePlan = buildRestorePlan(descriptors);
+        const targetEntities = accumulator?.entities ??
+          globalStateService.getStorageEntities();
+        const restorePlan = buildRestorePlan(
+          descriptors,
+          targetEntities,
+        );
 
         const chunkSets: StorageChunkSet[] = [];
 
         for (let index = 0; index < chunkSetCount; index++) {
-          const result = readChunkSet(offset, view, restorePlan);
+          const result = readChunkSet(
+            offset,
+            view,
+            restorePlan,
+            targetEntities,
+          );
 
           chunkSets.push(result.value);
           offset = result.nextOffset;

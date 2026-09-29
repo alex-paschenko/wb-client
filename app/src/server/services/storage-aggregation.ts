@@ -15,7 +15,7 @@ import type {
   MarketTickReceivedEvent,
   StorageFullSyncRequestEvent,
 } from '../types/events.js';
-import type { MarketTick } from '../types/market-statistics.js';
+import type { MarketTick } from '../../shared/types/ticks.js';
 import { getMiddleTimestamp } from '../utilities/time.js';
 import { Freezing } from '../utilities/freezing.js';
 import { eventBus } from './event-bus.js';

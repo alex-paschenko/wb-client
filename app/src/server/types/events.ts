@@ -6,7 +6,7 @@ import type {
   MarketRollingStatisticsByMarket,
 } from '../../shared/types/market-statistics-rolling.js';
 import type { SERVER_EVENT } from '../constants/events.js';
-import type { MarketTick } from './market-statistics.js';
+import type { MarketTick } from '../../shared/types/ticks.js';
 import type { MarketsByName } from '../../shared/types/market.js';
 import {
   ExtendedStoragePersistenceSnapshot,

@@ -1,3 +1,5 @@
+// app/src/server/dao/market-statistics-rolling.ts
+
 import type { Sql } from '../db/client.js';
 import { q } from '../db/client.js';
 import type { SelectParams } from '../types/db.js';

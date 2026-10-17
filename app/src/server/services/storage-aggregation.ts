@@ -14,6 +14,7 @@ import type {
   EntitiesRecalculatedEvent,
   MarketTickReceivedEvent,
   StorageFullSyncRequestEvent,
+  StrategiesCompletedEvent,
 } from '../types/events.js';
 import type { MarketTick } from '../../shared/types/ticks.js';
 import { getMiddleTimestamp } from '../utilities/time.js';
@@ -47,6 +48,9 @@ export class StorageAggregationService {
   private readonly entitiesRecalculatedAwaiters =
     new Awaiters<string, EntitiesRecalculatedEvent>();
 
+  private readonly strategiesCompletedAwaiters =
+    new Awaiters<string, StrategiesCompletedEvent>();
+
   private readonly lastEndedAtByMarket = new Map<string, number>();
 
   private snapshotWorkerBusy = false;
@@ -65,6 +69,11 @@ export class StorageAggregationService {
     eventBus.on(
       SERVER_EVENT.entitiesRecalculated,
       (event) => { this.handleEntitiesRecalculated(event); },
+    );
+
+    eventBus.on(
+      SERVER_EVENT.strategiesCompleted,
+      (event) => { this.handleStrategiesCompleted(event); },
     );
 
     eventBus.on(
@@ -89,22 +98,22 @@ export class StorageAggregationService {
 
     setInterval(() => {
       let marketName = '---';
-      let numOfPoints = 0;
+      let startL0Timestamp = 0;
       let size = 0;
 
       for (const [currentMarketName, storage] of storages.entries()) {
-        const currentNumOfPoints =
-          storage.size - storage.levelBoundaries[0];
+        const candles = storage.getAccessors()['candles'][CANDLE_NAME]  as LazyArray<MarketCandle>;
+        const currentL0Timestamp = candles.get(storage.levelBoundaries[0], 'receivedAt');
 
-        if (currentNumOfPoints > numOfPoints) {
+        if (currentL0Timestamp > startL0Timestamp) {
           size = storage.size;
-          numOfPoints = currentNumOfPoints;
+          startL0Timestamp = currentL0Timestamp;
           marketName = currentMarketName;
         }
       }
 
       console.log(
-        `Most active market: ${marketName} (L0: ${numOfPoints}, size: ${size})`,
+        `Most active market: ${marketName} (L0 startedAt: ${startL0Timestamp}, size: ${size})`,
       );
 
     //   if (marketName === '---') {
@@ -203,6 +212,36 @@ export class StorageAggregationService {
         SERVER_EVENT.storageDeltaCreated,
         { marketName, data },
       );
+    }
+
+    const size = storage.size;
+    const endedAt = storage.endedAt;
+    if (endedAt === null) {
+      return;
+    }
+
+    const completed = this.strategiesCompletedAwaiters.wait(marketName);
+
+    eventBus.emit(SERVER_EVENT.runStrategiesRequest, {
+      marketName,
+      accessors: storage.getAccessors(),
+      size,
+      endedAt,
+    });
+
+    const result = await completed;
+
+    if (
+      result.size !== size
+      || result.endedAt !== endedAt
+      || storage.size !== size
+      || storage.endedAt !== endedAt
+    ) {
+      throw new Error('Storage changed during strategy execution');
+    }
+
+    if (result.error !== undefined) {
+      throw result.error;
     }
 
     storage.clearAccessors();
@@ -432,6 +471,10 @@ export class StorageAggregationService {
     event: EntitiesRecalculatedEvent,
   ): void {
     this.entitiesRecalculatedAwaiters.resolve(event.marketName, event);
+  }
+
+  private handleStrategiesCompleted(event: StrategiesCompletedEvent): void {
+    this.strategiesCompletedAwaiters.resolve(event.marketName, event);
   }
 
   private async handleFullSyncRequest(

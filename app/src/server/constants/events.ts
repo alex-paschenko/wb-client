@@ -18,4 +18,19 @@ export const SERVER_EVENT = {
   addStorageEntities: 'add storage entities',
   recalculateEntitiesRequest: 'recalculate entities request',
   entitiesRecalculated: 'entities recalculated',
+
+  orderBookDepthSubscription: 'order book depth subscriprion',
+  orderBookDepthUpdate: 'order book depth update',
+
+  runStrategiesRequest: 'run strategies request',
+  strategiesCompleted: 'strategies completed',
+
+  orderReceived: 'order received',
+  createMarketOrderRequest: 'create market order request',
+  createLimitOrderRequest: 'create limit order request',
+  orderCancelRequest: 'order cancel request',
+
+  depthPersistenceRequest: 'depth persistence request',
+  orderPersistenceRequest: 'order persistence request',
+  strategyStatePersistenceRequest: 'strategy state persistence request',
 } as const;

@@ -1,3 +1,5 @@
+// app/src/server/dao/health.ts
+
 import { q } from '../db/client.js';
 import type { Sql } from '../db/client.js';
 

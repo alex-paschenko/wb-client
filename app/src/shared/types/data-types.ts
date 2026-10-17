@@ -27,9 +27,8 @@ export interface MarketPhaseValue {
 }
 
 export interface MarketForecastValue {
-  expectedReturn10s: IndicatorValue;
-  expectedReturn30s: IndicatorValue;
-  expectedReturn1m: IndicatorValue;
-  expectedReturn2m: IndicatorValue;
-  expectedReturn5m: IndicatorValue;
+  // Expected 60 s EMA residual, in promille; not a raw trade return.
+  expectedResidual1m3Ema: IndicatorValue;
+  expectedResidual1m4Ema: IndicatorValue;
+  expectedResidual1mCombined: IndicatorValue;
 }

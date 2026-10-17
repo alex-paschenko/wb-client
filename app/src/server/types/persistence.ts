@@ -7,6 +7,7 @@ import type {
   StorageChunk,
   StorageChunkSet,
 } from '../../shared/types/storage.js';
+import type { StrategyStateChange } from './strategies.js';
 
 export interface StorageChunkRow
   extends Omit<StorageChunk, 'view'> {
@@ -36,4 +37,15 @@ export interface StoragePersistenceSnapshot {
   startedAt: number;
   endedAt: number;
   data: Uint8Array;
+}
+
+export interface DepthPersistence {
+  marketName: string;
+  data: Uint8Array;
+  startReceivedAt: number;
+}
+
+export interface StrategyStateChangePersistence extends StrategyStateChange<string> {
+  marketName: string;
+  strategyName: string;
 }

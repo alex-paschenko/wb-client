@@ -28,6 +28,7 @@ export class EntityManager {
       const kindEntities = this.entities[kind];
 
       for (const { descriptor } of kindEntities) {
+        // Check for the codec presence
         entityBinaryCodec(descriptor.codec);
       }
 

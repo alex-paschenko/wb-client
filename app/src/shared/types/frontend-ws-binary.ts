@@ -5,3 +5,14 @@ export interface FrontendWsTransportData {
   clientId: number;
   data: Uint8Array<ArrayBufferLike>;
 }
+
+export interface FrontendWsBinaryHeader {
+  messageType: number;
+  serverId: number;
+  clientId: number;
+}
+
+export interface FrontendWsBinaryPacket {
+  header: FrontendWsBinaryHeader;
+  payload: Uint8Array;
+}

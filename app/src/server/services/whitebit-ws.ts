@@ -1,10 +1,15 @@
 // src/server/services/whitebit-ws.ts
+
 import { SECOND } from '../../shared/constants/time.js';
 import type {
   MarketRollingStatistics,
 } from '../../shared/types/market-statistics-rolling.js';
 import { SERVER_EVENT } from '../constants/events.js';
-import type { MarketsInfoUpdatedEvent } from '../types/events.js';
+import type {
+  MarketsInfoUpdatedEvent,
+  OrderBookDepthSubscriptionEvent,
+} from '../types/events.js';
+import type { RawOrderBookDepth } from '../types/order-book-depth.js';
 import { MarketTick } from '../../shared/types/ticks.js';
 import type {
   WhitebitMarketStatistics,
@@ -15,6 +20,8 @@ import { eventBus } from './event-bus.js';
 import { globalStateService } from '../../shared/services/global-state.js';
 
 const WS_REQUEST_TIMEOUT = 10 * SECOND;
+const DEPTH_LIMIT = 20;
+const DEPTH_PRICE_INTERVAL = '0';
 
 const SUBSCRIBE_TYPE = {
   marketStatistics: 'market statistics',
@@ -55,6 +62,14 @@ type SubscribeStateByType = {
   [TType in SubscribeType]: SubscribeState<SubscribePayloadByType[TType]>;
 };
 
+interface DepthSubscriptionState {
+  desired: boolean;
+  status: SubscribeStatus;
+  requestId: number;
+  timeout: ReturnType<typeof setTimeout> | null;
+  lastUpdateId: number | null;
+}
+
 export class WhitebitWsService {
   private readonly wsClient = new WhitebitWSClient({
     onOpen: () => this.handleWSOpen(),
@@ -69,7 +84,51 @@ export class WhitebitWsService {
     SubscribeStateByType[SubscribeType]
   >();
 
+  private readonly depthSubscriptions = new Map<string, DepthSubscriptionState>();
+  private stopDepthListener: (() => void) | null = null;
+  private readonly stopOrderListeners: (() => void)[] = [];
+
   public start(): void {
+    if (this.stopOrderListeners.length === 0) {
+      this.stopOrderListeners.push(eventBus.on(
+        SERVER_EVENT.createMarketOrderRequest,
+        ({ orderRequest, paperTrading }) => {
+          if (!paperTrading) {
+            this.realOrderUnavailable(
+              orderRequest.marketName, orderRequest.client_order_id,
+            );
+          }
+        },
+      ));
+
+      this.stopOrderListeners.push(eventBus.on(
+        SERVER_EVENT.createLimitOrderRequest,
+        ({ orderRequest, paperTrading }) => {
+          if (!paperTrading) {
+            this.realOrderUnavailable(
+              orderRequest.marketName, orderRequest.client_order_id,
+            );
+          }
+        },
+      ));
+
+      this.stopOrderListeners.push(eventBus.on(
+        SERVER_EVENT.orderCancelRequest,
+        ({ market, client_order_id, paperTrading }) => {
+          if (!paperTrading) {
+            this.realOrderUnavailable(market, client_order_id);
+          }
+        },
+      ));
+    }
+
+    if (!this.stopDepthListener) {
+      this.stopDepthListener = eventBus.on(
+        SERVER_EVENT.orderBookDepthSubscription,
+        (event) => this.handleDepthSubscriptionEvent(event),
+      );
+    }
+
     eventBus.on(
       SERVER_EVENT.marketsInfoUpdated,
       (event) => this.handleSubscribeEvent(
@@ -92,8 +151,110 @@ export class WhitebitWsService {
   }
 
   public stop(): void {
+    for (const unsubscribe of this.stopOrderListeners.splice(0)) {
+      unsubscribe();
+    }
+
+    this.stopDepthListener?.();
+    this.stopDepthListener = null;
     this.clearAllSubscriptionTimeouts();
+
+    for (const state of this.depthSubscriptions.values()) {
+      this.clearDepthTimeout(state);
+    }
+
+    this.depthSubscriptions.clear();
     this.wsClient.disconnect();
+  }
+
+  private realOrderUnavailable(
+    marketName: string,
+    client_order_id: number,
+  ): void {
+    eventBus.emit(
+      SERVER_EVENT.orderReceived,
+      {
+        marketName,
+        client_order_id,
+        paperTrading: false,
+        order: null,
+        error: {
+          code: 'REAL_ORDERS_DISABLED',
+          message: 'Real order execution has not been enabled',
+        },
+      },
+    );
+  }
+
+  private handleDepthSubscriptionEvent(
+    { marketName, action }: OrderBookDepthSubscriptionEvent,
+  ): void {
+    const state = this.depthSubscriptions.get(marketName);
+    if (!this.wsClient.isOpen()) {
+      if (action === 'unsubscribe') {
+        if (state) {
+          this.clearDepthTimeout(state);
+        }
+
+        this.depthSubscriptions.delete(marketName);
+      } else if (state) {
+        this.clearDepthTimeout(state);
+        state.desired = true;
+        state.status = 'waiting socket';
+        state.requestId = 0;
+        state.lastUpdateId = null;
+      } else {
+        this.depthSubscriptions.set(marketName, {
+          desired: true,
+          status: 'waiting socket',
+          requestId: 0,
+          timeout: null,
+          lastUpdateId: null,
+        });
+      }
+      return;
+    }
+
+    if (action === 'subscribe') {
+      if (state) {
+        state.desired = true;
+        if (state.status === 'waiting socket' && this.wsClient.isOpen()) {
+          this.requestDepthSubscribe(marketName, state);
+        }
+
+        return;
+      }
+
+      const next: DepthSubscriptionState = {
+        desired: true,
+        status: 'waiting socket',
+        requestId: 0,
+        timeout: null,
+        lastUpdateId: null,
+      };
+
+      this.depthSubscriptions.set(marketName, next);
+
+      if (this.wsClient.isOpen()) {
+        this.requestDepthSubscribe(marketName, next);
+      }
+
+      return;
+    }
+
+    if (!state) {
+      return;
+    }
+
+    state.desired = false;
+    state.lastUpdateId = null;
+
+    if (state.status === 'waiting socket') {
+      this.depthSubscriptions.delete(marketName);
+    } else if (state.status === 'active') {
+      this.requestDepthUnsubscribe(marketName, state);
+    }
+    // If subscribing, finish that request before sending the unsubscribe.
   }
 
   private handleSubscribeEvent<TType extends SubscribeType>(
@@ -168,6 +329,65 @@ export class WhitebitWsService {
       state.requestId = requestId;
       state.timeout = this.createSubscriptionTimeout(type, requestId);
     }
+
+    for (const [marketName, state] of this.depthSubscriptions) {
+      this.clearDepthTimeout(state);
+      state.lastUpdateId = null;
+      if (state.desired) {
+        this.requestDepthSubscribe(marketName, state);
+      } else {
+        this.depthSubscriptions.delete(marketName);
+      }
+    }
+  }
+
+  private requestDepthSubscribe(
+    marketName: string,
+    state: DepthSubscriptionState,
+  ): void {
+    this.clearDepthTimeout(state);
+    state.lastUpdateId = null;
+    state.requestId = this.wsClient.sendRequest('depth_subscribe', [
+      marketName, DEPTH_LIMIT, DEPTH_PRICE_INTERVAL, true,
+    ]);
+    state.status = 'subscribing';
+    state.timeout = this.createDepthTimeout(marketName, state.requestId);
+  }
+
+  private requestDepthUnsubscribe(
+    marketName: string,
+    state: DepthSubscriptionState,
+  ): void {
+    this.clearDepthTimeout(state);
+    state.lastUpdateId = null;
+    state.requestId = this.wsClient.sendRequest('depth_unsubscribe', [marketName]);
+    state.status = 'unsubscribing';
+    state.timeout = this.createDepthTimeout(marketName, state.requestId);
+  }
+
+  private createDepthTimeout(
+    marketName: string,
+    requestId: number,
+  ): ReturnType<typeof setTimeout> {
+    return setTimeout(
+      () => {
+        if (this.depthSubscriptions.get(marketName)?.requestId !== requestId) {
+          return;
+        }
+
+        console.error('WhiteBIT depth subscription timed out', { marketName, requestId });
+        this.wsClient.reconnect();
+      },
+      WS_REQUEST_TIMEOUT,
+    );
+  }
+
+  private clearDepthTimeout(state: DepthSubscriptionState): void {
+    if (state.timeout !== null) {
+      clearTimeout(state.timeout);
+    }
+
+    state.timeout = null;
   }
 
   private createSubscribingState<TType extends SubscribeType>(
@@ -210,6 +430,11 @@ export class WhitebitWsService {
       return;
     }
 
+    if (message.method === 'depth_update') {
+      this.handleDepthUpdate(message);
+      return;
+    }
+
     if (!this.isMarketUpdateMessage(message)) {
       return;
     }
@@ -224,6 +449,36 @@ export class WhitebitWsService {
       return false;
     }
 
+    for (const [marketName, state] of this.depthSubscriptions) {
+      if (state.requestId !== message.id) {
+        continue;
+      }
+
+      this.clearDepthTimeout(state);
+
+      if (!this.isSuccessReceipt(message)) {
+        console.error('WhiteBIT depth subscription request failed', {
+          marketName, status: state.status, message,
+        });
+
+        this.wsClient.reconnect();
+      } else if (state.status === 'subscribing') {
+        state.status = 'active';
+        if (!state.desired) {
+          this.requestDepthUnsubscribe(marketName, state);
+        }
+
+      } else if (state.status === 'unsubscribing') {
+        if (state.desired) {
+          this.requestDepthSubscribe(marketName, state);
+        } else {
+          this.depthSubscriptions.delete(marketName);
+        }
+      }
+
+      return true;
+    }
+
     const entry = this.findSubscribeByRequestId(message.id);
 
     if (!entry) {
@@ -235,10 +490,7 @@ export class WhitebitWsService {
       return false;
     }
 
-    const [
-      type,
-      state,
-    ] = entry;
+    const [type, state] = entry;
 
     this.clearSubscriptionTimeout(state);
 
@@ -282,14 +534,77 @@ export class WhitebitWsService {
     return true;
   }
 
+  private handleDepthUpdate(message: Record<string, unknown>): void {
+    const params = message.params;
+    if (
+      !Array.isArray(params)
+      || params.length !== 3
+      || (params[0] !== true && params[0] !== false)
+      || typeof params[2] !== 'string'
+    ) {
+      return;
+    }
+
+    const state = this.depthSubscriptions.get(params[2]);
+
+    if (
+      !state
+      || !state.desired
+      || (state.status !== 'active' && state.status !== 'subscribing')
+    ) {
+      return;
+    }
+
+    const body = params[1];
+    if (!body || typeof body !== 'object') {
+      return;
+    }
+
+    const { update_id: updateId, past_update_id: pastUpdateId } =
+      body as Record<string, unknown>;
+
+    if (!Number.isSafeInteger(updateId) || (updateId as number) < 0) {
+      this.requestDepthUnsubscribe(params[2], state);
+      return;
+    }
+
+    if (params[0] === true) {
+      if (pastUpdateId !== undefined) {
+        this.requestDepthUnsubscribe(params[2], state);
+        return;
+      }
+
+      state.lastUpdateId = updateId as number;
+    } else {
+      // Ignore deltas until a full snapshot establishes a transport baseline.
+      if (state.lastUpdateId === null) {
+        if (state.status === 'active') {
+          console.warn('WhiteBIT depth delta before snapshot', { marketName: params[2] });
+          this.requestDepthUnsubscribe(params[2], state);
+        }
+        return;
+      }
+      if (pastUpdateId !== state.lastUpdateId ||
+        (updateId as number) < state.lastUpdateId) {
+        console.warn('WhiteBIT depth update sequence gap', {
+          marketName: params[2], pastUpdateId,
+          lastUpdateId: state.lastUpdateId, updateId,
+        });
+        this.requestDepthUnsubscribe(params[2], state);
+        return;
+      }
+      state.lastUpdateId = updateId as number;
+    }
+
+    // Forward the exact parsed params object; consumers own all book processing.
+    eventBus.emit(SERVER_EVENT.orderBookDepthUpdate, params as RawOrderBookDepth);
+  }
+
   private findSubscribeByRequestId(
     requestId: number,
   ): [SubscribeType, SubscribeStateByType[SubscribeType]] | null {
     for (const entry of this.subscribes) {
-      const [
-        ,
-        state,
-      ] = entry;
+      const [, state] = entry;
 
       if (state.requestId === requestId) {
         return entry;
@@ -323,21 +638,24 @@ export class WhitebitWsService {
     type: SubscribeType,
     requestId: number,
   ): ReturnType<typeof setTimeout> {
-    return setTimeout(() => {
-      const state = this.subscribes.get(type);
+    return setTimeout(
+      () => {
+        const state = this.subscribes.get(type);
 
-      if (!state || state.requestId !== requestId) {
-        return;
-      }
+        if (!state || state.requestId !== requestId) {
+          return;
+        }
 
-      console.error('WhiteBIT subscription request timed out', {
-        type,
-        status: state.status,
-        requestId,
-      });
+        console.error('WhiteBIT subscription request timed out', {
+          type,
+          status: state.status,
+          requestId,
+        });
 
-      this.wsClient.reconnect();
-    }, WS_REQUEST_TIMEOUT);
+        this.wsClient.reconnect();
+      },
+      WS_REQUEST_TIMEOUT,
+    );
   }
 
   private clearSubscriptionTimeout(
@@ -360,10 +678,7 @@ export class WhitebitWsService {
   private handleMarketUpdateMessage(
     message: WhitebitMarketUpdateMessage,
   ): void {
-    const [
-      marketName,
-      statistics,
-    ] = message.params;
+    const [marketName, statistics] = message.params;
 
     if (message.params.length > 2) {
       console.error('We are lost WS Market tick data', message.params);
@@ -381,10 +696,7 @@ export class WhitebitWsService {
       return;
     }
 
-    const tick: MarketTick = {
-      receivedAt,
-      price,
-    };
+    const tick: MarketTick = { receivedAt, price };
 
     const rollingStatistics = this.toRollingStatistics(
       receivedAt,
@@ -433,10 +745,7 @@ export class WhitebitWsService {
       return false;
     }
 
-    const [
-      marketName,
-      statistics,
-    ] = message.params;
+    const [marketName, statistics] = message.params;
 
     return (
       typeof marketName === 'string' &&

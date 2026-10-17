@@ -51,3 +51,7 @@ export async function waitFor<T>(
     );
   });
 }
+
+export function pause(timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, timeoutMs));
+}

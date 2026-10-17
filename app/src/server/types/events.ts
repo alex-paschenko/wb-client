@@ -8,13 +8,28 @@ import type {
 import type { SERVER_EVENT } from '../constants/events.js';
 import type { MarketTick } from '../../shared/types/ticks.js';
 import type { MarketsByName } from '../../shared/types/market.js';
-import {
+import type {
   ExtendedStoragePersistenceSnapshot,
   StorageAccessors,
 } from '../../shared/types/storage.js';
+import type {
+  RawOrderBookDepth,
+  OrderBookSubscription,
+} from './order-book-depth.js';
+import type {
+  Order,
+  OrderCancel,
+  OrderError,
+  OrderKind,
+  OrderLimitRequest,
+  OrderMarketRequest,
+} from './orders.js';
+import type {
+  DepthPersistence,
+  StrategyStateChangePersistence,
+} from './persistence.js';
 
-export type ServerEventName =
-  typeof SERVER_EVENT[keyof typeof SERVER_EVENT];
+export type ServerEventName = typeof SERVER_EVENT[keyof typeof SERVER_EVENT];
 
 export interface MarketsInfoUpdatedEvent {
   markets: MarketsByName;
@@ -76,6 +91,61 @@ export interface MarketRemovedEvent {
   marketName: string;
 }
 
+export type OrderBookDepthSubscriptionEvent = OrderBookSubscription;
+
+export type OrderBookDepthUpdateEvent = RawOrderBookDepth;
+
+export interface RunStrategiesRequestEvent {
+  accessors: StorageAccessors;
+  marketName: string;
+  size: number;
+  endedAt: number;
+}
+
+export interface StrategiesCompletedEvent {
+  marketName: string;
+  size: number;
+  endedAt: number;
+  error?: unknown;
+}
+
+export interface CreateMarketOrderRequestEvent {
+  orderRequest: OrderMarketRequest;
+  paperTrading: boolean;
+}
+
+export interface CreateLimitOrderRequestEvent {
+  orderRequest: OrderLimitRequest;
+  paperTrading: boolean;
+}
+
+export type OrderCancelEvent = OrderCancel;
+
+export interface OrderReceivedEvent {
+  marketName: string;
+  client_order_id: number;
+  order: Order | null;
+  error: OrderError | null;
+  paperTrading: boolean;
+}
+
+export interface OrderPersistenceRequestEvent {
+  marketName: string;
+  receivedAt: number;
+  client_order_id: number;
+  strategyName: string;
+  orderKind: OrderKind;
+  paperTrading: boolean;
+  order: Order | null;
+  error: OrderError | null;
+}
+
+export type DepthPersistenceRequestEvent = DepthPersistence;
+
+export interface StrategyStatePersistenceRequestEvent {
+  changes: StrategyStateChangePersistence[];
+}
+
 export interface ServerEventMap {
   [SERVER_EVENT.marketsInfoUpdated]: MarketsInfoUpdatedEvent;
 
@@ -94,4 +164,20 @@ export interface ServerEventMap {
   [SERVER_EVENT.storageDeltaCreated]:StorageDeltaCreatedEvent;
   [SERVER_EVENT.storageFullSyncRequest]: StorageFullSyncRequestEvent;
   [SERVER_EVENT.storageFullSyncResults]: StorageFullSyncResultsEvent;
+
+  [SERVER_EVENT.orderBookDepthSubscription]: OrderBookDepthSubscriptionEvent;
+  [SERVER_EVENT.orderBookDepthUpdate]: OrderBookDepthUpdateEvent;
+
+  [SERVER_EVENT.runStrategiesRequest]: RunStrategiesRequestEvent;
+  [SERVER_EVENT.strategiesCompleted]: StrategiesCompletedEvent;
+
+  [SERVER_EVENT.orderReceived]: OrderReceivedEvent;
+  [SERVER_EVENT.createMarketOrderRequest]: CreateMarketOrderRequestEvent;
+  [SERVER_EVENT.createLimitOrderRequest]: CreateLimitOrderRequestEvent;
+  [SERVER_EVENT.orderCancelRequest]: OrderCancelEvent;
+
+  [SERVER_EVENT.depthPersistenceRequest]: DepthPersistenceRequestEvent;
+  [SERVER_EVENT.orderPersistenceRequest]: OrderPersistenceRequestEvent;
+  [SERVER_EVENT.strategyStatePersistenceRequest]:
+    StrategyStatePersistenceRequestEvent;
 }

@@ -1,0 +1,198 @@
+// app/src/shared/utilities/codecs/definitions/order-receipt-v1_0.ts
+
+import { orderTypeNames } from '../../../constants/order-receipt.js';
+import type {
+  Order, OrderError, OrderReceiptBody,
+} from '../../../types/order-receipt.js';
+import { singleValueCodecDefinition } from './codec-definition-helpers.js';
+
+// Byte 0: presence bits (order, error). An order has ten float64 values,
+// six length-prefixed UTF-8 strings and one byte of boolean flags.
+// An error has a code discriminator (float64 or string), message and an
+// optional JSON value for the exchange-specific `errors` field.
+// To change this layout, add a new codec version; do not edit v1.0.
+const encoder = new TextEncoder();
+const decoder = new TextDecoder('utf-8', { fatal: true });
+const numberFields = [
+  'id', 'ctime', 'mtime', 'price', 'amount', 'left',
+  'deal_stock', 'deal_money', 'deal_fee', 'client_order_id',
+] as const satisfies readonly (keyof Order)[];
+const stringFields = [
+  'market', 'type', 'side', 'stp', 'status', 'position_side',
+] as const satisfies readonly (keyof Order)[];
+
+const sides = ['sell', 'buy'] as const;
+const stps = ['no', 'co', 'cn', 'cb'] as const;
+const statuses = [
+  'OPEN', 'PARTIALLY_FILLED', 'FILLED', 'CANCELED', 'CANCELED_STP',
+  'CANCELED_TAKER_BAND', 'CANCELED_RPI', 'AUTO_CANCELED_REDUCE_ONLY',
+  'AUTO_CANCELED_LIQUIDATION', 'DELISTING',
+] as const;
+const positionSides = ['LONG', 'SHORT', 'BOTH'] as const;
+
+function checked<T extends string>(value: string, values: readonly T[]): T {
+  if (!values.includes(value as T)) {
+    throw new TypeError(`Invalid order receipt value: ${value}`);
+  }
+  return value as T;
+}
+
+function stringSize(value: string): number {
+  const length = encoder.encode(value).length;
+  if (length > 0xffffffff) throw new RangeError('Order receipt string too long');
+  return 4 + length;
+}
+
+function errorDetails(error: OrderError): string | null {
+  if (error.errors === undefined) return null;
+  const value = JSON.stringify(error.errors);
+  if (value === undefined) throw new TypeError('Invalid order error details');
+  return value;
+}
+
+class Writer {
+  constructor(public offset: number, private readonly view: DataView) {}
+
+  byte(value: number): void {
+    this.view.setUint8(this.offset++, value);
+  }
+
+  float64(value: number): void {
+    this.view.setFloat64(this.offset, value, true);
+    this.offset += 8;
+  }
+
+  string(value: string): void {
+    const bytes = encoder.encode(value);
+    if (bytes.length > 0xffffffff) throw new RangeError('Order receipt string too long');
+    this.view.setUint32(this.offset, bytes.length, true);
+    this.offset += 4;
+    new Uint8Array(
+      this.view.buffer, this.view.byteOffset + this.offset, bytes.length,
+    ).set(bytes);
+    this.offset += bytes.length;
+  }
+}
+
+class Reader {
+  constructor(public offset: number, private readonly view: DataView) {}
+
+  private require(length: number): void {
+    if (length > this.view.byteLength - this.offset) {
+      throw new RangeError('Truncated order receipt');
+    }
+  }
+
+  byte(): number {
+    this.require(1);
+    return this.view.getUint8(this.offset++);
+  }
+
+  float64(): number {
+    this.require(8);
+    const value = this.view.getFloat64(this.offset, true);
+    this.offset += 8;
+    return value;
+  }
+
+  string(): string {
+    this.require(4);
+    const length = this.view.getUint32(this.offset, true);
+    this.offset += 4;
+    this.require(length);
+    const value = decoder.decode(new Uint8Array(
+      this.view.buffer, this.view.byteOffset + this.offset, length,
+    ));
+    this.offset += length;
+    return value;
+  }
+}
+
+function readOrder(reader: Reader): Order {
+  const [id, ctime, mtime, price, amount, left, deal_stock,
+    deal_money, deal_fee, client_order_id] =
+    numberFields.map(() => reader.float64());
+  const [market, type, side, stp, status, position_side] =
+    stringFields.map(() => reader.string());
+  const flags = reader.byte();
+  if (flags & ~0x1f) throw new TypeError('Invalid order receipt flags');
+  return {
+    id, ctime, mtime, price, amount, left, deal_stock,
+    deal_money, deal_fee, client_order_id,
+    market, type: checked(type, orderTypeNames), side: checked(side, sides),
+    stp: checked(stp, stps), status: checked(status, statuses),
+    position_side: checked(position_side, positionSides),
+    post_only: !!(flags & 1), ioc: !!(flags & 2),
+    rpi: !!(flags & 4), retail: !!(flags & 8),
+    reduce_only: !!(flags & 16),
+  };
+}
+
+export const orderReceipt_V1_0 =
+  singleValueCodecDefinition<OrderReceiptBody>({
+    getSize: ({ order, error }) => {
+      let size = 1;
+      if (order) {
+        size += numberFields.length * 8 + 1;
+        for (const field of stringFields) size += stringSize(order[field]);
+      }
+      if (error) {
+        size += 1 + (typeof error.code === 'number'
+          ? 8 : stringSize(error.code));
+        size += stringSize(error.message) + 1;
+        const details = errorDetails(error);
+        if (details !== null) size += stringSize(details);
+      }
+      return size;
+    },
+    write: (offset, view, value) => {
+      const writer = new Writer(offset, view);
+      writer.byte((value.order ? 1 : 0) | (value.error ? 2 : 0));
+      if (value.order) {
+        for (const field of numberFields) writer.float64(value.order[field]);
+        for (const field of stringFields) writer.string(value.order[field]);
+        const order = value.order;
+        writer.byte(
+          (order.post_only ? 1 : 0) | (order.ioc ? 2 : 0) |
+          (order.rpi ? 4 : 0) | (order.retail ? 8 : 0) |
+          (order.reduce_only ? 16 : 0),
+        );
+      }
+      if (value.error) {
+        const error = value.error;
+        writer.byte(typeof error.code === 'number' ? 0 : 1);
+        if (typeof error.code === 'number') writer.float64(error.code);
+        else writer.string(error.code);
+        writer.string(error.message);
+        const details = errorDetails(error);
+        writer.byte(details === null ? 0 : 1);
+        if (details !== null) writer.string(details);
+      }
+      return { value, nextOffset: writer.offset };
+    },
+    read: (offset, view) => {
+      const reader = new Reader(offset, view);
+      const presence = reader.byte();
+      if (presence & ~3) throw new TypeError('Invalid order receipt presence');
+      const order = presence & 1 ? readOrder(reader) : null;
+      let error: OrderError | null = null;
+      if (presence & 2) {
+        const codeType = reader.byte();
+        if (codeType !== 0 && codeType !== 1) {
+          throw new TypeError('Invalid order error code type');
+        }
+
+        const code = codeType === 0 ? reader.float64() : reader.string();
+        const message = reader.string();
+        const hasDetails = reader.byte();
+
+        if (hasDetails !== 0 && hasDetails !== 1) {
+          throw new TypeError('Invalid order error details flag');
+        }
+
+        error = { code, message };
+        if (hasDetails) error.errors = JSON.parse(reader.string());
+      }
+      return { value: { order, error }, nextOffset: reader.offset };
+    },
+  });

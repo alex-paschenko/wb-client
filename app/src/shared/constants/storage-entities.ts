@@ -8,3 +8,5 @@ export const STORAGE_ENTITY_KINDS = [
 export type StorageEntityKind = typeof STORAGE_ENTITY_KINDS[number];
 
 export const CANDLE_NAME = 'candle';
+
+export const MARKET_FORECAST_NAME = 'market-forecast';

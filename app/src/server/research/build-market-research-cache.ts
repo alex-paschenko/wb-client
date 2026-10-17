@@ -31,6 +31,7 @@ import {
 import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { StatementSync } from 'node:sqlite';
+import { exit } from 'node:process';
 
 import {
   CANDLE_NAME,
@@ -1000,6 +1001,8 @@ async function main(): Promise<void> {
         'partial output was removed.',
       );
     }
+
+    exit(0);
   }
 }
 

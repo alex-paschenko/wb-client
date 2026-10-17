@@ -1,9 +1,10 @@
-import { q } from '../db/client.js';
+// app/src/server/dao/api-logs.ts
+
+import { q, type Sql } from '../db/client.js';
 import {
   nullifyUndefined,
   toJsonObject
 } from '../utilities/db-helpers.js';
-import type { Sql } from '../db/client.js';
 
 export interface CreateApiLogInput {
   service: string;

@@ -6,6 +6,8 @@ import type {
   MarketCandle,
 } from '../../../shared/types/data-types.js';
 import type { StorageAccessors } from '../../../shared/types/storage.js';
+import type { EntityCodecName } from '../../../shared/utilities/codecs/definitions/index.js';
+import type { EntityDataDescriptor } from '../../../shared/types/storage-entities.js';
 import type { EntityAffectedRange } from '../../types/entities.js';
 import { IncrementalIndicator } from './incremental-indicator.js';
 
@@ -19,12 +21,16 @@ extends IncrementalIndicator<RecursiveFilterState> {
   protected constructor(
     protected readonly tau: number,
     name: string,
+    codec: EntityCodecName = 'float32 (nullable) v1.0',
+    data: readonly EntityDataDescriptor[] = [
+      { kind: 'line', group: 'recursiveFilter' },
+    ],
   ) {
     super({
       kind: 'indicators',
       name,
-      codec: 'float32 (nullable) v1.0',
-      data: [{ kind: 'line', group: 'recursiveFilter' }],
+      codec,
+      data,
       requiresRemovedValues: false,
       empty: null,
     });
@@ -144,6 +150,20 @@ extends IncrementalIndicator<RecursiveFilterState> {
         ? candles.get(range.startIndex - 1, 'receivedAt')
         : null;
 
+    // A newly registered EMA has empty historical chunks after snapshot
+    // migration. Reconstruct its prefix before a batched or partial update.
+    if (range.startIndex > 0 && previousValue === null) {
+      previousReceivedAt = null;
+      for (let index = 0; index < range.startIndex; index++) {
+        const candle = candles.get(index);
+        previousValue = this.calculateNextValue(
+          previousValue, previousReceivedAt, candle,
+        );
+        previousReceivedAt = candle.receivedAt;
+        values.set(index, previousValue);
+      }
+    }
+
     for (
       let index = range.startIndex;
       index <= range.endIndex;
@@ -205,7 +225,7 @@ extends IncrementalIndicator<RecursiveFilterState> {
       return null;
     }
 
-    const alpha = 1 - Math.exp(-elapsed / effectiveTau);
+    const alpha = -Math.expm1(-elapsed / effectiveTau);
 
     return previousValue + alpha * (input - previousValue);
   }

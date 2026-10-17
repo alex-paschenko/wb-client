@@ -1,5 +1,5 @@
-// app/src/server/research/market-forecast-comparison-analysis-v5.ts
-// Read-only, two-pass comparison of direct 3-tau and derived 4-tau banks.
+// app/src/server/research/market-forecast-comparison-analysis-v6.ts
+// Read-only, chronological base-fit / meta-fit / test research pipeline.
 // Run from app with node --import tsx; append --self-test for offline tests.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -10,7 +10,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 const RESEARCH_CACHE_PATH = resolve(
   'research-output/market-research-cache/' +
-  'market-research-cache_endedAt-2026-09-27_22-00-12Z.sqlite',
+  'market-research-cache_endedAt-2026-10-02_01-40-49Z.sqlite',
 );
 const BASE_CURRENCY = 'USDT';
 const PRICE_EMA_TAU_MS = 7_000;
@@ -21,15 +21,17 @@ const TEST_START_ISO: string | null = null;
 const TEST_END_ISO: string | null = null;
 const MARKET_NAMES: string[] = [];
 const TRAIN_FRACTION = 0.7;
+const BASE_FIT_FRACTION = 0.7;
 const HORIZON = 60_000;
 const MAX_TARGET_DELAY = 10_000;
+const TEST_BLOCK_MS = 6 * 60 * 60_000;
+const META_MIN_SAMPLES = 30;
+const META_MIN_SPACED = 10;
 const MIN_TRAIN_SAMPLES = integer('MF_MIN_TRAIN_SAMPLES', 30, 1, 1_000_000);
 const QUALITY_MIN_SAMPLES = 100;
-const ENTRY_MIN_NONOVERLAPPING = 100;
-const ENTRY_MIN_SPACED_MEAN_RATIO = 0.5;
 const QUALITY_BLOCKS = 3;
 const QUALITY_MIN_BLOCK_SAMPLES = 30;
-const OUTPUT = resolve('research-output/market-forecast-comparison-v5');
+const OUTPUT = resolve('research-output/market-forecast-comparison-v6');
 const ENTRY_THRESHOLDS = [1, 1.25, 1.5, 1.75, 1.9, 2, 2.25, 2.5, 3];
 const ENTRY_BANDS = [
   [1, 1.25], [1.25, 1.5], [1.5, 1.75], [1.75, 1.9], [1.9, 2],
@@ -56,11 +58,15 @@ const SPEED_BANK_STATE_COUNT = (ALIGNED_SPEED_BINS.length + 1) ** 2 *
 const DERIVED_SPEED_BANK_STATE_COUNT = (ALIGNED_SPEED_BINS.length + 1) *
   (SCALE_CURVATURE_BINS.length + 1) * (SLOW_SPEED_BINS.length + 1);
 let ACTIVE_STATE_COUNT = SPEED_BANK_STATE_COUNT;
-type ModelId = 'speed-bank' | 'speed-bank-derived';
-type ModelConfig = { id: ModelId; stateCount: number };
+type ModelId = 'speed-bank' | 'speed-bank-derived' | 'combined';
+type BaseModelId = Exclude<ModelId, 'combined'>;
+type ModelConfig = { id: BaseModelId; stateCount: number };
 const MODELS: readonly ModelConfig[] = [
   { id: 'speed-bank', stateCount: SPEED_BANK_STATE_COUNT },
   { id: 'speed-bank-derived', stateCount: DERIVED_SPEED_BANK_STATE_COUNT },
+];
+const EVAL_MODELS: readonly ModelId[] = [
+  'speed-bank', 'speed-bank-derived', 'combined',
 ];
 type Market = { id: number; name: string; stock: string; money: string };
 type Row = { t: number; p: number; cell: number; sign: number; e?: number | null };
@@ -356,21 +362,6 @@ class CellQuality {
     return flags.join('|') || 'no-listed-flags';
   }
 }
-function entryQualityReasons(cell: number, cells: ReturnType<typeof newCells>,
-  quality: CellQuality): string[] {
-  const diagnostic = quality.flags(cell, cells);
-  const reasons = diagnostic === 'no-listed-flags' ? [] : diagnostic.split('|');
-  const mean = cells.mean[cell];
-  const spaced = quality.spaced.mean[cell];
-  if (quality.spaced.count[cell] < ENTRY_MIN_NONOVERLAPPING) reasons.push('few-nonoverlapping');
-  if (!Number.isFinite(mean) || mean === 0 || Math.sign(spaced) !== Math.sign(mean)) {
-    reasons.push('nonoverlapping-sign-disagreement');
-  } else if (Math.abs(spaced) < ENTRY_MIN_SPACED_MEAN_RATIO * Math.abs(mean)) {
-    reasons.push('nonoverlapping-effect-collapse');
-  }
-  return reasons;
-}
-
 type SoftReliability = {
   table: Float64Array;
   factor: Float64Array;
@@ -575,7 +566,7 @@ type Origin = {
   t: number; p: number; e: number | null;
   direct: { cell: number; sign: number } | null;
   derived: DerivedSpeedBankState | null;
-  forecasts?: [number, number];
+  forecasts?: [number, number, number];
   calibrationGroups?: { group: Calibration; basis: 'ema-residual' | 'raw';
     forecast: number }[];
 };
@@ -598,7 +589,7 @@ type Trained = {
   table?: SoftReliability;
   train: Map<string, TrainCounts>;
 };
-function stateOf(origin: Origin, id: ModelId) {
+function stateOf(origin: Origin, id: BaseModelId) {
   return id === 'speed-bank' ? origin.direct : origin.derived;
 }
 function constantPriceEma(p: number, e: number, dt: number) {
@@ -693,6 +684,161 @@ function trainMarket(db: DatabaseSync, market: Market, trained: readonly Trained
   return { banks, ema };
 }
 
+const META_CELL_COUNT = (FORECAST_BINS.length + 1) ** 2;
+function metaIndex(direct: number, derived: number) {
+  return bin(direct, FORECAST_BINS) * (FORECAST_BINS.length + 1) +
+    bin(derived, FORECAST_BINS);
+}
+type MetaCoverage = {
+  origins: number; commonForecasts: number; valid: number;
+  purged: number; late: number; emaUnavailable: number;
+  lastTarget: number;
+};
+class MetaGrid {
+  readonly count = new Float64Array(META_CELL_COUNT);
+  readonly mean = new Float64Array(META_CELL_COUNT);
+  readonly m2 = new Float64Array(META_CELL_COUNT);
+  readonly spacedCount = new Float64Array(META_CELL_COUNT);
+  readonly spacedMean = new Float64Array(META_CELL_COUNT);
+  readonly spacedM2 = new Float64Array(META_CELL_COUNT);
+  readonly anchorSum = new Float64Array(META_CELL_COUNT);
+  readonly actualSum = new Float64Array(META_CELL_COUNT);
+  readonly marketCount = new Uint32Array(META_CELL_COUNT);
+  readonly largestMarketCount = new Float64Array(META_CELL_COUNT);
+  readonly largestMarket = new Array<string>(META_CELL_COUNT).fill('');
+  readonly correction = new Float64Array(META_CELL_COUNT);
+  readonly reliability = new Float64Array(META_CELL_COUNT);
+  private readonly marketSamples = new Uint32Array(META_CELL_COUNT);
+  private readonly lastTarget = new Float64Array(META_CELL_COUNT);
+  pooledVariance = NaN;
+  priorVariance = NaN;
+  estimatedCells = 0;
+  readonly coverage: MetaCoverage = {
+    origins: 0, commonForecasts: 0, valid: 0, purged: 0,
+    late: 0, emaUnavailable: 0, lastTarget: -Infinity,
+  };
+  beginMarket() {
+    this.marketSamples.fill(0);
+    this.lastTarget.fill(-Infinity);
+  }
+  observe(origin: Origin, target: Tick, actual: number) {
+    const [direct, derived] = origin.forecasts!;
+    const cell = metaIndex(direct, derived);
+    const anchor = (direct + derived) / 2;
+    const value = actual - anchor;
+    const n = ++this.count[cell];
+    const delta = value - this.mean[cell];
+    this.mean[cell] += delta / n;
+    this.m2[cell] += delta * (value - this.mean[cell]);
+    this.anchorSum[cell] += anchor;
+    this.actualSum[cell] += actual;
+    this.marketSamples[cell]++;
+    if (origin.t >= this.lastTarget[cell]) {
+      const spaced = ++this.spacedCount[cell];
+      const spacedDelta = value - this.spacedMean[cell];
+      this.spacedMean[cell] += spacedDelta / spaced;
+      this.spacedM2[cell] += spacedDelta *
+        (value - this.spacedMean[cell]);
+      this.lastTarget[cell] = target.t;
+    }
+    this.coverage.valid++;
+    this.coverage.lastTarget = Math.max(this.coverage.lastTarget, target.t);
+  }
+  endMarket(name: string) {
+    for (let cell = 0; cell < META_CELL_COUNT; cell++) {
+      const n = this.marketSamples[cell];
+      if (n) this.marketCount[cell]++;
+      if (n > this.largestMarketCount[cell]) {
+        this.largestMarketCount[cell] = n;
+        this.largestMarket[cell] = name;
+      }
+    }
+  }
+  freeze() {
+    let pooledM2 = 0;
+    let pooledDf = 0;
+    for (let i = 0; i < META_CELL_COUNT; i++) {
+      const n = this.spacedCount[i];
+      if (n > 1) {
+        pooledM2 += this.spacedM2[i];
+        pooledDf += n - 1;
+      }
+    }
+    this.pooledVariance = pooledDf ? pooledM2 / pooledDf : 1;
+    let secondMoment = 0;
+    let samplingVariance = 0;
+    for (let i = 0; i < META_CELL_COUNT; i++) {
+      const n = this.spacedCount[i];
+      if (this.count[i] < META_MIN_SAMPLES ||
+        n < META_MIN_SPACED) continue;
+      const variance = this.spacedM2[i] / (n - 1);
+      secondMoment += this.mean[i] ** 2;
+      samplingVariance += variance / n;
+      this.estimatedCells++;
+    }
+    this.priorVariance = Math.max(1e-6,
+      (secondMoment - samplingVariance) /
+        Math.max(1, this.estimatedCells));
+    for (let i = 0; i < META_CELL_COUNT; i++) {
+      const n = this.spacedCount[i];
+      if (this.count[i] < META_MIN_SAMPLES ||
+        n < META_MIN_SPACED) continue;
+      const variance = this.spacedM2[i] / (n - 1);
+      const se2 = Math.max(0, Number.isFinite(variance)
+        ? variance : this.pooledVariance) / n;
+      this.reliability[i] = this.priorVariance /
+        (this.priorVariance + se2);
+      this.correction[i] = this.mean[i] * this.reliability[i];
+    }
+  }
+  predict(direct: number, derived: number) {
+    if (!Number.isFinite(direct)) return derived;
+    if (!Number.isFinite(derived)) return direct;
+    return (direct + derived) / 2 +
+      this.correction[metaIndex(direct, derived)];
+  }
+}
+function fitMetaMarket(db: DatabaseSync, market: Market,
+  filters: { banks: SpeedBanks; ema: PriceEma },
+  trained: readonly Trained[], grid: MetaGrid,
+  metaStart: number, splitAt: number) {
+  grid.beginMarket();
+  const pending: Origin[] = [];
+  let head = 0;
+  for (const tick of readTicks(db, market.id, metaStart, splitAt)) {
+    const state = filters.banks.update(tick.t, tick.p);
+    const e = filters.ema.update(tick.t, tick.p);
+    while (head < pending.length && pending[head].t + HORIZON <= tick.t) {
+      const origin = pending[head++];
+      if (tick.t - origin.t - HORIZON > MAX_TARGET_DELAY) {
+        grid.coverage.late++;
+      } else if (origin.e === null || e === null) {
+        grid.coverage.emaUnavailable++;
+      } else {
+        grid.observe(origin, tick, labelReturns(origin, tick, e).residual);
+      }
+    }
+    if (head > 4096 && head * 2 > pending.length) {
+      pending.splice(0, head);
+      head = 0;
+    }
+    grid.coverage.origins++;
+    const direct = forecast(state.direct, trained[0].table!.table);
+    const derived = forecast(state.derived, trained[1].table!.table);
+    if (!Number.isFinite(direct) || !Number.isFinite(derived) ||
+      direct === 0 || derived === 0) continue;
+    grid.coverage.commonForecasts++;
+    if (tick.t + HORIZON >= splitAt) {
+      grid.coverage.purged++;
+    } else {
+      pending.push({ ...tick, e, ...state,
+        forecasts: [direct, derived, NaN] });
+    }
+  }
+  grid.coverage.purged += pending.length - head;
+  grid.endMarket(market.name);
+}
+
 type Calibration = {
   samples: number; statuses: Record<string, number>; unavailable: number;
   forecast: number; actual: number; correct: number; wrong: number; flat: number;
@@ -710,6 +856,10 @@ class TestStats {
   readonly calibration = new Map<string, Calibration>();
   readonly pairs = new Map<string, PairAggregate>();
   readonly grid = new Map<string, PairAggregate>();
+  readonly timeGrid = new Map<string, PairAggregate>();
+  readonly tailByBlock = new Map<string, PairAggregate>();
+  readonly combinedPairs = new Map<string,
+    [PairAggregate, PairAggregate]>();
   readonly coverage = { origins: 0, commonForecasts: 0,
     commonValidLabels: 0, lateTargets: 0, noTargets: 0 };
   readonly market: string;
@@ -732,11 +882,11 @@ class TestStats {
   onOrigin(origin: Origin) {
     this.coverage.origins++;
     origin.calibrationGroups = [];
-    for (const [i, model] of MODELS.entries()) {
+    for (const [i, model] of EVAL_MODELS.entries()) {
       const f = origin.forecasts![i];
       if (!Number.isFinite(f) || f === 0) continue;
       for (const basis of ['ema-residual', 'raw'] as const) {
-        for (const key of this.groups(model.id, f, basis)) {
+        for (const key of this.groups(model, f, basis)) {
           const group = this.calibration.get(key) ?? newCalibration();
           group.samples++;
           this.calibration.set(key, group);
@@ -761,6 +911,18 @@ class TestStats {
       group.wrong += Number(v * f < 0);
       group.flat += Number(v === 0);
     }
+    if (status === 'valid') {
+      const block = Math.floor(origin.t / TEST_BLOCK_MS) * TEST_BLOCK_MS;
+      for (const [i, model] of EVAL_MODELS.entries()) {
+        const f = origin.forecasts![i];
+        if (!Number.isFinite(f) || Math.abs(f) < 2.5 ||
+          Math.abs(f) >= 3) continue;
+        const tailKey = `${block}:${model}:${Math.sign(f)}`;
+        const tail = this.tailByBlock.get(tailKey) ?? newPairAggregate();
+        observePair(tail, f, f, actual!.residual, actual!.raw);
+        this.tailByBlock.set(tailKey, tail);
+      }
+    }
     const [direct, derived] = origin.forecasts!;
     if (!Number.isFinite(direct) || !Number.isFinite(derived) ||
       direct === 0 || derived === 0) return;
@@ -768,8 +930,9 @@ class TestStats {
     if (status === 'no-target') this.coverage.noTargets++;
     if (status !== 'valid') return;
     this.coverage.commonValidLabels++;
-    for (const cohort of pairCohorts(direct, derived,
-      'speed-bank', 'speed-bank-derived')) {
+    const cohorts = pairCohorts(direct, derived,
+      'speed-bank', 'speed-bank-derived');
+    for (const cohort of cohorts) {
       const g = this.pairs.get(cohort) ?? newPairAggregate();
       observePair(g, direct, derived, actual!.residual, actual!.raw);
       this.pairs.set(cohort, g);
@@ -778,6 +941,30 @@ class TestStats {
     const g = this.grid.get(key) ?? newPairAggregate();
     observePair(g, direct, derived, actual!.residual, actual!.raw);
     this.grid.set(key, g);
+    const block = Math.floor(origin.t / TEST_BLOCK_MS) * TEST_BLOCK_MS;
+    const timeKey = `${block}:${key}`;
+    const time = this.timeGrid.get(timeKey) ?? newPairAggregate();
+    observePair(time, direct, derived, actual!.residual, actual!.raw);
+    this.timeGrid.set(timeKey, time);
+    const combined = origin.forecasts![2];
+    if (Math.sign(direct) !== Math.sign(derived)) {
+      cohorts.push('opposite-sign');
+    }
+    for (const threshold of [1, 2, 2.5]) {
+      if (Math.abs(combined) >= threshold) {
+        cohorts.push(`combined>=${threshold}`);
+      }
+    }
+    for (const cohort of cohorts) {
+      const aggregates = this.combinedPairs.get(cohort) ??
+        [newPairAggregate(), newPairAggregate()] as
+          [PairAggregate, PairAggregate];
+      observePair(aggregates[0], direct, combined,
+        actual!.residual, actual!.raw);
+      observePair(aggregates[1], derived, combined,
+        actual!.residual, actual!.raw);
+      this.combinedPairs.set(cohort, aggregates);
+    }
   }
 }
 function forecast(state: { cell: number; sign: number } | null,
@@ -786,7 +973,8 @@ function forecast(state: { cell: number; sign: number } | null,
 }
 function testMarket(db: DatabaseSync, market: Market,
   filters: { banks: SpeedBanks; ema: PriceEma },
-  trained: readonly Trained[], start: number, end: number,
+  trained: readonly Trained[], meta: MetaGrid,
+  start: number, end: number,
   totals: TestStats) {
   const pending: Origin[] = [];
   let head = 0;
@@ -805,11 +993,10 @@ function testMarket(db: DatabaseSync, market: Market,
       pending.splice(0, head);
       head = 0;
     }
+    const direct = forecast(states.direct, trained[0].table!.table);
+    const derived = forecast(states.derived, trained[1].table!.table);
     const origin: Origin = { ...tick, e, ...states,
-      forecasts: [
-        forecast(states.direct, trained[0].table!.table),
-        forecast(states.derived, trained[1].table!.table),
-      ],
+      forecasts: [direct, derived, meta.predict(direct, derived)],
     };
     totals.onOrigin(origin);
     if (origin.forecasts!.some((f) => Number.isFinite(f) && f !== 0)) {
@@ -824,9 +1011,98 @@ function combinePair(into: PairAggregate, from: PairAggregate) {
     into[key] += from[key];
   }
 }
+function gridValues(key: string, g: PairAggregate) {
+  const [left, right] = key.split(',').map(Number);
+  const n = g.count;
+  const variance = Math.max(0,
+    g.residualSquared / n - (g.residual / n) ** 2);
+  return [
+    left, left ? FORECAST_BINS[left - 1] : null,
+    left === FORECAST_BINS.length ? null : FORECAST_BINS[left],
+    right, right ? FORECAST_BINS[right - 1] : null,
+    right === FORECAST_BINS.length ? null : FORECAST_BINS[right],
+    n, g.leftForecast / n, g.rightForecast / n,
+    g.residual / n, g.raw / n,
+    n > 1 ? Math.sqrt(variance) : null,
+    n > 1 ? Math.sqrt(variance / n) : null,
+    g.leftCorrect / n, g.rightCorrect / n,
+  ];
+}
+function comparisonValues(cohort: string, g: PairAggregate,
+  left: ModelId, right: ModelId) {
+  const n = g.count;
+  return [cohort, n, left, right,
+    g.leftForecast / n, g.rightForecast / n,
+    g.residual / n, g.raw / n,
+    g.leftDirectional / n, g.rightDirectional / n,
+    g.leftRawDirectional / n, g.rightRawDirectional / n,
+    g.leftCorrect / n, g.rightCorrect / n,
+    g.leftRawCorrect / n, g.rightRawCorrect / n,
+    g.leftAbsError / n, g.rightAbsError / n,
+    Math.sqrt(g.leftSquaredError / n),
+    Math.sqrt(g.rightSquaredError / n)];
+}
+const COMPARE_HEADERS = [
+  'cohort', 'samples', 'leftModel', 'rightModel',
+  'meanLeftForecastPermille', 'meanRightForecastPermille',
+  'meanActualResidualPermille', 'meanRawReturnPermille',
+  'meanLeftDirectionalResidualPermille', 'meanRightDirectionalResidualPermille',
+  'meanLeftDirectionalRawPermille', 'meanRightDirectionalRawPermille',
+  'leftResidualDirectionAccuracy', 'rightResidualDirectionAccuracy',
+  'leftRawDirectionAccuracy', 'rightRawDirectionAccuracy',
+  'leftMAEPermille', 'rightMAEPermille', 'leftRMSEPermille',
+  'rightRMSEPermille',
+];
+const GRID_HEADERS = [
+  'directBin', 'directMinInclusive', 'directMaxExclusive',
+  'derivedBin', 'derivedMinInclusive', 'derivedMaxExclusive',
+  'samples', 'meanDirectForecastPermille', 'meanDerivedForecastPermille',
+  'meanActualResidualPermille', 'meanRawReturnPermille',
+  'residualStdDevPermille', 'residualStdErrorPermille',
+  'directDirectionAccuracy', 'derivedDirectionAccuracy',
+];
+async function writeCalibration(dir: string, id: ModelId,
+  stats: readonly TestStats[]) {
+  const threshold = await Csv.create(resolve(dir,
+    'forecast-calibration.csv'), [
+      'market', 'priceBasis', 'direction', 'absForecastThreshold',
+      'samples', 'validTargets', 'horizonAfterEnd', 'noTarget',
+      'lateTarget', 'emaUnavailable', 'meanForecastPermille',
+      'meanActualPermille', 'meanDirectionalReturnPermille',
+      'correctDirection', 'wrongDirection', 'flat', 'directionAccuracy',
+    ]);
+  const bands = await Csv.create(resolve(dir,
+    'forecast-band-calibration.csv'), [
+      'market', 'priceBasis', 'direction', 'absForecastMinInclusive',
+      'absForecastMaxExclusive', 'samples', 'validTargets',
+      'horizonAfterEnd', 'noTarget', 'lateTarget', 'emaUnavailable',
+      'meanForecastPermille', 'meanActualPermille',
+      'meanDirectionalReturnPermille', 'correctDirection',
+      'wrongDirection', 'flat', 'directionAccuracy',
+    ]);
+  try {
+    for (const stat of stats) {
+      for (const [key, g] of stat.calibration) {
+        const [market, modelId, basis, kind, sign, min, max] =
+          JSON.parse(key);
+        if (modelId !== id) continue;
+        const n = g.statuses.valid;
+        const row = [market, basis, sign > 0 ? 'up' : 'down', min];
+        if (kind === 'band') row.push(max);
+        row.push(g.samples, n, g.statuses['horizon-after-end'],
+          g.statuses['no-target'], g.statuses['late-target'], g.unavailable,
+          n ? g.forecast / n : null, n ? g.actual / n : null,
+          n ? g.actual * sign / n : null,
+          g.correct, g.wrong, g.flat, n ? g.correct / n : null);
+        await (kind === 'band' ? bands : threshold).row(row);
+      }
+    }
+  } finally { await threshold.close(); await bands.close(); }
+}
 async function writeAggregates(directory: string, trained: readonly Trained[],
   markets: readonly Market[], selected: readonly Market[],
-  range: { first: number; last: number; n: number }, splitAt: number,
+  range: { first: number; last: number; n: number },
+  baseEnd: number, splitAt: number, meta: MetaGrid,
   start: number, end: number, dbMetadata: Record<string, string>,
   distribution: DerivedDistribution, bankStats: SpeedBankExtractionStats,
   emaStats: ExtractionStats, stats: readonly TestStats[]) {
@@ -863,10 +1139,10 @@ async function writeAggregates(directory: string, trained: readonly Trained[],
     const lastTrainTarget = Math.max(...Array.from(model.train.values(),
       (c) => c.lastTarget));
     const frozen = JSON.stringify({
-      version: 5, model: model.model.id,
-      source: 'read-only prepared SQLite cache, chronological training',
+      version: 6, model: model.model.id,
+      source: 'read-only prepared SQLite cache, early base-fit period',
       targetDefinition: targetDefinition(), horizonMs: HORIZON,
-      splitAt: new Date(splitAt).toISOString(),
+      baseFitEnd: new Date(baseEnd).toISOString(),
       trainSamples: Array.from(model.train.values()).reduce(
         (sum, c) => sum + c.accepted, 0),
       lastTrainTarget: Number.isFinite(lastTrainTarget)
@@ -893,46 +1169,64 @@ async function writeAggregates(directory: string, trained: readonly Trained[],
     await writeFile(resolve(dir, 'frozen-table.json'), frozen);
     tableHashes[model.model.id] = createHash('sha256')
       .update(frozen).digest('hex');
-    const threshold = await Csv.create(resolve(dir,
-      'forecast-calibration.csv'), [
-      'market', 'priceBasis', 'direction', 'absForecastThreshold',
-      'samples', 'validTargets', 'horizonAfterEnd', 'noTarget',
-      'lateTarget', 'emaUnavailable', 'meanForecastPermille',
-      'meanActualPermille', 'meanDirectionalReturnPermille',
-      'correctDirection', 'wrongDirection', 'flat', 'directionAccuracy',
-    ]);
-    const bands = await Csv.create(resolve(dir,
-      'forecast-band-calibration.csv'), [
-      'market', 'priceBasis', 'direction', 'absForecastMinInclusive',
-      'absForecastMaxExclusive', 'samples', 'validTargets',
-      'horizonAfterEnd', 'noTarget', 'lateTarget', 'emaUnavailable',
-      'meanForecastPermille', 'meanActualPermille',
-      'meanDirectionalReturnPermille', 'correctDirection',
-      'wrongDirection', 'flat', 'directionAccuracy',
-    ]);
-    try {
-      for (const stat of stats) {
-        for (const [key, g] of stat.calibration) {
-          const [market, id, basis, kind, sign, min, max] = JSON.parse(key);
-          if (id !== model.model.id) continue;
-          const n = g.statuses.valid;
-          const row = [market, basis, sign > 0 ? 'up' : 'down', min];
-          if (kind === 'band') row.push(max);
-          row.push(g.samples, n, g.statuses['horizon-after-end'],
-            g.statuses['no-target'], g.statuses['late-target'], g.unavailable,
-            n ? g.forecast / n : null, n ? g.actual / n : null,
-            n ? g.actual * sign / n : null,
-            g.correct, g.wrong, g.flat, n ? g.correct / n : null);
-          await (kind === 'band' ? bands : threshold).row(row);
-        }
-      }
-    } finally { await threshold.close(); await bands.close(); }
+    await writeCalibration(dir, model.model.id, stats);
   }
+  const combinedDir = resolve(directory, `tau-${PRICE_EMA_TAU_MS}ms`,
+    'combined');
+  await mkdir(combinedDir, { recursive: true });
+  await writeCalibration(combinedDir, 'combined', stats);
+  const metaCells = await Csv.create(resolve(combinedDir, 'meta-cells.csv'), [
+    'directBin', 'derivedBin', 'samples', 'nonOverlappingSamples',
+    'meanDirectDerivedAnchorPermille', 'meanActualResidualPermille',
+    'meanCorrectionPermille', 'shrunkCorrectionPermille',
+    'softReliability', 'trainingMarkets', 'largestMarket',
+    'largestMarketSampleShare',
+  ]);
+  try {
+    for (let i = 0; i < META_CELL_COUNT; i++) {
+      const n = meta.count[i];
+      if (!n) continue;
+      await metaCells.row([
+        Math.floor(i / (FORECAST_BINS.length + 1)),
+        i % (FORECAST_BINS.length + 1), n, meta.spacedCount[i],
+        meta.anchorSum[i] / n, meta.actualSum[i] / n,
+        meta.mean[i], meta.correction[i], meta.reliability[i],
+        meta.marketCount[i], meta.largestMarket[i],
+        meta.largestMarketCount[i] / n,
+      ]);
+    }
+  } finally { await metaCells.close(); }
+  const frozenMeta = JSON.stringify({
+    version: 6, model: 'combined', bins: FORECAST_BINS,
+    baseFitEnd: new Date(baseEnd).toISOString(),
+    metaFitEnd: new Date(splitAt).toISOString(),
+    targetDefinition: targetDefinition(), horizonMs: HORIZON,
+    formula: 'anchor=(forecast3+forecast4)/2; forecast=anchor+cellCorrection',
+    fallback: 'missing one forecast: use the available forecast; unseen/sparse pair: anchor',
+    minSamples: META_MIN_SAMPLES, minNonOverlapping: META_MIN_SPACED,
+    correctionPrior: 'zero-mean empirical-Bayes shrinkage on meta-fit residuals',
+    effectiveSamples: 'non-overlapping 60s labels per market and pair bin',
+    pooledVariance: meta.pooledVariance,
+    priorVariance: meta.priorVariance,
+    estimatedCells: meta.estimatedCells,
+    coverage: meta.coverage,
+    count: Array.from(meta.count),
+    nonOverlappingCount: Array.from(meta.spacedCount),
+    rawMeanCorrection: Array.from(meta.mean),
+    reliability: Array.from(meta.reliability),
+    correction: Array.from(meta.correction),
+  }, null, 2) + '\n';
+  await writeFile(resolve(combinedDir, 'frozen-combiner.json'), frozenMeta);
+  tableHashes.combined = createHash('sha256')
+    .update(frozenMeta).digest('hex');
   const comparisonDir = resolve(directory, `tau-${PRICE_EMA_TAU_MS}ms`,
     'comparison', 'speed-bank-vs-derived');
   await mkdir(comparisonDir, { recursive: true });
   const pairs = new Map<string, PairAggregate>();
   const grid = new Map<string, PairAggregate>();
+  const timeGrid = new Map<string, PairAggregate>();
+  const combinedPairs = new Map<string,
+    [PairAggregate, PairAggregate]>();
   const coverage = { origins: 0, commonForecasts: 0,
     commonValidLabels: 0, lateTargets: 0, noTargets: 0 };
   for (const stat of stats) {
@@ -947,65 +1241,91 @@ async function writeAggregates(directory: string, trained: readonly Trained[],
       const sum = grid.get(key) ?? newPairAggregate();
       combinePair(sum, g); grid.set(key, sum);
     }
+    for (const [key, g] of stat.timeGrid) {
+      const sum = timeGrid.get(key) ?? newPairAggregate();
+      combinePair(sum, g); timeGrid.set(key, sum);
+    }
+    for (const [key, aggregates] of stat.combinedPairs) {
+      const sum = combinedPairs.get(key) ??
+        [newPairAggregate(), newPairAggregate()] as
+          [PairAggregate, PairAggregate];
+      combinePair(sum[0], aggregates[0]);
+      combinePair(sum[1], aggregates[1]);
+      combinedPairs.set(key, sum);
+    }
   }
   const summary = await Csv.create(resolve(comparisonDir,
-    'common-comparison.csv'), [
-    'cohort', 'samples', 'leftModel', 'rightModel',
-    'meanLeftForecastPermille', 'meanRightForecastPermille',
-    'meanActualResidualPermille', 'meanRawReturnPermille',
-    'meanLeftDirectionalResidualPermille', 'meanRightDirectionalResidualPermille',
-    'meanLeftDirectionalRawPermille', 'meanRightDirectionalRawPermille',
-    'leftResidualDirectionAccuracy', 'rightResidualDirectionAccuracy',
-    'leftRawDirectionAccuracy', 'rightRawDirectionAccuracy',
-    'leftMAEPermille', 'rightMAEPermille', 'leftRMSEPermille', 'rightRMSEPermille',
-  ]);
+    'common-comparison.csv'), COMPARE_HEADERS);
   const forecastGrid = await Csv.create(resolve(comparisonDir,
-    'forecast-grid.csv'), [
-    'directBin', 'directMinInclusive', 'directMaxExclusive',
-    'derivedBin', 'derivedMinInclusive', 'derivedMaxExclusive',
-    'samples', 'meanDirectForecastPermille', 'meanDerivedForecastPermille',
-    'meanActualResidualPermille', 'meanRawReturnPermille',
-    'residualStdDevPermille', 'residualStdErrorPermille',
-    'directDirectionAccuracy', 'derivedDirectionAccuracy',
-  ]);
+    'forecast-grid.csv'), GRID_HEADERS);
   try {
     for (const [cohort, g] of pairs) {
-      const n = g.count;
-      await summary.row([cohort, n, 'speed-bank', 'speed-bank-derived',
-        g.leftForecast / n, g.rightForecast / n, g.residual / n,
-        g.raw / n, g.leftDirectional / n, g.rightDirectional / n,
-        g.leftRawDirectional / n, g.rightRawDirectional / n,
-        g.leftCorrect / n, g.rightCorrect / n,
-        g.leftRawCorrect / n, g.rightRawCorrect / n,
-        g.leftAbsError / n, g.rightAbsError / n,
-        Math.sqrt(g.leftSquaredError / n),
-        Math.sqrt(g.rightSquaredError / n)]);
+      await summary.row(comparisonValues(cohort, g,
+        'speed-bank', 'speed-bank-derived'));
     }
     for (const [key, g] of grid) {
-      const [left, right] = key.split(',').map(Number);
-      const n = g.count;
-      await forecastGrid.row([
-        left, left ? FORECAST_BINS[left - 1] : null,
-        left === FORECAST_BINS.length ? null : FORECAST_BINS[left],
-        right, right ? FORECAST_BINS[right - 1] : null,
-        right === FORECAST_BINS.length ? null : FORECAST_BINS[right],
-        n, g.leftForecast / n, g.rightForecast / n,
-        g.residual / n, g.raw / n,
-        n > 1 ? Math.sqrt(Math.max(0,
-          g.residualSquared / n - (g.residual / n) ** 2)) : null,
-        n > 1 ? Math.sqrt(Math.max(0,
-          g.residualSquared / n - (g.residual / n) ** 2) / n) : null,
-        g.leftCorrect / n, g.rightCorrect / n,
-      ]);
+      await forecastGrid.row(gridValues(key, g));
     }
   } finally { await summary.close(); await forecastGrid.close(); }
+  const byMarket = await Csv.create(resolve(comparisonDir,
+    'forecast-grid-by-market.csv'), ['market', ...GRID_HEADERS]);
+  const byTime = await Csv.create(resolve(comparisonDir,
+    'forecast-grid-by-time-block.csv'), [
+    'blockStartUtcMs', 'blockEndUtcMs', ...GRID_HEADERS,
+  ]);
+  const tails = await Csv.create(resolve(comparisonDir,
+    'strong-tail-by-market-time-block.csv'), [
+    'market', 'blockStartUtcMs', 'blockEndUtcMs', 'model', 'direction',
+    'samples', 'meanForecastPermille',
+    'meanDirectionalResidualPermille', 'meanDirectionalRawPermille',
+    'residualDirectionAccuracy', 'rawDirectionAccuracy',
+  ]);
+  const combined = await Csv.create(resolve(comparisonDir,
+    'combined-comparison.csv'), COMPARE_HEADERS);
+  try {
+    for (const stat of stats) {
+      for (const [key, g] of stat.grid) {
+        await byMarket.row([stat.market, ...gridValues(key, g)]);
+      }
+      for (const [key, g] of stat.tailByBlock) {
+        const [blockText, model, signText] = key.split(':');
+        const block = Number(blockText);
+        const sign = Number(signText);
+        const n = g.count;
+        await tails.row([
+          stat.market, block, block + TEST_BLOCK_MS, model,
+          sign > 0 ? 'up' : 'down', n, g.leftForecast / n,
+          g.leftDirectional / n, g.leftRawDirectional / n,
+          g.leftCorrect / n, g.leftRawCorrect / n,
+        ]);
+      }
+    }
+    for (const [key, g] of timeGrid) {
+      const [blockText, cellKey] = key.split(':');
+      const block = Number(blockText);
+      await byTime.row([block, block + TEST_BLOCK_MS,
+        ...gridValues(cellKey, g)]);
+    }
+    for (const [cohort, aggregates] of combinedPairs) {
+      for (const [i, model] of MODELS.entries()) {
+        await combined.row(comparisonValues(cohort, aggregates[i],
+          model.id, 'combined'));
+      }
+    }
+  } finally {
+    await byMarket.close();
+    await byTime.close();
+    await tails.close();
+    await combined.close();
+  }
   await writeFile(resolve(comparisonDir, 'common-comparison.json'),
     JSON.stringify({ ...coverage, comparisonThresholds: ENTRY_THRESHOLDS,
-      forecastBins: FORECAST_BINS,
-      note: 'Both forecasts share the same causal origin and actual target tick; grid is test descriptive, not a fitted combined forecast.'
+      forecastBins: FORECAST_BINS, testBlockMs: TEST_BLOCK_MS,
+      note: 'All test grids are descriptive; combiner was frozen on meta-fit before test.',
+      standardErrorNote: 'Tick-level standard errors ignore overlap of 60s labels and market/time dependence.',
     }, null, 2) + '\n');
   await writeFile(resolve(directory, 'comparison.json'), JSON.stringify({
-    version: 5, status: 'complete',
+    version: 6, status: 'complete',
     researchCache: { path: RESEARCH_CACHE_PATH, metadata: dbMetadata },
     targetDefinition: targetDefinition(),
     targetTauMs: PRICE_EMA_TAU_MS,
@@ -1013,10 +1333,14 @@ async function writeAggregates(directory: string, trained: readonly Trained[],
     splitAt: new Date(splitAt).toISOString(),
     testStart: new Date(start).toISOString(),
     testEnd: new Date(end).toISOString(),
-    models: MODELS, tableHashes, trainingMarkets: markets.length,
+    models: EVAL_MODELS, tableHashes, trainingMarkets: markets.length,
     testMarkets: selected.map((m) => m.name),
+    baseFitEnd: new Date(baseEnd).toISOString(),
+    metaFitEnd: new Date(splitAt).toISOString(),
+    metaFitCoverage: meta.coverage,
     bankStats, emaStats, coverage,
-    pipeline: 'read-only cache; one train pass and one test pass per market; no trading replay or per-event files',
+    validationNote: 'The existing v5 test period has already been inspected; this run evaluates code and exploratory model comparisons. Use later unseen history for final validation.',
+    pipeline: 'read-only cache; preliminary range/count query, then disjoint base-fit, meta-fit and test streams; no trading replay or per-event files',
   }, null, 2) + '\n');
 }
 
@@ -1040,11 +1364,14 @@ async function analyze(db: DatabaseSync, output: string) {
   const range = { first: raw.first, last: raw.last, n: raw.n };
   const splitAt = REQUESTED_SPLIT ?? Math.ceil(range.first +
     TRAIN_FRACTION * (range.last - range.first));
+  const baseEnd = Math.ceil(range.first +
+    BASE_FIT_FRACTION * (splitAt - range.first));
   const start = REQUESTED_START ?? splitAt;
   const end = REQUESTED_END ?? range.last;
-  if (splitAt <= range.first || splitAt >= range.last ||
+  if (baseEnd <= range.first + HORIZON ||
+    baseEnd + HORIZON >= splitAt || splitAt >= range.last ||
     start < splitAt || start >= end || end > range.last) {
-    throw new Error('Invalid chronological train/test boundaries');
+    throw new Error('Invalid base-fit/meta-fit/test boundaries');
   }
   const requested = process.env.MF_MARKETS === undefined ? MARKET_NAMES :
     process.env.MF_MARKETS.split(',').map((x) => x.trim()).filter(Boolean);
@@ -1059,7 +1386,7 @@ async function analyze(db: DatabaseSync, output: string) {
     requested.includes(m.name));
   if (!selected.length) throw new Error('No test markets selected');
   const trained: Trained[] = MODELS.map((model) => ({ model,
-    cells: newCells(), quality: new CellQuality(range.first, splitAt),
+    cells: newCells(), quality: new CellQuality(range.first, baseEnd),
     train: new Map<string, TrainCounts>(),
   }));
   const bankStats: SpeedBankExtractionStats = {
@@ -1068,13 +1395,12 @@ async function analyze(db: DatabaseSync, output: string) {
   };
   const emaStats: ExtractionStats = { ready: 0, warmup: 0, invalid: 0 };
   const distribution = newDerivedDistribution();
-  const selectedIds = new Set(selected.map((m) => m.id));
   const filters = new Map<number, { banks: SpeedBanks; ema: PriceEma }>();
   for (const market of markets) {
-    const state = trainMarket(db, market, trained, splitAt, start,
+    const state = trainMarket(db, market, trained, baseEnd, baseEnd,
       distribution, bankStats, emaStats);
-    if (selectedIds.has(market.id)) filters.set(market.id, state);
-    console.log(`Train ${market.name}: ${trained.map((m) =>
+    filters.set(market.id, state);
+    console.log(`Base-fit ${market.name}: ${trained.map((m) =>
       `${m.model.id}=${m.train.get(market.name)!.accepted}`).join(', ')}`);
   }
   for (const model of trained) {
@@ -1083,15 +1409,29 @@ async function analyze(db: DatabaseSync, output: string) {
       throw new Error(`${model.model.id}: no usable trained cells`);
     }
   }
+  const meta = new MetaGrid();
+  for (const market of markets) {
+    fitMetaMarket(db, market, filters.get(market.id)!, trained,
+      meta, baseEnd, splitAt);
+    console.log(`Meta-fit ${market.name}`);
+  }
+  meta.freeze();
+  if (!meta.coverage.valid) throw new Error('No valid meta-fit labels');
   const stats: TestStats[] = [];
   for (const market of selected) {
+    const state = filters.get(market.id)!;
+    for (const tick of readTicks(db, market.id, splitAt, start)) {
+      state.banks.update(tick.t, tick.p);
+      state.ema.update(tick.t, tick.p);
+    }
     const stat = new TestStats(market.name);
-    testMarket(db, market, filters.get(market.id)!, trained, start, end, stat);
+    testMarket(db, market, state, trained, meta, start, end, stat);
     stats.push(stat);
     console.log(`Test ${market.name}: common=${stat.coverage.commonValidLabels}`);
   }
   await writeAggregates(output, trained, markets, selected, range,
-    splitAt, start, end, dbMetadata, distribution, bankStats, emaStats, stats);
+    baseEnd, splitAt, meta, start, end, dbMetadata, distribution,
+    bankStats, emaStats, stats);
 }
 
 async function main() {
@@ -1114,9 +1454,22 @@ async function selfTest() {
   const a = derivedSpeedBankCell([2, 1, 0.5, 0.25]);
   const b = derivedSpeedBankCell([-2, -1, -0.5, -0.25]);
   assert.equal(a.cell, b.cell);
+  const learned = new MetaGrid();
+  learned.beginMarket();
+  for (let i = 0; i < 40; i++) {
+    const t = i * 70_000;
+    learned.observe({ t, p: 100, e: 100,
+      direct: null, derived: null, forecasts: [1, 2, NaN] },
+    { t: t + HORIZON, p: 100 }, 2.5);
+  }
+  learned.endMarket('synthetic');
+  learned.freeze();
+  assert.equal(learned.spacedCount[metaIndex(1, 2)], 40);
+  assert.ok(Math.abs(learned.predict(1, 2) - 2.5) < 1e-12);
+  assert.equal(learned.predict(NaN, 2), 2);
   const { tmpdir } = await import('node:os');
   const { readFile, rm } = await import('node:fs/promises');
-  const base = await mkdtemp(resolve(tmpdir(), 'forecast-v5-self-test-'));
+  const base = await mkdtemp(resolve(tmpdir(), 'forecast-v6-self-test-'));
   const cache = resolve(base, 'source.sqlite');
   const setup = new DatabaseSync(cache);
   setup.exec(`PRAGMA user_version=1;
@@ -1131,6 +1484,8 @@ async function selfTest() {
       insert.run(t, 100 * Math.exp(t / 10_000_000) *
         (1 + 0.001 * Math.sin(t / 20_000)));
   }
+  setup.prepare(`DELETE FROM observations WHERE received_at>760000
+    AND received_at<780000`).run();
   setup.close();
   const db = new DatabaseSync(cache, { readOnly: true });
   try {
@@ -1142,29 +1497,97 @@ async function selfTest() {
       await analyze(db, path);
       const result = JSON.parse(await readFile(resolve(path,
         'comparison.json'), 'utf8'));
-      assert.equal(result.version, 5);
+      assert.equal(result.version, 6);
       assert.ok(result.coverage.commonValidLabels > 0);
       assert.ok(result.bankStats.derived.ready > 0);
-      assert.ok(Date.parse(result.splitAt) >
+      assert.ok(result.metaFitCoverage.purged > 0);
+      const filters = { banks: new SpeedBanks(), ema: new PriceEma() };
+      for (const tick of readTicks(db, 1, 0, 700_000)) {
+        filters.banks.update(tick.t, tick.p);
+        filters.ema.update(tick.t, tick.p);
+      }
+      const alwaysForecast: Trained[] = MODELS.map((model) => ({
+        model, cells: newCells(), quality: new CellQuality(0, 700_000),
+        train: new Map<string, TrainCounts>(),
+        table: {
+          table: new Float64Array(model.stateCount).fill(1),
+          factor: new Float64Array(model.stateCount),
+          standardError: new Float64Array(model.stateCount),
+          effectiveSamples: new Float64Array(model.stateCount),
+          pooledVariance: 0, priorVariance: 0,
+          meanSamplingVariance: 0, estimatedCells: 0,
+        },
+      }));
+      const labelCheck = new TestStats('BTC_USDT');
+      testMarket(db, { id: 1, name: 'BTC_USDT', stock: 'BTC',
+        money: 'USDT' }, filters, alwaysForecast, new MetaGrid(),
+      700_000, 1_000_000, labelCheck);
+      assert.ok(labelCheck.coverage.lateTargets > 0);
+      assert.ok(Date.parse(result.baseFitEnd) >
         Date.parse(JSON.parse(await readFile(resolve(path,
           'tau-7000ms/speed-bank/frozen-table.json'), 'utf8'))
           .lastTrainTarget));
+      assert.ok(Date.parse(result.metaFitEnd) >
+        result.metaFitCoverage.lastTarget);
       const grid = await readFile(resolve(path,
         'tau-7000ms/comparison/speed-bank-vs-derived/forecast-grid.csv'),
       'utf8');
       const gridCount = grid.trim().split('\n').slice(1).reduce((sum, row) =>
         sum + Number(row.split(',')[6].replaceAll('"', '')), 0);
       assert.equal(gridCount, result.coverage.commonValidLabels);
+      const byMarket = await readFile(resolve(path,
+        'tau-7000ms/comparison/speed-bank-vs-derived/' +
+        'forecast-grid-by-market.csv'), 'utf8');
+      const marketCount = byMarket.trim().split('\n').slice(1)
+        .reduce((sum, row) => sum +
+          Number(row.split(',')[7].replaceAll('"', '')), 0);
+      assert.equal(marketCount, gridCount);
+      const byTime = await readFile(resolve(path,
+        'tau-7000ms/comparison/speed-bank-vs-derived/' +
+        'forecast-grid-by-time-block.csv'), 'utf8');
+      const timeCount = byTime.trim().split('\n').slice(1)
+        .reduce((sum, row) => sum +
+          Number(row.split(',')[8].replaceAll('"', '')), 0);
+      assert.equal(timeCount, gridCount);
+      const combined = await readFile(resolve(path,
+        'tau-7000ms/comparison/speed-bank-vs-derived/' +
+        'combined-comparison.csv'), 'utf8');
+      const allCommon = combined.trim().split('\n').slice(1)
+        .filter((row) => row.startsWith('"all-common"'));
+      assert.equal(allCommon.length, 2);
+      for (const row of allCommon) {
+        assert.equal(Number(row.split(',')[1].replaceAll('"', '')),
+          gridCount);
+      }
+      const tails = await readFile(resolve(path,
+        'tau-7000ms/comparison/speed-bank-vs-derived/' +
+        'strong-tail-by-market-time-block.csv'), 'utf8');
+      const derivedTail = tails.trim().split('\n').slice(1)
+        .filter((row) => row.split(',')[3] === '"speed-bank-derived"')
+        .reduce((sum, row) => sum +
+          Number(row.split(',')[5].replaceAll('"', '')), 0);
+      const bands = await readFile(resolve(path,
+        'tau-7000ms/speed-bank-derived/' +
+        'forecast-band-calibration.csv'), 'utf8');
+      const derivedBand = bands.trim().split('\n').slice(1)
+        .filter((row) => {
+          const columns = row.split(',').map((x) => x.replaceAll('"', ''));
+          return columns[1] === 'ema-residual' &&
+            columns[3] === '2.5' && columns[4] === '3';
+        })
+        .reduce((sum, row) => sum +
+          Number(row.split(',')[6].replaceAll('"', '')), 0);
+      assert.equal(derivedTail, derivedBand);
       const columns = db.prepare('PRAGMA table_info(observations)').all() as
         { name: string }[];
       assert.deepEqual(columns.map((c) => c.name),
         ['market_id', 'received_at', 'price']);
       assert.throws(() => db.exec('UPDATE observations SET price=0'));
       assert.equal((db.prepare('SELECT count(*) AS n FROM observations')
-        .get() as { n: number }).n, 1001);
+        .get() as { n: number }).n, 982);
     } finally { console.log = originalLog; }
   } finally { db.close(); await rm(base, { recursive: true, force: true }); }
-  console.log('v5 self-test passed');
+  console.log('v6 self-test passed');
 }
 
 if (process.argv.includes('--self-test')) void selfTest().catch((e) => {

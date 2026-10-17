@@ -1,4 +1,5 @@
 // app/src/server/dao/markets.ts
+
 import type { Sql } from '../db/client';
 
 import { q } from '../db/client.js';

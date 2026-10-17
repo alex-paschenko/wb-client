@@ -1,6 +1,6 @@
 // app/src/shared/utilities/codecs/definitions/market-forecast-v1_0.ts
 
-import type { MarketForecastValue } from '../../../types/data-types.js';
+import type { IndicatorValue } from '../../../types/data-types.js';
 import { fixedCountArrayCodecDefinition } from './codec-definition-helpers.js';
 
 /*
@@ -10,8 +10,16 @@ import { fixedCountArrayCodecDefinition } from './codec-definition-helpers.js';
  * Create a new codec version instead.
  */
 
+interface LegacyMarketForecastValue {
+  expectedReturn10s: IndicatorValue;
+  expectedReturn30s: IndicatorValue;
+  expectedReturn1m: IndicatorValue;
+  expectedReturn2m: IndicatorValue;
+  expectedReturn5m: IndicatorValue;
+}
+
 export const marketForecast_V1_0 =
-  fixedCountArrayCodecDefinition<MarketForecastValue>({
+  fixedCountArrayCodecDefinition<LegacyMarketForecastValue>({
     fieldSet: [
       { fieldName: 'expectedReturn10s', codec: 'float32 (nullable) v1.0' },
       { fieldName: 'expectedReturn30s', codec: 'float32 (nullable) v1.0' },

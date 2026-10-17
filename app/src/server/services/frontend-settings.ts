@@ -13,7 +13,7 @@ import {
 import {
   isMarketViewState,
   type EntitiesSettings,
-  type EntityDataKindSettings,
+  type EntityDataSettings,
   type FrontendSettingsValue,
   type MarketViewStateItem,
 } from '../../shared/types/frontend-settings.js';
@@ -115,7 +115,7 @@ export class FrontendSettingsService {
     const source = input as Record<string, unknown>;
 
     const result =
-      {} as WritableStorageStructure<EntityDataKindSettings>;
+      {} as WritableStorageStructure<EntityDataSettings>;
 
     for (const kind of STORAGE_ENTITY_KINDS) {
       const kindSettings = source[kind];
@@ -129,7 +129,7 @@ export class FrontendSettingsService {
       }
 
       result[kind] = structuredClone(
-        kindSettings as Record<string, EntityDataKindSettings>,
+        kindSettings as Record<string, EntityDataSettings>,
       );
     }
 

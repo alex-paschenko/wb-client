@@ -1,24 +1,10 @@
-import type { Order } from '../types/orders.js';
+import {
+  orderFinalStatuses, orderImmediateTypes,
+} from '../../shared/constants/orders.js';
+import type { Order } from '../../shared/types/order-receipt.js';
 
-const FINAL_STATUSES = new Set<Order['status']>([
-  'FILLED',
-  'CANCELED',
-  'CANCELED_STP',
-  'CANCELED_TAKER_BAND',
-  'CANCELED_RPI',
-  'AUTO_CANCELED_REDUCE_ONLY',
-  'AUTO_CANCELED_LIQUIDATION',
-  'DELISTING',
-]);
-
-const IMMEDIATE_TYPES = new Set<Order['type']>([
-  'Market',
-  'Market stock',
-  'Stop market',
-  'Stop market stock',
-  'Margin market',
-  'Margin stop market',
-]);
+const FINAL_STATUSES = new Set<Order['status']>(orderFinalStatuses);
+const IMMEDIATE_TYPES = new Set<Order['type']>(orderImmediateTypes);
 
 export function isFinalOrderState(order: Order): boolean {
   return FINAL_STATUSES.has(order.status) ||

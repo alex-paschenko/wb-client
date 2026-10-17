@@ -1,9 +1,9 @@
 // app/src/server/research/order-emulator.ts
 
 import { globalStateService } from '../../shared/services/global-state.js';
+import type { Order } from '../../shared/types/order-receipt.js';
 import { SERVER_EVENT } from '../constants/events.js';
 import type {
-  Order,
   OrderCancel,
   OrderLimitRequest,
   OrderMarketRequest,

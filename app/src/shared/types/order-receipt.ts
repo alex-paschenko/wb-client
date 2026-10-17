@@ -1,28 +1,20 @@
 // app/src/shared/types/order-receipt.ts
 
-import { orderTypeNames } from '../constants/order-receipt.js';
+import type {
+  orderTypeNames,
+  orderSideNames,
+  orderStpNames,
+  orderStatusNames,
+  orderPositionSideNames,
+} from '../constants/orders.js';
 
 // Data persisted in order receipts. Keep the versioned binary codec in sync.
 
-export type OrderSide = 'sell' | 'buy';
-
-export type OrderType = (typeof orderTypeNames)[number]
-
-export type OrderStp = 'no' | 'co' | 'cn' | 'cb';
-
-export type OrderStatus =
-  | 'OPEN'
-  | 'PARTIALLY_FILLED'
-  | 'FILLED'
-  | 'CANCELED'
-  | 'CANCELED_STP'
-  | 'CANCELED_TAKER_BAND'
-  | 'CANCELED_RPI'
-  | 'AUTO_CANCELED_REDUCE_ONLY'
-  | 'AUTO_CANCELED_LIQUIDATION'
-  | 'DELISTING';
-
-export type OrderPositionSide = 'LONG' | 'SHORT' | 'BOTH';
+export type OrderType = (typeof orderTypeNames)[number];
+export type OrderSide = (typeof orderSideNames)[number];
+export type OrderStp = (typeof orderStpNames)[number];
+export type OrderStatus = (typeof orderStatusNames)[number];
+export type OrderPositionSide = (typeof orderPositionSideNames)[number];
 
 export interface Order {
   id: number;

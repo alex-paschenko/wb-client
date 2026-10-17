@@ -6,6 +6,7 @@ import type {
   MarketRollingStatisticsByMarket,
 } from '../../shared/types/market-statistics-rolling.js';
 import type { SERVER_EVENT } from '../constants/events.js';
+import type { Order, OrderError } from '../../shared/types/order-receipt.js';
 import type { MarketTick } from '../../shared/types/ticks.js';
 import type { MarketsByName } from '../../shared/types/market.js';
 import type {
@@ -17,9 +18,7 @@ import type {
   OrderBookSubscription,
 } from './order-book-depth.js';
 import type {
-  Order,
   OrderCancel,
-  OrderError,
   OrderKind,
   OrderLimitRequest,
   OrderMarketRequest,

@@ -93,7 +93,7 @@ export class StorageAggregationService {
 
     this.startSnapshotWorker();
 
-    // TODO Remove it! For testing purpose only!
+    // TODO For testing purpose only!
     const storages = this.storagesByMarket;
 
     setInterval(() => {
@@ -146,6 +146,8 @@ export class StorageAggregationService {
     //   this.freezingByMarket.warm(marketName);
     }, 30_000);
   }
+
+  async stop() {}
 
   private handleTickReceived(
     event: MarketTickReceivedEvent,

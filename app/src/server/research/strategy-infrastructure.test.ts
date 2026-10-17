@@ -19,7 +19,7 @@ import { OrderManager } from '../services/order-manager.js';
 import { OrderPersistence } from '../services/order-persistence.js';
 import { sequencesPersistence } from '../services/sequences-persistence.js';
 import { StrategyManager } from '../services/strategy-manager.js';
-import type { Order, OrderError } from '../types/orders.js';
+import type { Order, OrderError } from '../../shared/types/order-receipt.js';
 import type { Strategy, StrategyRunParams } from '../types/strategies.js';
 import { decodeDepthHistory } from '../utilities/depth-history-codec.js';
 import { encodeDepthHistory } from '../utilities/depth-history-codec.js';

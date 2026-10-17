@@ -1,17 +1,9 @@
 // app/src/server/types/orders.ts
 
-import { orderSides, orderTypes } from "../constants/orders.js";
 import type { Strategy } from './strategies.js';
-export type {
-  Order, OrderError, OrderStp, OrderStatus, OrderPositionSide,
-} from '../../shared/types/order-receipt.js';
 import type {
-  Order, OrderError, OrderStp,
+  Order, OrderError, OrderSide, OrderStp,
 } from '../../shared/types/order-receipt.js';
-
-export type OrderSide = typeof orderSides[keyof typeof orderSides];
-
-export type OrderType = typeof orderTypes[keyof typeof orderTypes];
 
 export interface OrderMarketRequest {
   marketName: string;

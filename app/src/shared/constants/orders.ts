@@ -50,3 +50,41 @@ export const orderSides = {
 export const orderTypesRevert = revert(orderTypes);
 
 export const orderSidesRevert = revert(orderSides);
+
+export const orderStpNames = ['no', 'co', 'cn', 'cb'] as const;
+
+export const orderStatusNames = [
+  'OPEN',
+  'PARTIALLY_FILLED',
+  'FILLED',
+  'CANCELED',
+  'CANCELED_STP',
+  'CANCELED_TAKER_BAND',
+  'CANCELED_RPI',
+  'AUTO_CANCELED_REDUCE_ONLY',
+  'AUTO_CANCELED_LIQUIDATION',
+  'DELISTING',
+] as const;
+
+export const orderPositionSideNames = ['LONG', 'SHORT', 'BOTH'] as const;
+
+// Semantic subsets, checked against the canonical lists above.
+export const orderFinalStatuses = [
+  'FILLED',
+  'CANCELED',
+  'CANCELED_STP',
+  'CANCELED_TAKER_BAND',
+  'CANCELED_RPI',
+  'AUTO_CANCELED_REDUCE_ONLY',
+  'AUTO_CANCELED_LIQUIDATION',
+  'DELISTING',
+] as const satisfies readonly (typeof orderStatusNames)[number][];
+
+export const orderImmediateTypes = [
+  'Market',
+  'Market stock',
+  'Stop market',
+  'Stop market stock',
+  'Margin market',
+  'Margin stop market',
+] as const satisfies readonly (typeof orderTypeNames)[number][];

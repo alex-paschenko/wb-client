@@ -22,6 +22,7 @@ export interface StrategyStorage {
   marketName: string;
   receivedAt: number;
   forecast: MarketForecastValue;
+  price: number;
 }
 
 export interface StrategyRunParams<T extends string> {

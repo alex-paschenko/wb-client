@@ -4,8 +4,9 @@ export const strategyIdleState = 'idle';
 
 export const oneMarketTwoDealsStrategyState = [
   'candidate',
-  'dealOneRequest',
-  'dealOneDone',
-  'dealTwoRequest',
-  'dealTwoDone',
+  'awaiting for order book depth data',
+  'awaiting for first main order creation',
+  'holding',
+  'awaiting for second main order creation',
+  'unsubscribe and switch to idle'
 ] as const;

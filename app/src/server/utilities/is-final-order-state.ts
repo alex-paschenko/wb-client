@@ -1,3 +1,5 @@
+// app/src/server/utilities/is-final-order-state.ts
+
 import {
   orderFinalStatuses, orderImmediateTypes,
 } from '../../shared/constants/orders.js';

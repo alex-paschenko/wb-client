@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SERVER_EVENT } from '../constants/events.js';
+import { REVERT_ORDER_ERROR, REVERT_WB_ORDER_ERROR } from '../constants/order-error-codes.js';
 import { MARKET_FORECAST_NAME } from '../../shared/constants/storage-entities.js';
 import {
   orderReceiptsDao,
@@ -21,14 +22,30 @@ import { sequencesPersistence } from '../services/sequences-persistence.js';
 import { StrategyManager } from '../services/strategy-manager.js';
 import type { Order, OrderError } from '../../shared/types/order-receipt.js';
 import type { Strategy, StrategyRunParams } from '../types/strategies.js';
-import { decodeDepthHistory } from '../utilities/depth-history-codec.js';
-import { encodeDepthHistory } from '../utilities/depth-history-codec.js';
 import { isFinalOrderState } from '../utilities/is-final-order-state.js';
 import {
-  decodeOrderReceipt, encodeOrderReceipt,
-} from '../utilities/order-receipt-codec.js';
-import { decodeEntireBinary } from
-  '../../shared/utilities/codecs/entire-binary-codec.js';
+  decodeEntireBinary,
+  encodeEntireBinary,
+} from '../../shared/utilities/codecs/entire-binary-codec.js';
+import { decodeCodec } from '../../shared/utilities/codecs/codecs.js';
+
+const decodeDepthHistory = (data: Uint8Array) => {
+  const binary = decodeEntireBinary(data);
+  if (binary.codecName !== 'order book depth history v1.0' ||
+      binary.binaryKind !== 'snapshot' || binary.parameters !== null) {
+    throw new TypeError('Unexpected depth history binary');
+  }
+  return decodeCodec(binary.codecName, binary.data);
+};
+
+const decodeOrderReceipt = (data: Uint8Array) => {
+  const binary = decodeEntireBinary(data);
+  if (binary.codecName !== 'order receipt v1.0' ||
+      binary.binaryKind !== 'snapshot' || binary.parameters !== null) {
+    throw new TypeError('Unexpected order receipt binary');
+  }
+  return decodeCodec(binary.codecName, binary.data);
+};
 
 const order: Order = {
   id: 1, client_order_id: 1, market: 'BTC_USDT',
@@ -46,15 +63,21 @@ test('research binaries use registered, versioned payloads in entire binary', ()
     asks: [[101, 3] as [number, number]],
     bids: [[99, 5] as [number, number]],
   }];
-  const depthBytes = encodeDepthHistory(history);
+  const depthBytes = encodeEntireBinary({
+    codecName: 'order book depth history v1.0',
+    binaryKind: 'snapshot', parameters: null, data: history,
+  });
   const receipt = {
     order,
     error: {
-      code: 'TEST_ERROR', message: 'Отказ биржи',
-      errors: { field: ['amount'], retry: false },
+      code: REVERT_WB_ORDER_ERROR['order slippage threshold'],
+      isWBError: true,
     },
   };
-  const orderBytes = encodeOrderReceipt(receipt);
+  const orderBytes = encodeEntireBinary({
+    codecName: 'order receipt v1.0',
+    binaryKind: 'snapshot', parameters: null, data: receipt,
+  });
   assert.equal(
     decodeEntireBinary(depthBytes).codecName,
     'order book depth history v1.0',
@@ -65,9 +88,29 @@ test('research binaries use registered, versioned payloads in entire binary', ()
   );
   assert.deepEqual(decodeDepthHistory(depthBytes), history);
   assert.deepEqual(decodeOrderReceipt(orderBytes), receipt);
-  assert.deepEqual(decodeOrderReceipt(encodeOrderReceipt({
-    order: null, error: { code: 42, message: 'No order' },
-  })), { order: null, error: { code: 42, message: 'No order' } });
+  const internalError = {
+    code: REVERT_ORDER_ERROR['order outcome unknown'], isWBError: false,
+  };
+  const errorBytes = encodeEntireBinary({
+    codecName: 'order receipt v1.0',
+    binaryKind: 'snapshot', parameters: null,
+    data: { order: null, error: internalError },
+  });
+  assert.deepEqual(decodeOrderReceipt(errorBytes), {
+    order: null, error: internalError,
+  });
+  const payload = decodeEntireBinary(errorBytes).data;
+  assert.equal(payload.length, 6);
+  assert.equal(payload[0], 2);
+  assert.equal(payload[1], 0);
+  assert.equal(new DataView(payload.buffer, payload.byteOffset,
+    payload.byteLength).getInt32(2, true), internalError.code);
+  assert.equal(decodeEntireBinary(orderBytes).data.at(-5), 1);
+  assert.throws(() => encodeEntireBinary({
+    codecName: 'order receipt v1.0',
+    binaryKind: 'snapshot', parameters: null,
+    data: { order: null, error: { ...internalError, code: 2 ** 40 } },
+  }), /expected int32/);
 
   const padded = new Uint8Array(orderBytes.length + 7);
   padded.set(orderBytes, 3);
@@ -153,7 +196,7 @@ test('depth history preserves old books and rejects the eleventh market', () => 
   }
 });
 
-test('failed order receipt preserves the order and its cached identity', async () => {
+test('finalized market order ignores late cancel errors', async () => {
   const manager = new OrderManager();
   const strategy = { name: 'test', run() {} } as Strategy;
   const oldSequence = sequencesPersistence.getNextOrderId;
@@ -165,8 +208,9 @@ test('failed order receipt preserves the order and its cached identity', async (
   manager.setReceivedAt('BTC_USDT', 123);
   manager.start();
   try {
-    manager.api.createMarketOrder(strategy, {
-      marketName: 'BTC_USDT', side: 'sell', amount: '10',
+    manager.api.createOrder(strategy, {
+      orderType: 'Market',
+      orderRequest: { marketName: 'BTC_USDT', side: 'sell', amount: 10 },
     }, 'main');
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(manager.getOrdersForStrategy('BTC_USDT', strategy)[0].order,
@@ -179,11 +223,14 @@ test('failed order receipt preserves the order and its cached identity', async (
     eventBus.emit(SERVER_EVENT.orderReceived, {
       marketName: 'BTC_USDT', client_order_id: 1,
       paperTrading: true, order: null,
-      error: { code: 123, message: 'Cancellation rejected' },
+      error: { code: REVERT_WB_ORDER_ERROR['balance not enough'],
+        isWBError: true },
     });
-    assert.equal(snapshots[1].order, order);
+    assert.equal(snapshots.length, 1);
+    assert.equal(snapshots[0].order, order);
     assert.equal(manager.getOrdersForStrategy('BTC_USDT', strategy)[0].order,
       order);
+    assert.equal(manager.getOrdersForStrategy('BTC_USDT', strategy)[0].isFinalized, true);
     assert.throws(() => manager.api.cancelOrder('BTC_USDT', 1));
     manager.api.removeAllOrdersFromCache(strategy, 'BTC_USDT');
     assert.equal(manager.getOrdersForStrategy('BTC_USDT', strategy).length, 0);
@@ -202,14 +249,18 @@ test('allocation failure becomes a visible local error', async () => {
   manager.setReceivedAt('BTC_USDT', 124);
   manager.start();
   try {
-    manager.api.createMarketOrder(strategy, {
-      marketName: 'BTC_USDT', side: 'buy', amount: '1000',
+    manager.api.createOrder(strategy, {
+      orderType: 'Market',
+      orderRequest: { marketName: 'BTC_USDT', side: 'buy', amount: 1000 },
     }, 'main');
     await new Promise<void>((resolve) => setImmediate(resolve));
     const [entry] = manager.getOrdersForStrategy('BTC_USDT', strategy);
     assert.ok(entry.client_order_id < 0);
     assert.equal(entry.order, null);
-    assert.equal(entry.error?.code, 'ORDER_ID_UNAVAILABLE');
+    assert.equal(entry.error?.code,
+      REVERT_ORDER_ERROR['cannot allocate a WhiteBIT client order ID']);
+    assert.equal(entry.error?.isWBError, false);
+    assert.equal(entry.isFinalized, true);
     manager.api.removeAllOrdersFromCache(strategy, 'BTC_USDT');
   } finally {
     manager.stop();
@@ -272,11 +323,13 @@ test('paper market order exhausts available bids and finishes partially', () => 
   ]);
   emulator.start();
   try {
-    eventBus.emit(SERVER_EVENT.createMarketOrderRequest, {
+    eventBus.emit(SERVER_EVENT.createOrderRequestAndSubscribe, {
       paperTrading: true,
+      orderType: 'Market',
+      subscription: ['BTC_USDT'],
       orderRequest: {
         marketName: 'BTC_USDT', client_order_id: 200,
-        side: 'sell', amount: '10',
+        side: 'sell', amount: 10,
       },
     });
     emulator.stop();
@@ -371,5 +424,118 @@ test('depth updates run only the strategies subscribed to the market', () => {
   } finally {
     manager.stop();
     orderBookDepthService.stop();
+  }
+});
+
+
+test('subscriptions change only at first open and last finalized order', async () => {
+  const manager = new OrderManager();
+  const strategy = { name: 'subscription', run() {} } as Strategy;
+  let nextId = 0;
+  const oldSequence = sequencesPersistence.getNextOrderId;
+  sequencesPersistence.getNextOrderId = async () => ++nextId;
+  const commands: Array<{
+    subscription: string[] | null;
+    orderRequest: unknown;
+  }> = [];
+  const off = eventBus.on(
+    SERVER_EVENT.createOrderRequestAndSubscribe,
+    ({ subscription, orderRequest }) => {
+      commands.push({ subscription, orderRequest });
+    },
+  );
+  manager.setReceivedAt('BTC_USDT', 123);
+  manager.start();
+  try {
+    const request = {
+      orderType: 'Limit' as const,
+      orderRequest: {
+        marketName: 'BTC_USDT', side: 'buy' as const,
+        amount: 2, price: 100,
+      },
+    };
+    manager.api.createOrder(strategy, request, 'main');
+    await manager.waitForPendingRequests();
+    manager.api.createOrder(strategy, request, 'main');
+    await manager.waitForPendingRequests();
+    assert.deepEqual(commands.map(c => c.subscription), [
+      ['BTC_USDT'], null,
+    ]);
+    assert.equal(manager.getOrdersForStrategy('BTC_USDT', strategy).length, 2);
+
+    const limit = { ...order, type: 'Limit' as const, status: 'OPEN' as const,
+      left: 2, amount: 2, deal_stock: 0 };
+    eventBus.emit(SERVER_EVENT.orderReceived, {
+      marketName: 'BTC_USDT', client_order_id: 1, paperTrading: true,
+      order: { ...limit, client_order_id: 1, mtime: 1 }, error: null,
+    });
+    eventBus.emit(SERVER_EVENT.orderReceived, {
+      marketName: 'BTC_USDT', client_order_id: 2, paperTrading: true,
+      order: { ...limit, client_order_id: 2, mtime: 1 }, error: null,
+    });
+    eventBus.emit(SERVER_EVENT.orderUpdated, {
+      paperTrading: true, eventId: 3,
+      order: { ...limit, client_order_id: 1, status: 'CANCELED', mtime: 2 },
+    });
+    assert.equal(commands.length, 2);
+    eventBus.emit(SERVER_EVENT.orderUpdated, {
+      paperTrading: true, eventId: 3,
+      order: { ...limit, client_order_id: 2, status: 'CANCELED', mtime: 2 },
+    });
+    assert.deepEqual(commands.at(-1)?.subscription, []);
+    assert.equal(commands.at(-1)?.orderRequest, null);
+    manager.api.removeAllOrdersFromCache(strategy, 'BTC_USDT');
+  } finally {
+    manager.stop();
+    off();
+    sequencesPersistence.getNextOrderId = oldSequence;
+  }
+});
+
+test('final update wins against stale or duplicate creation response', async () => {
+  const manager = new OrderManager();
+  const strategy = { name: 'race', run() {} } as Strategy;
+  const oldSequence = sequencesPersistence.getNextOrderId;
+  sequencesPersistence.getNextOrderId = async () => 11;
+  manager.setReceivedAt('BTC_USDT', 123);
+  manager.start();
+  try {
+    manager.api.createOrder(strategy, {
+      orderType: 'Limit',
+      orderRequest: {
+        marketName: 'BTC_USDT', side: 'buy', amount: 2, price: 100,
+      },
+    }, 'main');
+    await manager.waitForPendingRequests();
+    const record = () => manager.getOrdersForStrategy('BTC_USDT', strategy)[0];
+    eventBus.emit(SERVER_EVENT.orderUpdated, {
+      paperTrading: true, eventId: 1,
+      order: { ...order, type: 'Limit', status: 'OPEN',
+        client_order_id: 11, mtime: 10 },
+    });
+    eventBus.emit(SERVER_EVENT.orderUpdated, {
+      paperTrading: true, eventId: 2,
+      order: { ...order, type: 'Limit', status: 'PARTIALLY_FILLED',
+        client_order_id: 11, mtime: 11 },
+    });
+    assert.equal(record().isFinalized, false);
+    eventBus.emit(SERVER_EVENT.orderUpdated, {
+      paperTrading: true, eventId: 3,
+      order: { ...order, type: 'Limit', status: 'CANCELED',
+        client_order_id: 11, mtime: 12 },
+    });
+    assert.equal(record().isFinalized, true);
+    eventBus.emit(SERVER_EVENT.orderReceived, {
+      paperTrading: true, marketName: 'BTC_USDT', client_order_id: 11,
+      order: { ...order, type: 'Limit', status: 'OPEN',
+        client_order_id: 11, mtime: 10 },
+      error: null,
+    });
+    assert.equal(record().order?.mtime, 12);
+    assert.equal(record().order?.status, 'CANCELED');
+    manager.api.removeAllOrdersFromCache(strategy, 'BTC_USDT');
+  } finally {
+    manager.stop();
+    sequencesPersistence.getNextOrderId = oldSequence;
   }
 });

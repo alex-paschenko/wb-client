@@ -20,8 +20,7 @@ import type {
 import type {
   OrderCancel,
   OrderKind,
-  OrderLimitRequest,
-  OrderMarketRequest,
+  OrderCreateRequest,
 } from './orders.js';
 import type {
   DepthPersistence,
@@ -108,13 +107,17 @@ export interface StrategiesCompletedEvent {
   error?: unknown;
 }
 
-export interface CreateMarketOrderRequestEvent {
-  orderRequest: OrderMarketRequest;
+export type CreateOrderRequestAndSubscribeEvent = (
+  | OrderCreateRequest
+  | { orderType: null; orderRequest: null }
+) & {
+  subscription: string[] | null;
   paperTrading: boolean;
-}
+};
 
-export interface CreateLimitOrderRequestEvent {
-  orderRequest: OrderLimitRequest;
+export interface OrderUpdatedEvent {
+  order: Order;
+  eventId: 1 | 2 | 3;
   paperTrading: boolean;
 }
 
@@ -171,8 +174,9 @@ export interface ServerEventMap {
   [SERVER_EVENT.strategiesCompleted]: StrategiesCompletedEvent;
 
   [SERVER_EVENT.orderReceived]: OrderReceivedEvent;
-  [SERVER_EVENT.createMarketOrderRequest]: CreateMarketOrderRequestEvent;
-  [SERVER_EVENT.createLimitOrderRequest]: CreateLimitOrderRequestEvent;
+  [SERVER_EVENT.createOrderRequestAndSubscribe]:
+    CreateOrderRequestAndSubscribeEvent;
+  [SERVER_EVENT.orderUpdated]: OrderUpdatedEvent;
   [SERVER_EVENT.orderCancelRequest]: OrderCancelEvent;
 
   [SERVER_EVENT.depthPersistenceRequest]: DepthPersistenceRequestEvent;

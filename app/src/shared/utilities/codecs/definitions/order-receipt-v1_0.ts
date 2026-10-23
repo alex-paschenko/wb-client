@@ -14,9 +14,8 @@ import { singleValueCodecDefinition } from './codec-definition-helpers.js';
 
 // Byte 0: presence bits (order, error). An order has ten float64 values,
 // six length-prefixed UTF-8 strings and one byte of boolean flags.
-// An error has a code discriminator (float64 or string), message and an
-// optional JSON value for the exchange-specific `errors` field.
-// To change this layout, add a new codec version; do not edit v1.0.
+// An error is one byte isWBError followed by one signed int32 code (LE).
+// This v1.0 layout is finalized before any receipts are persisted.
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
@@ -53,24 +52,20 @@ function stringSize(value: string): number {
   return 4 + length;
 }
 
-function errorDetails(error: OrderError): string | null {
-  if (error.errors === undefined) {
-    return null;
-  }
-
-  const value = JSON.stringify(error.errors);
-  if (value === undefined) {
-    throw new TypeError('Invalid order error details');
-  }
-
-  return value;
-}
-
 class Writer {
   constructor(public offset: number, private readonly view: DataView) {}
 
   byte(value: number): void {
     this.view.setUint8(this.offset++, value);
+  }
+
+  int32(value: number): void {
+    if (!Number.isInteger(value) ||
+      value < -0x80000000 || value > 0x7fffffff) {
+      throw new RangeError('Invalid order error code: expected int32');
+    }
+    this.view.setInt32(this.offset, value, true);
+    this.offset += 4;
   }
 
   float64(value: number): void {
@@ -107,6 +102,13 @@ class Reader {
   byte(): number {
     this.require(1);
     return this.view.getUint8(this.offset++);
+  }
+
+  int32(): number {
+    this.require(4);
+    const value = this.view.getInt32(this.offset, true);
+    this.offset += 4;
+    return value;
   }
 
   float64(): number {
@@ -194,18 +196,7 @@ export const orderReceipt_V1_0 =
         }
       }
 
-      if (error) {
-        size += 1 + (typeof error.code === 'number'
-          ? 8
-          : stringSize(error.code));
-
-        size += stringSize(error.message) + 1;
-
-        const details = errorDetails(error);
-        if (details !== null) {
-          size += stringSize(details);
-        }
-      }
+      if (error) size += 1 + 4;
       return size;
     },
     write: (offset, view, value) => {
@@ -230,24 +221,8 @@ export const orderReceipt_V1_0 =
       }
 
       if (value.error) {
-        const error = value.error;
-        writer.byte(typeof error.code === 'number' ? 0 : 1);
-
-        if (typeof error.code === 'number') {
-          writer.float64(error.code);
-        } else {
-          writer.string(error.code);
-        }
-
-        writer.string(error.message);
-
-        const details = errorDetails(error);
-
-        writer.byte(details === null ? 0 : 1);
-
-        if (details !== null) {
-          writer.string(details);
-        }
+        writer.byte(value.error.isWBError ? 1 : 0);
+        writer.int32(value.error.code);
       }
       return { value, nextOffset: writer.offset };
     },
@@ -264,23 +239,11 @@ export const orderReceipt_V1_0 =
       let error: OrderError | null = null;
 
       if (presence & 2) {
-        const codeType = reader.byte();
-        if (codeType !== 0 && codeType !== 1) {
-          throw new TypeError('Invalid order error code type');
+        const source = reader.byte();
+        if (source !== 0 && source !== 1) {
+          throw new TypeError('Invalid order error source');
         }
-
-        const code = codeType === 0 ? reader.float64() : reader.string();
-        const message = reader.string();
-        const hasDetails = reader.byte();
-
-        if (hasDetails !== 0 && hasDetails !== 1) {
-          throw new TypeError('Invalid order error details flag');
-        }
-
-        error = { code, message };
-        if (hasDetails) {
-          error.errors = JSON.parse(reader.string());
-        }
+        error = { isWBError: source === 1, code: reader.int32() };
       }
       return { value: { order, error }, nextOffset: reader.offset };
     },

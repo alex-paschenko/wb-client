@@ -11,7 +11,6 @@ import {
   invalidateAndRefreshUserBalance
 } from './services/sync-user-balance.js';
 import { marketsService } from './services/markets.js';
-import { waitForDatabase } from './db/wait-for-start.js';
 import { whitebitWsService } from './services/whitebit-ws.js';
 import { storageAggregationService } from './services/storage-aggregation.js';
 import {
@@ -92,8 +91,6 @@ const shutdown = async (signal: string): Promise<void> => {
 };
 
 const start = async (): Promise<void> => {
-  await waitForDatabase();
-
   serverGlobalStateService.start();
 
   await marketsService.refreshMarkets();

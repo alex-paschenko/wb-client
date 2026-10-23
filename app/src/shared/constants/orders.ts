@@ -1,16 +1,6 @@
 // app/src/shared/constants/orders.ts
 
-type Reverted<T extends Record<number, string>> = {
-  [K in keyof T & number as T[K]]: K;
-};
-
-function revert<const T extends Record<number, string>>(
-  obj: T,
-): Reverted<T> {
-  return Object.fromEntries(
-    Object.entries(obj).map(([key, value]) => [value, Number(key)]),
-  ) as Reverted<T>;
-}
+import { revert } from '../utilities/object';
 
 export const orderTypeNames = [
   'Limit',

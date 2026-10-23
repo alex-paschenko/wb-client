@@ -10,4 +10,4 @@ COPY --chown=node:node . .
 
 EXPOSE 3000 5173
 
-CMD ["npm", "run", "dev"]
+CMD ["sh", "-c", "npm run wait:db && npm run migrate:up && exec npm run dev"]

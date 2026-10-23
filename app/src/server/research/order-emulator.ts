@@ -1,7 +1,7 @@
 // app/src/server/research/order-emulator.ts
 
 import { globalStateService } from '../../shared/services/global-state.js';
-import type { Order } from '../../shared/types/order-receipt.js';
+import type { Order, OrderErrorCode } from '../../shared/types/order-receipt.js';
 import { SERVER_EVENT } from '../constants/events.js';
 import type {
   OrderCancel,
@@ -11,6 +11,7 @@ import type {
 import { eventBus } from '../services/event-bus.js';
 import { orderBookDepthService } from '../services/order-book-depth.js';
 import { SECOND } from '../../shared/constants/time.js';
+import { REVERT_ORDER_ERROR } from '../constants/order-error-codes.js';
 
 const RESPONSE_DELAY_MS = 50;
 const EPSILON = 1e-10;
@@ -27,19 +28,15 @@ export class OrderEmulator {
     }
 
     this.unsubscribe.push(eventBus.on(
-      SERVER_EVENT.createMarketOrderRequest,
+      SERVER_EVENT.createOrderRequestAndSubscribe,
       (event) => {
-        if (event.paperTrading) {
-          this.defer(() => this.create(event.orderRequest, true));
-        }
-      },
-    ));
-
-    this.unsubscribe.push(eventBus.on(
-      SERVER_EVENT.createLimitOrderRequest,
-      (event) => {
-        if (event.paperTrading) {
-          this.defer(() => this.create(event.orderRequest, false));
+        if (!event.paperTrading) return;
+        // Subscription acknowledgement is immediate in paper mode.
+        if (event.orderRequest) {
+          this.defer(() => this.create(
+            event.orderRequest,
+            event.orderType === 'Market',
+          ));
         }
       },
     ));
@@ -83,16 +80,15 @@ export class OrderEmulator {
     request: OrderMarketRequest | OrderLimitRequest,
     isMarket: boolean,
   ): void {
-    const { marketName, client_order_id, side } = request;
-
-    const amount = Number(request.amount);
+    const { marketName, client_order_id, side, amount } = request;
 
     const book = orderBookDepthService.getHistory(marketName)?.at(-1);
     if (!book || !Number.isFinite(amount) || amount <= 0) {
       this.reportError(
-        marketName, client_order_id,
-        'DEPTH_UNAVAILABLE',
-        'Paper order needs a current book and a positive amount',
+        marketName,
+        client_order_id,
+        REVERT_ORDER_ERROR['depth unavailable'],
+        false
       );
       return;
     }
@@ -105,9 +101,10 @@ export class OrderEmulator {
       !Number.isFinite(limitPrice) || limitPrice <= 0
     )) {
       this.reportError(
-        marketName, client_order_id,
-        'INVALID_PRICE',
-        'Paper limit price must be positive',
+        marketName,
+        client_order_id,
+        REVERT_ORDER_ERROR['paper limit price must be positive'],
+        false,
       );
 
       return;
@@ -149,9 +146,10 @@ export class OrderEmulator {
 
     if (isMarket && deal_stock <= 0) {
       this.reportError(
-        marketName, client_order_id,
-        'NO_LIQUIDITY',
-        'No executable paper order book levels',
+        marketName,
+        client_order_id,
+        REVERT_ORDER_ERROR['not enough traders'],
+        true,
       );
 
       return;
@@ -210,8 +208,10 @@ export class OrderEmulator {
     const existing = this.active.get(client_order_id);
     if (!existing || existing.market !== market) {
       this.reportError(
-        market, client_order_id,
-        'ORDER_NOT_ACTIVE', 'Paper order is no longer active',
+        market,
+        client_order_id,
+        REVERT_ORDER_ERROR['paper order is no longer active'],
+        false,
       );
 
       return;
@@ -220,13 +220,15 @@ export class OrderEmulator {
     this.active.delete(client_order_id);
 
     eventBus.emit(
-      SERVER_EVENT.orderReceived,
+      SERVER_EVENT.orderUpdated,
       {
-        marketName: market,
-        client_order_id,
         paperTrading: true,
-        order: { ...existing, mtime: Date.now() / 1000, status: 'CANCELED' },
-        error: null,
+        eventId: 3,
+        order: {
+          ...existing,
+          mtime: Math.max(Date.now() / SECOND, existing.mtime + 0.000001),
+          status: 'CANCELED',
+        },
       },
     );
   }
@@ -234,8 +236,8 @@ export class OrderEmulator {
   private reportError(
     marketName: string,
     client_order_id: number,
-    code: string,
-    message: string,
+    code: OrderErrorCode,
+    isWBError: boolean,
   ): void {
     eventBus.emit(
       SERVER_EVENT.orderReceived,
@@ -243,7 +245,7 @@ export class OrderEmulator {
         marketName, client_order_id,
         paperTrading: true,
         order: null,
-        error: { code, message },
+        error: { code, isWBError },
       },
     );
   }

@@ -5,7 +5,8 @@ import {
   orderReceiptsDao,
   type OrderReceiptRow,
 } from '../dao/order-receipts.js';
-import { encodeOrderReceipt } from '../utilities/order-receipt-codec.js';
+import { encodeEntireBinary } from
+  '../../shared/utilities/codecs/entire-binary-codec.js';
 import { eventBus } from './event-bus.js';
 import { ReliablePersistenceQueue } from './reliable-persistence-queue.js';
 
@@ -32,9 +33,14 @@ export class OrderPersistence {
           clientOrderId: event.client_order_id,
           orderKind: event.orderKind,
           paperTrading: event.paperTrading,
-          data: encodeOrderReceipt({
-            order: event.order,
-            error: event.error,
+          data: encodeEntireBinary({
+            codecName: 'order receipt v1.0',
+            binaryKind: 'snapshot',
+            parameters: null,
+            data: {
+              order: event.order,
+              error: event.error,
+            },
           }),
         });
       },

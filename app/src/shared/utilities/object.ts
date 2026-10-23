@@ -66,3 +66,15 @@ export function getterBinder(
     enumerable: true
   });
 }
+
+type Reverted<T extends Record<number, string>> = {
+  [K in keyof T & number as T[K]]: K;
+};
+
+export function revert<const T extends Record<number, string>>(
+  obj: T,
+): Reverted<T> {
+  return Object.fromEntries(
+    Object.entries(obj).map(([key, value]) => [value, Number(key)]),
+  ) as Reverted<T>;
+}

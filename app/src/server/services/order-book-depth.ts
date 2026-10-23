@@ -11,7 +11,8 @@ import type {
   RawOrderBookDepthBet,
 } from '../types/order-book-depth.js';
 import type { Strategy } from '../types/strategies.js';
-import { encodeDepthHistory } from '../utilities/depth-history-codec.js';
+import { encodeEntireBinary } from
+  '../../shared/utilities/codecs/entire-binary-codec.js';
 import { eventBus } from './event-bus.js';
 
 const MAX_SUBSCRIPTIONS = 10;
@@ -273,9 +274,12 @@ export class OrderBookDepthService {
       return;
     }
 
-    const data = encodeDepthHistory(
-      history.orderBookDepthHistory.slice(0, count),
-    );
+    const data = encodeEntireBinary({
+      codecName: 'order book depth history v1.0',
+      binaryKind: 'snapshot',
+      parameters: null,
+      data: history.orderBookDepthHistory.slice(0, count),
+    });
 
     eventBus.emit(
       SERVER_EVENT.depthPersistenceRequest,

@@ -40,10 +40,11 @@ export interface Order {
   reduce_only: boolean;
 }
 
+export type OrderErrorCode = number;
+
 export interface OrderError {
-  code: number | string;
-  message: string;
-  errors?: unknown;
+  code: OrderErrorCode;
+  isWBError: boolean;
 }
 
 export interface OrderReceiptBody {

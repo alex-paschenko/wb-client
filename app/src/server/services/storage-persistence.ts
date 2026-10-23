@@ -4,7 +4,8 @@ import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
 
 import { SECONDS } from '../../shared/constants/time.js';
 import type {
-  ExtendedStoragePersistenceSnapshot,
+  ActiveStoragePersistenceSnapshot,
+  ArchiveStoragePersistenceSnapshot,
   StoragePersistenceSnapshot,
 } from '../../shared/types/storage.js';
 import { SERVER_EVENT } from '../constants/events.js';
@@ -29,19 +30,19 @@ const EVENT_LOOP_MONITOR_INTERVAL = 10 * SECONDS;
 const STOP_POLL_INTERVAL = 10;
 
 interface PendingActiveSnapshot {
-  snapshot: ExtendedStoragePersistenceSnapshot;
+  snapshot: ActiveStoragePersistenceSnapshot;
   queuedAt: number;
   version: number;
 }
 
 interface PendingArchiveSnapshot {
-  snapshot: ExtendedStoragePersistenceSnapshot;
+  snapshot: ArchiveStoragePersistenceSnapshot;
   queuedAt: number;
 }
 
 interface ActiveBatchItem {
   marketName: string;
-  snapshot: ExtendedStoragePersistenceSnapshot;
+  snapshot: ActiveStoragePersistenceSnapshot;
   version: number;
 }
 
@@ -204,7 +205,7 @@ export class StoragePersistenceService {
   }
 
   private addActiveSnapshot(
-    snapshot: ExtendedStoragePersistenceSnapshot,
+    snapshot: ActiveStoragePersistenceSnapshot,
     queuedAt: number,
   ): void {
     const pending = this.pendingActive.get(snapshot.marketName);
@@ -296,10 +297,6 @@ export class StoragePersistenceService {
     this.workerBusy = true;
 
     try {
-      const snapshots = batch.items.map((item) =>
-        this.toPersistenceSnapshot(item.snapshot)
-      );
-
       const startedAt = Date.now();
 
       if (isCpuProfiling) {
@@ -307,9 +304,13 @@ export class StoragePersistenceService {
           setTimeout(resolve, 10);
         });
       } else if (batch.snapshotType === 'active') {
-        await storageDao.upsertAlive(snapshots);
+        await storageDao.upsertAlive(
+          batch.items.map((item) => item.snapshot),
+        );
       } else {
-        await storageDao.insertArchive(snapshots);
+        await storageDao.insertArchive(
+          batch.items.map((item) => item.snapshot),
+        );
       }
 
       const duration = Date.now() - startedAt;
@@ -431,17 +432,6 @@ export class StoragePersistenceService {
         archivePending: this.pendingArchive.length,
       },
     );
-  }
-
-  private toPersistenceSnapshot(
-    snapshot: ExtendedStoragePersistenceSnapshot,
-  ): StoragePersistenceSnapshot {
-    return {
-      marketName: snapshot.marketName,
-      startedAt: snapshot.startedAt,
-      endedAt: snapshot.endedAt,
-      data: snapshot.data,
-    };
   }
 
   private getOldestQueuedAt(): number | null {

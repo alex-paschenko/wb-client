@@ -26,8 +26,8 @@ export const SERVER_EVENT = {
   strategiesCompleted: 'strategies completed',
 
   orderReceived: 'order received',
-  createMarketOrderRequest: 'create market order request',
-  createLimitOrderRequest: 'create limit order request',
+  createOrderRequestAndSubscribe: 'create order request and subscribe',
+  orderUpdated: 'order updated',
   orderCancelRequest: 'order cancel request',
 
   depthPersistenceRequest: 'depth persistence request',

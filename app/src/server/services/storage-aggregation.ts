@@ -113,7 +113,8 @@ export class StorageAggregationService {
       }
 
       console.log(
-        `Most active market: ${marketName} (L0 startedAt: ${startL0Timestamp}, size: ${size})`,
+        `Most active market: ${marketName} (L0 startedAt: ` +
+        `${new Date(startL0Timestamp).toLocaleTimeString('ru-RU')}, size: ${size})`,
       );
 
     //   if (marketName === '---') {
@@ -222,29 +223,29 @@ export class StorageAggregationService {
       return;
     }
 
-    const completed = this.strategiesCompletedAwaiters.wait(marketName);
+    // const completed = this.strategiesCompletedAwaiters.wait(marketName);
 
-    eventBus.emit(SERVER_EVENT.runStrategiesRequest, {
-      marketName,
-      accessors: storage.getAccessors(),
-      size,
-      endedAt,
-    });
+    // eventBus.emit(SERVER_EVENT.runStrategiesRequest, {
+    //   marketName,
+    //   accessors: storage.getAccessors(),
+    //   size,
+    //   endedAt,
+    // });
 
-    const result = await completed;
+    // const result = await completed;
 
-    if (
-      result.size !== size
-      || result.endedAt !== endedAt
-      || storage.size !== size
-      || storage.endedAt !== endedAt
-    ) {
-      throw new Error('Storage changed during strategy execution');
-    }
+    // if (
+    //   result.size !== size
+    //   || result.endedAt !== endedAt
+    //   || storage.size !== size
+    //   || storage.endedAt !== endedAt
+    // ) {
+    //   throw new Error('Storage changed during strategy execution');
+    // }
 
-    if (result.error !== undefined) {
-      throw result.error;
-    }
+    // if (result.error !== undefined) {
+    //   throw result.error;
+    // }
 
     storage.clearAccessors();
 

@@ -13,9 +13,10 @@
     "research:build-cache": "node --import tsx src/server/research/build-market-research-cache.ts",
     "research:freeze-table": "node --import tsx src/server/research/build-market-forecast-table.ts",
     "build": "tsc --noEmit",
+    "wait:db": "node --import tsx src/server/scripts/wait-for-db.ts",
     "migrate:create": "node-pg-migrate create --migrations-dir src/server/db/migrations --migration-file-language ts",
-    "migrate:up": "tsx ./node_modules/node-pg-migrate/bin/node-pg-migrate up --migrations-dir src/server/db/migrations --database-url \"$DATABASE_URL\"",
-    "migrate:down": "tsx ./node_modules/node-pg-migrate/bin/node-pg-migrate down --migrations-dir src/server/db/migrations --database-url \"$DATABASE_URL\""
+    "migrate:up": "node --import tsx src/server/scripts/migrate.ts up",
+    "migrate:down": "node --import tsx src/server/scripts/migrate.ts down"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.0",

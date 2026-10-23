@@ -52,9 +52,19 @@ export interface StoragePersistenceSnapshot {
   data: Uint8Array;
 }
 
-export interface ExtendedStoragePersistenceSnapshot
+export interface ActiveStoragePersistenceSnapshot
   extends StoragePersistenceSnapshot {
-  snapshotType: 'active' | 'archive';
+  snapshotType: 'active';
 }
+
+export interface ArchiveStoragePersistenceSnapshot
+  extends StoragePersistenceSnapshot {
+  snapshotType: 'archive';
+  numOfItems: number;
+}
+
+export type ExtendedStoragePersistenceSnapshot =
+  | ActiveStoragePersistenceSnapshot
+  | ArchiveStoragePersistenceSnapshot;
 
 export type SnapshotTypes = 'both snapshots' | 'archive snapshot only';

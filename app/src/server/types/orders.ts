@@ -8,7 +8,7 @@ import type {
 export interface OrderMarketRequest {
   marketName: string;
   side: OrderSide;
-  amount: string;
+  amount: number;
   client_order_id: number;
   stp?: OrderStp;
 }
@@ -29,11 +29,20 @@ export interface OrderCancel {
 
 export type OrderKind = 'main' | 'stop-loss' | 'take-profit';
 
-export type OrderPrice = 'market' | 'limit';
+export type OrderCreateType = Extract<Order['type'], 'Market' | 'Limit'>;
+
+export type OrderCreatePreRequest =
+  | { orderType: 'Market'; orderRequest: OrderMarketPreRequest }
+  | { orderType: 'Limit'; orderRequest: OrderLimitPreRequest };
+
+export type OrderCreateRequest =
+  | { orderType: 'Market'; orderRequest: OrderMarketRequest }
+  | { orderType: 'Limit'; orderRequest: OrderLimitRequest };
 
 export interface OrderAndStrategy {
   client_order_id: number;
   order: Order | null;
+  isFinalized: boolean;
   error: OrderError | null;
   paperTrading: boolean;
   strategy: Strategy;
@@ -41,14 +50,9 @@ export interface OrderAndStrategy {
 }
 
 export interface OrderApi {
-  createMarketOrder: (
+  createOrder: (
     strategy: Strategy,
-    request: OrderMarketPreRequest,
-    orderKind: OrderKind,
-  ) => void;
-  createLimitOrder: (
-    strategy: Strategy,
-    request: OrderLimitPreRequest,
+    request: OrderCreatePreRequest,
     orderKind: OrderKind,
   ) => void;
   cancelOrder: (market: string, client_order_id: number) => void;

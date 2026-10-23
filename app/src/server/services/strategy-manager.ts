@@ -1,6 +1,13 @@
-import { MARKET_FORECAST_NAME } from '../../shared/constants/storage-entities.js';
+import {
+  CANDLE_NAME,
+  MARKET_FORECAST_NAME,
+} from '../../shared/constants/storage-entities.js';
 import { MINUTES } from '../../shared/constants/time.js';
-import type { MarketForecastValue } from '../../shared/types/data-types.js';
+import type {
+  MarketCandle,
+  MarketForecastValue,
+} from '../../shared/types/data-types.js';
+import type { LazyArray } from '../../shared/utilities/lazy-array.js';
 import { SERVER_EVENT } from '../constants/events.js';
 import { strategies } from '../strategies/index.js';
 import type { RunStrategiesRequestEvent } from '../types/events.js';
@@ -74,10 +81,16 @@ export class StrategyManager {
   ): void {
     const { marketName, accessors, size, endedAt } = event;
     try {
-      const forecast = accessors.indicators[MARKET_FORECAST_NAME]
-        .get(size - 1) as MarketForecastValue;
+      const last = size - 1;
 
-      const storage = [{ marketName, receivedAt: endedAt, forecast }];
+      const forecast =
+        (accessors.indicators[MARKET_FORECAST_NAME] as LazyArray<MarketForecastValue>)
+          .get(last);
+
+      const price = (accessors.candles[CANDLE_NAME] as LazyArray<MarketCandle>)
+        .get(last, 'price');
+
+      const storage = [{ marketName, receivedAt: endedAt, price, forecast }];
       this.storageByMarkets.set(marketName, storage);
 
       orderManager.setReceivedAt(marketName, endedAt);

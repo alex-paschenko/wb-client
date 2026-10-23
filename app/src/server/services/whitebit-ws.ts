@@ -1,14 +1,21 @@
 // src/server/services/whitebit-ws.ts
 
 import { SECOND } from '../../shared/constants/time.js';
+import type { OrderError } from '../../shared/types/order-receipt.js';
 import type {
   MarketRollingStatistics,
 } from '../../shared/types/market-statistics-rolling.js';
 import { SERVER_EVENT } from '../constants/events.js';
+import { REVERT_ORDER_ERROR } from '../constants/order-error-codes.js';
 import type {
-  MarketsInfoUpdatedEvent,
+  CreateOrderRequestAndSubscribeEvent, MarketsInfoUpdatedEvent,
   OrderBookDepthSubscriptionEvent,
 } from '../types/events.js';
+import type { OrderCancel } from '../types/orders.js';
+import {
+  fromWhitebitOrder, fromWhitebitOrderError,
+  toWhitebitCancelRequest, toWhitebitOrderRequest,
+} from '../whitebit/order-adapter.js';
 import type { RawOrderBookDepth } from '../types/order-book-depth.js';
 import { MarketTick } from '../../shared/types/ticks.js';
 import type {
@@ -22,6 +29,21 @@ import { globalStateService } from '../../shared/services/global-state.js';
 const WS_REQUEST_TIMEOUT = 10 * SECOND;
 const DEPTH_LIMIT = 20;
 const DEPTH_PRICE_INTERVAL = '0';
+
+const INTERNAL_ORDER_ERRORS = {
+  outcomeUnknown: {
+    code: REVERT_ORDER_ERROR['order outcome unknown'], isWBError: false,
+  },
+  subscriptionFailed: {
+    code: REVERT_ORDER_ERROR['order subscription failed'], isWBError: false,
+  },
+  notSent: {
+    code: REVERT_ORDER_ERROR['order not sent'], isWBError: false,
+  },
+  realOrdersDisabled: {
+    code: REVERT_ORDER_ERROR['real orders disabled'], isWBError: false,
+  },
+} as const satisfies Record<string, OrderError>;
 
 const SUBSCRIBE_TYPE = {
   marketStatistics: 'market statistics',
@@ -70,6 +92,19 @@ interface DepthSubscriptionState {
   lastUpdateId: number | null;
 }
 
+type OrderQueueItem =
+  | { kind: 'create'; event: CreateOrderRequestAndSubscribeEvent }
+  | { kind: 'cancel'; event: OrderCancel };
+
+type OrderRequestPhase = 'subscribe' | 'place' | 'cancel';
+
+interface PendingOrderRequest {
+  item: OrderQueueItem;
+  phase: OrderRequestPhase;
+  requestId: number;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
 export class WhitebitWsService {
   private readonly wsClient = new WhitebitWSClient({
     onOpen: () => this.handleWSOpen(),
@@ -87,37 +122,25 @@ export class WhitebitWsService {
   private readonly depthSubscriptions = new Map<string, DepthSubscriptionState>();
   private stopDepthListener: (() => void) | null = null;
   private readonly stopOrderListeners: (() => void)[] = [];
+  private readonly orderQueue: OrderQueueItem[] = [];
+  private pendingOrderRequest: PendingOrderRequest | null = null;
+  private orderQueueBlocked = false;
 
   public start(): void {
+    this.orderQueueBlocked = false;
+
     if (this.stopOrderListeners.length === 0) {
       this.stopOrderListeners.push(eventBus.on(
-        SERVER_EVENT.createMarketOrderRequest,
-        ({ orderRequest, paperTrading }) => {
-          if (!paperTrading) {
-            this.realOrderUnavailable(
-              orderRequest.marketName, orderRequest.client_order_id,
-            );
-          }
-        },
-      ));
-
-      this.stopOrderListeners.push(eventBus.on(
-        SERVER_EVENT.createLimitOrderRequest,
-        ({ orderRequest, paperTrading }) => {
-          if (!paperTrading) {
-            this.realOrderUnavailable(
-              orderRequest.marketName, orderRequest.client_order_id,
-            );
-          }
+        SERVER_EVENT.createOrderRequestAndSubscribe,
+        (event) => {
+          if (!event.paperTrading) this.enqueueOrder({ kind: 'create', event });
         },
       ));
 
       this.stopOrderListeners.push(eventBus.on(
         SERVER_EVENT.orderCancelRequest,
-        ({ market, client_order_id, paperTrading }) => {
-          if (!paperTrading) {
-            this.realOrderUnavailable(market, client_order_id);
-          }
+        (event) => {
+          if (!event.paperTrading) this.enqueueOrder({ kind: 'cancel', event });
         },
       ));
     }
@@ -155,6 +178,8 @@ export class WhitebitWsService {
       unsubscribe();
     }
 
+    this.abortOrderQueue(INTERNAL_ORDER_ERRORS.outcomeUnknown,
+      'WhiteBIT service stopped');
     this.stopDepthListener?.();
     this.stopDepthListener = null;
     this.clearAllSubscriptionTimeouts();
@@ -167,23 +192,223 @@ export class WhitebitWsService {
     this.wsClient.disconnect();
   }
 
-  private realOrderUnavailable(
-    marketName: string,
-    client_order_id: number,
+  // Enable only after WebSocket account authorization and state recovery exist.
+  private requireAccountAuthorization(): void {
+    throw new Error('not implemented yet: WhiteBIT WebSocket authorization');
+  }
+
+  private enqueueOrder(item: OrderQueueItem): void {
+    if (this.orderQueueBlocked) {
+      this.reportOrderQueueError(item, INTERNAL_ORDER_ERRORS.outcomeUnknown,
+        'WhiteBIT order queue requires reconciliation');
+      return;
+    }
+    this.orderQueue.push(item);
+    this.processOrderQueue();
+  }
+
+  private processOrderQueue(): void {
+    if (this.pendingOrderRequest || this.orderQueueBlocked) return;
+    const item = this.orderQueue.shift();
+    if (!item) return;
+
+    try {
+      this.requireAccountAuthorization();
+      if (!this.wsClient.isOpen()) {
+        throw new Error('WhiteBIT WebSocket is not open');
+      }
+      if (item.kind === 'cancel') {
+        this.sendOrderRequest(item, 'cancel', 'order_cancel',
+          toWhitebitCancelRequest(item.event));
+      } else {
+        this.processCreateCommand(item);
+      }
+    } catch (error) {
+      this.reportOrderQueueError(item, INTERNAL_ORDER_ERRORS.realOrdersDisabled, error);
+      // This command has not sent an order; it is safe to continue.
+      this.processOrderQueue();
+    }
+  }
+
+  private processCreateCommand(
+    item: Extract<OrderQueueItem, { kind: 'create' }>,
   ): void {
-    eventBus.emit(
-      SERVER_EVENT.orderReceived,
-      {
-        marketName,
-        client_order_id,
+    const { subscription } = item.event;
+    if (subscription !== null) {
+      const method = subscription.length
+        ? 'ordersPending_subscribe' : 'ordersPending_unsubscribe';
+      this.sendOrderRequest(item, 'subscribe', method,
+        subscription.length ? subscription : []);
+      return;
+    }
+    this.placeOrder(item);
+  }
+
+  private placeOrder(
+    item: Extract<OrderQueueItem, { kind: 'create' }>,
+  ): void {
+    const event = item.event;
+    if (event.orderRequest === null) {
+      this.processOrderQueue();
+      return;
+    }
+    const request = toWhitebitOrderRequest(event.orderType === 'Limit'
+      ? { orderType: 'Limit', orderRequest: event.orderRequest }
+      : { orderType: 'Market', orderRequest: event.orderRequest });
+    this.sendOrderRequest(item, 'place', request.method, request.params);
+  }
+
+  private sendOrderRequest(
+    item: OrderQueueItem,
+    phase: OrderRequestPhase,
+    method: string,
+    params: unknown[],
+  ): void {
+    const requestId = this.wsClient.sendRequest(method, params);
+    const timeout = setTimeout(() => this.handleOrderRequestTimeout(requestId),
+      WS_REQUEST_TIMEOUT);
+    this.pendingOrderRequest = { item, phase, requestId, timeout };
+  }
+
+  private handleOrderRequestTimeout(requestId: number): void {
+    if (this.pendingOrderRequest?.requestId !== requestId) return;
+    // A placed order may have executed even when its response was lost.
+    this.abortOrderQueue(INTERNAL_ORDER_ERRORS.outcomeUnknown,
+      'WhiteBIT request timed out; reconcile before trading');
+  }
+
+  private handleOrderRequestReceipt(message: Record<string, unknown>): boolean {
+    const pending = this.pendingOrderRequest;
+    if (!pending || message.id !== pending.requestId) return false;
+    clearTimeout(pending.timeout);
+    this.pendingOrderRequest = null;
+    const { item, phase } = pending;
+
+    if (phase === 'subscribe') {
+      if (!this.isSuccessReceipt(message)) {
+        this.reportOrderQueueError(item, INTERNAL_ORDER_ERRORS.subscriptionFailed,
+          message.error ?? message.result);
+        this.abortOrderQueue(INTERNAL_ORDER_ERRORS.subscriptionFailed,
+          'WhiteBIT order subscription failed');
+        return true;
+      }
+      if (item.kind === 'create') {
+        try {
+          this.placeOrder(item);
+        } catch (error) {
+          this.reportOrderQueueError(item, INTERNAL_ORDER_ERRORS.notSent, error);
+          this.processOrderQueue();
+        }
+      }
+      return true;
+    }
+
+    if (message.error != null) {
+      try {
+        const error = fromWhitebitOrderError(message.error);
+        this.reportOrderQueueError(item, error, message.error);
+      } catch (error) {
+        this.reportOrderQueueError(item, INTERNAL_ORDER_ERRORS.outcomeUnknown,
+          error);
+        this.abortOrderQueue(INTERNAL_ORDER_ERRORS.outcomeUnknown,
+          'Cannot decode the WhiteBIT order error');
+        return true;
+      }
+    } else if (!message.result) {
+      this.reportOrderQueueError(item, INTERNAL_ORDER_ERRORS.outcomeUnknown,
+        'WhiteBIT returned no result and no error');
+      this.abortOrderQueue(INTERNAL_ORDER_ERRORS.outcomeUnknown,
+        'Cannot determine whether a WhiteBIT order executed');
+      return true;
+    } else {
+      try {
+        const order = fromWhitebitOrder(message.result);
+        eventBus.emit(SERVER_EVENT.orderReceived, {
+          marketName: order.market,
+          client_order_id: order.client_order_id,
+          paperTrading: false,
+          order,
+          error: null,
+        });
+      } catch (error) {
+        this.reportOrderQueueError(item, INTERNAL_ORDER_ERRORS.outcomeUnknown,
+          error);
+        this.abortOrderQueue(INTERNAL_ORDER_ERRORS.outcomeUnknown,
+          'Cannot decode a possibly executed WhiteBIT order');
+        return true;
+      }
+    }
+    this.processOrderQueue();
+    return true;
+  }
+
+  private reportOrderQueueError(
+    item: OrderQueueItem,
+    error: OrderError,
+    diagnostic?: unknown,
+  ): void {
+    if (diagnostic !== undefined) {
+      console.error('WhiteBIT order request failed', {
+        code: error.code, isWBError: error.isWBError, diagnostic,
+      });
+    }
+    if (item.kind === 'create' && !item.event.orderRequest) {
+      return;
+    }
+    const marketName = item.kind === 'cancel'
+      ? item.event.market : item.event.orderRequest!.marketName;
+
+    const client_order_id = item.kind === 'cancel'
+      ? item.event.client_order_id : item.event.orderRequest!.client_order_id;
+      
+    eventBus.emit(SERVER_EVENT.orderReceived, {
+      marketName,
+      client_order_id,
+      paperTrading: false,
+      order: null,
+      error,
+    });
+  }
+
+  private abortOrderQueue(error: OrderError, diagnostic?: unknown): void {
+    if (diagnostic !== undefined) {
+      console.error('WhiteBIT order queue aborted', diagnostic);
+    }
+    const pending = this.pendingOrderRequest;
+    if (pending) {
+      clearTimeout(pending.timeout);
+      this.pendingOrderRequest = null;
+      this.reportOrderQueueError(pending.item, error);
+    }
+    for (const item of this.orderQueue.splice(0)) {
+      this.reportOrderQueueError(item, error);
+    }
+    // Reconnection/reconciliation will be added alongside authorization.
+    this.orderQueueBlocked = true;
+  }
+
+  private handleOrdersPendingUpdate(message: Record<string, unknown>): void {
+    const params = message.params;
+    if (!Array.isArray(params) || params.length < 2) return;
+    const [eventId, raw] = params;
+    if (eventId !== 1 && eventId !== 2 && eventId !== 3) return;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+    const clientId = (raw as Record<string, unknown>).client_order_id;
+    // Manual/account orders may have no numeric client id; they are not ours.
+    if (typeof clientId !== 'number' &&
+      (typeof clientId !== 'string' || !/^\d+$/.test(clientId))) {
+      return;
+    }
+    try {
+      const order = fromWhitebitOrder(raw);
+      eventBus.emit(SERVER_EVENT.orderUpdated, {
+        eventId,
+        order,
         paperTrading: false,
-        order: null,
-        error: {
-          code: 'REAL_ORDERS_DISABLED',
-          message: 'Real order execution has not been enabled',
-        },
-      },
-    );
+      });
+    } catch (error) {
+      console.error('Malformed WhiteBIT ordersPending_update', error);
+    }
   }
 
   private handleDepthSubscriptionEvent(
@@ -426,6 +651,15 @@ export class WhitebitWsService {
   private handleWSMessage(
     message: Record<string, unknown>,
   ): void {
+    if (this.handleOrderRequestReceipt(message)) {
+      return;
+    }
+
+    if (message.method === 'ordersPending_update') {
+      this.handleOrdersPendingUpdate(message);
+      return;
+    }
+
     if (this.handleSubscriptionReceipt(message)) {
       return;
     }
@@ -617,7 +851,7 @@ export class WhitebitWsService {
   private isSuccessReceipt(
     message: Record<string, unknown>,
   ): boolean {
-    if (message.error !== null) {
+    if (message.error != null) {
       return false;
     }
 
@@ -778,16 +1012,17 @@ export class WhitebitWsService {
     console.error('WhiteBIT market statistics WebSocket error', error);
   }
 
-  private handleWSClose(
-    code: number,
-    reason: string,
-  ): void {
+  private handleWSClose(code: number, reason: string): void {
     console.warn('WhiteBIT market statistics WebSocket closed', {
       code,
       reason,
     });
+
+    if (this.pendingOrderRequest) {
+      this.abortOrderQueue(INTERNAL_ORDER_ERRORS.outcomeUnknown,
+        'WebSocket disconnected during an order request');
+    }
   }
 }
 
-export const whitebitWsService =
-  new WhitebitWsService();
+export const whitebitWsService = new WhitebitWsService();

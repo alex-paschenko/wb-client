@@ -53,7 +53,5 @@ export interface OrderBookDepthSubscriptionParams {
 }
 
 export interface DepthApi {
-  orderBookDepthSubscription: (
-    params: OrderBookDepthSubscriptionParams,
-  ) => boolean;
+  orderBookDepthSubscription: (params: OrderBookDepthSubscriptionParams) => boolean;
 }

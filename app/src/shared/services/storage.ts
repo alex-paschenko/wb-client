@@ -418,6 +418,7 @@ export class Storage {
       marketName: this.marketName,
       startedAt: ticks[0].receivedAt,
       endedAt: ticks.at(-1)!.receivedAt,
+      numOfItems: ticks.length,
       data: encodeEntireBinary({
         codecName: 'ticks v1.0',
         binaryKind: SNAPSHOT_BINARY_KIND,

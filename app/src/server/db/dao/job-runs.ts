@@ -1,7 +1,6 @@
 // app/src/server/dao/job-runs.ts
 
-import type { Sql } from '../db/client.js';
-import { q } from '../db/client.js';
+import { q, type Sql } from '../client.js';
 
 export interface CreateJobRunInput {
   jobName: string;

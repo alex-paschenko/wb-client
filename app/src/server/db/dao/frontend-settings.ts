@@ -1,11 +1,10 @@
 // app/src/server/dao/frontend-settings.ts
 
-import type { Sql } from '../db/client.js';
-import { q } from '../db/client.js';
+import { q, type Sql } from '../client.js';
 
 import type {
   FrontendSettingsValue,
-} from '../../shared/types/frontend-settings.js';
+} from '../../../shared/types/frontend-settings.js';
 
 export class FrontendSettingsDao {
   public constructor(

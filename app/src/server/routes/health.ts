@@ -1,7 +1,7 @@
 import type { Router } from 'express';
 import { Router as createRouter } from 'express';
 
-import { healthDao } from '../dao/health';
+import { healthDao } from '../db/dao/health.js';
 
 export const createHealthRouter = (): Router => {
   const router = createRouter();

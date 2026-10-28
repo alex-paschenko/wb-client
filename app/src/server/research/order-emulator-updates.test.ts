@@ -1,6 +1,7 @@
 // app/src/server/research/order-emulator-updates.test.ts
 
 import assert from 'node:assert/strict';
+import { globalStateService } from '../../shared/services/global-state.js';
 import { test } from 'node:test';
 import { SERVER_EVENT } from '../constants/events.js';
 import { REVERT_WB_ORDER_ERROR } from '../constants/order-error-codes.js';
@@ -9,6 +10,17 @@ import { eventBus } from '../services/event-bus.js';
 import { orderBookDepthService } from '../services/order-book-depth.js';
 import type { OrderUpdatedEvent } from '../types/events.js';
 import type { Strategy } from '../types/strategies.js';
+
+globalStateService.setMarketData(
+  { BTC_USD: {} as never, ETH_USD: {} as never },
+  {
+    BTC_USD: { makerFeeRatio: 0.001, takerFeeRatio: 0.001,
+      rpiMakerFeePremiumRatio: null },
+    ETH_USD: { makerFeeRatio: 0.001, takerFeeRatio: 0.001,
+      rpiMakerFeePremiumRatio: null },
+  },
+);
+
 
 test('emulator publishes event 3 for canceled resting limit order', () => {
   const emulator = new OrderEmulator();
@@ -31,7 +43,7 @@ test('emulator publishes event 3 for canceled resting limit order', () => {
   emulator.start();
   try {
     eventBus.emit(SERVER_EVENT.createOrderRequestAndSubscribe, {
-      paperTrading: true,
+      isPaperTrading: true,
       orderType: 'Limit',
       subscription: ['BTC_USD'],
       orderRequest: {
@@ -43,13 +55,14 @@ test('emulator publishes event 3 for canceled resting limit order', () => {
     emulator.stop();
     emulator.start();
     eventBus.emit(SERVER_EVENT.orderCancelRequest, {
-      market: 'BTC_USD', client_order_id: 20, paperTrading: true,
+      market: 'BTC_USD', client_order_id: 20, isPaperTrading: true,
     });
     emulator.stop();
-    assert.equal(updates.length, 1);
-    assert.equal(updates[0].eventId, 3);
-    assert.equal(updates[0].order.status, 'CANCELED');
-    assert.equal(updates[0].order.client_order_id, 20);
+    assert.equal(updates.length, 2);
+    assert.equal(updates[0].eventId, 1);
+    assert.equal(updates[1].eventId, 3);
+    assert.equal(updates[1].order.status, 'CANCELED');
+    assert.equal(updates[1].order.client_order_id, 20);
   } finally {
     emulator.stop();
     orderBookDepthService.stop();
@@ -66,7 +79,7 @@ test('paper order creation and cancellation update manager finalization',
     const oldSequence = sequencesPersistence.getNextOrderId;
     sequencesPersistence.getNextOrderId = async () => 55;
     const strategy = { name: 'paper-integration', run() {} } as Strategy;
-    const manager = new OrderManager(true);
+    const manager = new OrderManager();
     const emulator = new OrderEmulator();
     manager.setReceivedAt('BTC_USD', 321);
     manager.start();
@@ -83,11 +96,17 @@ test('paper order creation and cancellation update manager finalization',
     ]);
     emulator.start();
     try {
-      manager.api.createOrder(strategy, {
-        orderType: 'Limit', orderRequest: {
-          marketName: 'BTC_USD', side: 'buy', amount: 2, price: 99,
+      manager.api.createOrder(
+        strategy,
+        {
+          orderType: 'Limit',
+          orderRequest: {
+            marketName: 'BTC_USD', side: 'buy', amount: 2, price: 99,
+          },
         },
-      }, 'main');
+        'main',
+        true,
+      );
       await manager.waitForPendingRequests();
       emulator.stop();
       const getEntry = () => manager.getOrdersForStrategy('BTC_USD', strategy)[0];
@@ -111,7 +130,7 @@ test('emulator returns WB-classified liquidity error by numeric alias', () => {
   const strategy = { name: 'liquidity-test', run() {} } as Strategy;
   const emulator = new OrderEmulator();
   const errors: Array<{ code: number; isWBError: boolean }> = [];
-  const off = eventBus.on(SERVER_EVENT.orderReceived, (event) => {
+  const off = eventBus.on(SERVER_EVENT.orderRequestResult, (event) => {
     if (event.error) errors.push(event.error);
   });
   orderBookDepthService.start();
@@ -128,7 +147,7 @@ test('emulator returns WB-classified liquidity error by numeric alias', () => {
   emulator.start();
   try {
     eventBus.emit(SERVER_EVENT.createOrderRequestAndSubscribe, {
-      paperTrading: true, orderType: 'Market',
+      isPaperTrading: true, orderType: 'Market',
       subscription: ['ETH_USD'],
       orderRequest: {
         marketName: 'ETH_USD', side: 'sell', amount: 1,
@@ -143,6 +162,36 @@ test('emulator returns WB-classified liquidity error by numeric alias', () => {
   } finally {
     emulator.stop();
     orderBookDepthService.stop();
+    off();
+  }
+});
+
+test('paper validation uses documented WS errors, not paper-only codes', () => {
+  const emulator = new OrderEmulator();
+  const errors: Array<{ code: number; isWBError: boolean }> = [];
+  const off = eventBus.on(SERVER_EVENT.orderRequestResult, event => {
+    if (event.error) errors.push(event.error);
+  });
+  emulator.start();
+  try {
+    eventBus.emit(SERVER_EVENT.createOrderRequestAndSubscribe, {
+      isPaperTrading: true, subscription: null, orderType: 'Market',
+      orderRequest: {
+        marketName: 'BTC_USD', side: 'buy', amount: -2,
+        client_order_id: 300,
+      },
+    });
+    eventBus.emit(SERVER_EVENT.orderCancelRequest, {
+      market: 'BTC_USD', client_order_id: 300, isPaperTrading: true,
+    });
+    emulator.stop();
+    assert.deepEqual(errors, [{
+      code: REVERT_WB_ORDER_ERROR['invalid argument'], isWBError: true,
+    }, {
+      code: REVERT_WB_ORDER_ERROR['order not found'], isWBError: true,
+    }]);
+  } finally {
+    emulator.stop();
     off();
   }
 });

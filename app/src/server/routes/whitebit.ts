@@ -2,7 +2,7 @@
 import type { Router } from 'express';
 import { Router as createRouter } from 'express';
 
-import { marketsService } from '../services/markets.js';
+import { syncMarketData } from '../services/sync-market-data.js';
 
 export const createWhitebitRouter = (): Router => {
   const router = createRouter();
@@ -10,12 +10,8 @@ export const createWhitebitRouter = (): Router => {
 
   router.post('/sync-markets', async (_req, res, next) => {
     try {
-      await marketsService.refreshMarkets();
-
-      res.json({
-        ok: true,
-        count: Object.keys(marketsService.markets).length,
-      });
+      const result = await syncMarketData();
+      res.json({ ok: true, count: result.markets });
     } catch (error) {
       next(error);
     }

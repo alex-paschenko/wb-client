@@ -4,7 +4,7 @@ import {
   STORAGE_ENTITY_KINDS,
   type StorageEntityKind,
 } from '../constants/storage-entities.js';
-import type { MarketsByName } from '../types/market.js';
+import type { MarketsByName, MarketFeesByName, MarketFee } from '../types/market.js';
 import type {
   EntityDescriptors,
   EntityDesriptor,
@@ -23,6 +23,7 @@ type StorageEntitiesListener = (
 type MarketsListener = (
   markets: MarketsByName | null,
   marketNames: readonly string[] | null,
+  marketFees: MarketFeesByName | null,
 ) => void;
 
 export class GlobalStateService {
@@ -47,6 +48,8 @@ export class GlobalStateService {
     new Set<StorageEntitiesListener>();
 
   private marketsByName: MarketsByName | null = null;
+
+  private marketFeesByName: MarketFeesByName | null = null;
 
   private marketNames: string[] | null = null;
 
@@ -211,14 +214,21 @@ export class GlobalStateService {
     return this.clientStorageEntitiesStructure;
   }
 
-  public setMarkets(
+  public setMarketData(
     markets: MarketsByName,
-    marketNames: readonly string[],
+    marketFees: MarketFeesByName,
+    marketNames: readonly string[] = Object.keys(markets),
   ): void {
+    if (Object.keys(markets).length !== Object.keys(marketFees).length ||
+      !Object.keys(markets).every((name) => Object.hasOwn(marketFees, name))) {
+      throw new Error('Market metadata and fees must cover the same markets');
+    }
     const storedMarkets = structuredClone(markets);
+    const storedFees = structuredClone(marketFees);
     const storedMarketNames = [...marketNames];
 
     this.marketsByName = storedMarkets;
+    this.marketFeesByName = storedFees;
     this.marketNames = storedMarketNames;
     this.marketNamesSet = new Set(storedMarketNames);
 
@@ -228,6 +238,27 @@ export class GlobalStateService {
     this.marketsPromise = null;
 
     this.notifyMarketsListeners();
+  }
+
+  public getMarketFees(): MarketFeesByName {
+    if (!this.marketFeesByName) {
+      throw new Error('Market fees are not initialized');
+    }
+    return structuredClone(this.marketFeesByName);
+  }
+
+  public getFeeByMarketName(marketName: string): MarketFee | null {
+    if (!this.marketFeesByName) {
+      throw new Error('Market fees are not initialized');
+    }
+
+    return this.marketFeesByName[marketName] ?? null;
+  }
+
+  public getMarketFeesOrNull(): MarketFeesByName | null {
+    return this.marketFeesByName
+      ? structuredClone(this.marketFeesByName)
+      : null;
   }
 
   public getMarkets(): MarketsByName {
@@ -261,7 +292,7 @@ export class GlobalStateService {
   }
 
   public waitForMarkets(): Promise<MarketsByName> {
-    if (this.marketsByName) {
+    if (this.marketsByName && this.marketFeesByName) {
       return Promise.resolve(
         structuredClone(this.marketsByName),
       );
@@ -281,14 +312,19 @@ export class GlobalStateService {
   ): () => void {
     this.marketsListeners.add(listener);
 
-    listener(this.getMarketsOrNull(), this.getMarketNames() );
+    listener(
+      this.getMarketsOrNull(), this.getMarketNames(),
+      this.getMarketFeesOrNull(),
+    );
 
     return () => { this.marketsListeners.delete(listener); };
   }
 
   public clearMarkets(): void {
     this.marketsByName = null;
+    this.marketFeesByName = null;
     this.marketNames = null;
+    this.marketNamesSet = null;
 
     this.marketsPromise = null;
     this.resolveMarkets = null;
@@ -326,7 +362,11 @@ export class GlobalStateService {
 
   private notifyMarketsListeners(): void {
     for (const listener of this.marketsListeners) {
-      listener(this.getMarketsOrNull(), this.getMarketNames());
+      listener(
+        this.getMarketsOrNull(),
+        this.getMarketNames(),
+        this.getMarketFeesOrNull(),
+      );
     }
   }
 }

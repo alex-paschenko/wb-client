@@ -1,6 +1,6 @@
 // app/src/server/dao/sequences.ts
 
-import { q, type Sql } from '../db/client.js';
+import { q, type Sql } from '../client.js';
 
 class SequencesDao {
   public constructor(

@@ -7,7 +7,7 @@ import { encodeEntireBinary } from
   '../../shared/utilities/codecs/entire-binary-codec.js';
 import type { MarketTick } from '../../shared/types/ticks.js';
 import { readArchiveTicks } from '../utilities/archive-ticks.js';
-import { storageDao, type StorageArchiveRow } from '../dao/storage.js';
+import { storageDao, type StorageArchiveRow } from '../db/dao/storage.js';
 import { repackArchiveMarket } from
   '../scheduler/jobs/repack-archive.job.js';
 

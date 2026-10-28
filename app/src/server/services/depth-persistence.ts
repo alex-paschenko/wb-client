@@ -4,7 +4,7 @@ import { SERVER_EVENT } from '../constants/events.js';
 import {
   orderBookDepthDao,
   type DepthRow,
-} from '../dao/order-book-depth.js';
+} from '../db/dao/order-book-depth.js';
 import { eventBus } from './event-bus.js';
 import { ReliablePersistenceQueue } from './reliable-persistence-queue.js';
 

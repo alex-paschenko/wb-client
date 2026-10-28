@@ -1,13 +1,12 @@
 // app/src/server/dao/market-statistics-rolling.ts
 
-import type { Sql } from '../db/client.js';
-import { q } from '../db/client.js';
-import type { SelectParams } from '../types/db.js';
-import { buildUpsertSet, dbRow } from '../utilities/db-helpers.js';
+import { q, type Sql } from '../client.js';
+import type { SelectParams } from '../../types/db.js';
+import { buildUpsertSet, dbRow } from '../../utilities/db-helpers.js';
 import type {
   MarketRollingStatistics,
   MarketRollingStatisticsByMarket,
-} from '../../shared/types/market-statistics-rolling.js';
+} from '../../../shared/types/market-statistics-rolling.js';
 
 export interface MarketStatisticsRollingRow extends MarketRollingStatistics {
   marketName: string;

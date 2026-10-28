@@ -24,7 +24,7 @@ import {
   type LogEntry,
   type LogLevel,
 } from '../../../shared/types/logger';
-import type { MarketsByName } from '../../../shared/types/market';
+import type { MarketsByName, MarketFeesByName } from '../../../shared/types/market';
 import { globalStateService } from '../../../shared/services/global-state';
 import { appEvents } from '../events/app-events';
 import type { EntityDesriptor } from '../../../shared/types/storage-entities';
@@ -43,12 +43,14 @@ type AppLogger = {
 
 export type AppContextValue = {
   markets: MarketsByName;
+  marketFees: MarketFeesByName;
   entities: EntityDesriptor[];
   settings: FrontendSettings;
   logs: LogEntry[];
 
   getSettings: () => FrontendSettings;
   getMarkets: () => MarketsByName;
+  getMarketFees: () => MarketFeesByName;
 
   setTheme: (theme: string) => void;
   setLanguage: (language: string) => void;
@@ -80,6 +82,8 @@ export const AppProvider = ({
     markets,
     setMarketsState,
   ] = useState<MarketsByName>({});
+
+  const [marketFees, setMarketFees] = useState<MarketFeesByName>({});
 
   const [entities, setEntities] = useState<EntityDesriptor[]>(
     globalStateService.getStorageEntitiesOrNull() ?? [],
@@ -114,10 +118,9 @@ export const AppProvider = ({
 
   useEffect(() => {
     return globalStateService.subscribeMarkets(
-      (nextMarkets) => {
-        setMarketsState(
-          nextMarkets ?? {},
-        );
+      (nextMarkets, _names, nextFees) => {
+        setMarketsState(nextMarkets ?? {});
+        setMarketFees(nextFees ?? {});
       },
     );
   }, []);
@@ -160,6 +163,11 @@ export const AppProvider = ({
     (): MarketsByName => {
       return globalStateService.getMarkets();
     },
+    [],
+  );
+
+  const getMarketFees = useCallback(
+    (): MarketFeesByName => globalStateService.getMarketFees(),
     [],
   );
 
@@ -328,12 +336,14 @@ export const AppProvider = ({
   const value = useMemo<AppContextValue>(
       () => ({
         markets,
+        marketFees,
         entities,
         settings,
         logs,
         updateSettings,
         getSettings,
         getMarkets,
+        getMarketFees,
 
         setTheme,
         setLanguage,
@@ -345,12 +355,14 @@ export const AppProvider = ({
       }),
       [
         markets,
+        marketFees,
         entities,
         settings,
         logs,
         updateSettings,
         getSettings,
         getMarkets,
+        getMarketFees,
 
         setTheme,
         setLanguage,

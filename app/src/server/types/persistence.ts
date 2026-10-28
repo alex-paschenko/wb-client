@@ -45,7 +45,7 @@ export interface DepthPersistence {
   startReceivedAt: number;
 }
 
-export interface StrategyStateChangePersistence extends StrategyStateChange<string> {
+export type StrategyStateChangePersistence = StrategyStateChange<string> & {
   marketName: string;
   strategyName: string;
-}
+};

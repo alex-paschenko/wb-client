@@ -1,7 +1,7 @@
 // app/src/server/research/order-emulator.ts
 
 import { globalStateService } from '../../shared/services/global-state.js';
-import type { Order, OrderErrorCode } from '../../shared/types/order-receipt.js';
+import type { Order, OrderError } from '../../shared/types/order-receipt.js';
 import { SERVER_EVENT } from '../constants/events.js';
 import type {
   OrderCancel,
@@ -11,7 +11,9 @@ import type {
 import { eventBus } from '../services/event-bus.js';
 import { orderBookDepthService } from '../services/order-book-depth.js';
 import { SECOND } from '../../shared/constants/time.js';
-import { REVERT_ORDER_ERROR } from '../constants/order-error-codes.js';
+import {
+  REVERT_ORDER_ERROR, REVERT_WB_ORDER_ERROR,
+} from '../constants/order-error-codes.js';
 
 const RESPONSE_DELAY_MS = 50;
 const EPSILON = 1e-10;
@@ -30,7 +32,7 @@ export class OrderEmulator {
     this.unsubscribe.push(eventBus.on(
       SERVER_EVENT.createOrderRequestAndSubscribe,
       (event) => {
-        if (!event.paperTrading) return;
+        if (!event.isPaperTrading) return;
         // Subscription acknowledgement is immediate in paper mode.
         if (event.orderRequest) {
           this.defer(() => this.create(
@@ -44,7 +46,7 @@ export class OrderEmulator {
     this.unsubscribe.push(eventBus.on(
       SERVER_EVENT.orderCancelRequest,
       (event) => {
-        if (event.paperTrading) {
+        if (event.isPaperTrading) {
           this.defer(() => this.cancel(event));
         }
       },
@@ -83,13 +85,16 @@ export class OrderEmulator {
     const { marketName, client_order_id, side, amount } = request;
 
     const book = orderBookDepthService.getHistory(marketName)?.at(-1);
-    if (!book || !Number.isFinite(amount) || amount <= 0) {
-      this.reportError(
-        marketName,
-        client_order_id,
-        REVERT_ORDER_ERROR['depth unavailable'],
-        false
-      );
+    if (!Number.isFinite(amount) || amount <= 0) {
+      this.reportError(marketName, client_order_id, {
+        code: REVERT_WB_ORDER_ERROR['invalid argument'], isWBError: true,
+      });
+      return;
+    }
+    if (!book) {
+      this.reportError(marketName, client_order_id, {
+        code: REVERT_ORDER_ERROR['order not sent'], isWBError: false,
+      });
       return;
     }
 
@@ -100,12 +105,9 @@ export class OrderEmulator {
     if (limitPrice !== null && (
       !Number.isFinite(limitPrice) || limitPrice <= 0
     )) {
-      this.reportError(
-        marketName,
-        client_order_id,
-        REVERT_ORDER_ERROR['paper limit price must be positive'],
-        false,
-      );
+      this.reportError(marketName, client_order_id, {
+        code: REVERT_WB_ORDER_ERROR['invalid argument'], isWBError: true,
+      });
 
       return;
     }
@@ -145,21 +147,22 @@ export class OrderEmulator {
     left = Math.max(0, left);
 
     if (isMarket && deal_stock <= 0) {
-      this.reportError(
-        marketName,
-        client_order_id,
-        REVERT_ORDER_ERROR['not enough traders'],
-        true,
-      );
+      this.reportError(marketName, client_order_id, {
+        code: REVERT_WB_ORDER_ERROR['not enough traders'], isWBError: true,
+      });
 
       return;
     }
 
     const now = Date.now() / SECOND;
 
-    const feeRate = Number(
-      globalStateService.getMarketsOrNull()?.[marketName]?.takerFee ?? 0,
-    );
+    const feeRate = globalStateService.getFeeByMarketName(marketName)?.takerFeeRatio;
+    if (feeRate === undefined || !Number.isFinite(feeRate)) {
+      this.reportError(marketName, client_order_id, {
+        code: REVERT_ORDER_ERROR['order not sent'], isWBError: false,
+      });
+      return;
+    }
 
     const status = left <= EPSILON
       ? 'FILLED'
@@ -178,7 +181,7 @@ export class OrderEmulator {
       left,
       deal_stock,
       deal_money,
-      deal_fee: deal_money * (Number.isFinite(feeRate) ? feeRate : 0),
+      deal_fee: deal_money * feeRate,
       price: limitPrice ?? 0,
       ctime: now,
       mtime: now,
@@ -195,34 +198,36 @@ export class OrderEmulator {
       this.active.set(client_order_id, order);
     }
 
-    eventBus.emit(
-      SERVER_EVENT.orderReceived,
-      {
-        marketName, client_order_id, paperTrading: true,
-        order, error: null,
-      },
-    );
+    eventBus.emit(SERVER_EVENT.orderRequestResult, {
+      marketName, client_order_id, isPaperTrading: true, error: null,
+    });
+    eventBus.emit(SERVER_EVENT.orderUpdated, {
+      isPaperTrading: true,
+      eventId: isMarket || status === 'FILLED' ? 3 : 1,
+      order,
+    });
   }
 
   private cancel({ market, client_order_id }: OrderCancel): void {
     const existing = this.active.get(client_order_id);
     if (!existing || existing.market !== market) {
-      this.reportError(
-        market,
-        client_order_id,
-        REVERT_ORDER_ERROR['paper order is no longer active'],
-        false,
-      );
+      this.reportError(market, client_order_id, {
+        code: REVERT_WB_ORDER_ERROR['order not found'], isWBError: true,
+      });
 
       return;
     }
 
     this.active.delete(client_order_id);
 
+    eventBus.emit(SERVER_EVENT.orderRequestResult, {
+      marketName: market, client_order_id,
+      isPaperTrading: true, error: null,
+    });
     eventBus.emit(
       SERVER_EVENT.orderUpdated,
       {
-        paperTrading: true,
+        isPaperTrading: true,
         eventId: 3,
         order: {
           ...existing,
@@ -236,18 +241,11 @@ export class OrderEmulator {
   private reportError(
     marketName: string,
     client_order_id: number,
-    code: OrderErrorCode,
-    isWBError: boolean,
+    error: OrderError,
   ): void {
-    eventBus.emit(
-      SERVER_EVENT.orderReceived,
-      {
-        marketName, client_order_id,
-        paperTrading: true,
-        order: null,
-        error: { code, isWBError },
-      },
-    );
+    eventBus.emit(SERVER_EVENT.orderRequestResult, {
+      marketName, client_order_id, isPaperTrading: true, error,
+    });
   }
 }
 

@@ -6,7 +6,7 @@ import {
 } from '../constants/frontend-ws.js';
 import type { FrontendSettingsValue } from './frontend-settings.js';
 import type { EntityDesriptor } from './storage-entities.js';
-import type { MarketsByName } from './market.js';
+import type { MarketsByName, MarketFeesByName } from './market.js';
 
 export type FrontendWsClientRequest<
   Type extends string,
@@ -114,6 +114,7 @@ export type FrontendWsStorageEntitiesLoadedMessage =
 export type FrontendWsMarketsUpdatedMessage = {
   type: typeof FRONTEND_WS_CONTROL_MESSAGE_TYPES.marketsUpdated;
   markets: MarketsByName;
+  marketFees: MarketFeesByName;
 };
 
 export type FrontendWsSetMarketInfoSubscriptionMessage =

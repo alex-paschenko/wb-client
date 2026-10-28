@@ -113,14 +113,14 @@ export class FrontendWsController {
         }
 
         if (message.type === FRONTEND_WS_CONTROL_MESSAGE_TYPES.marketsUpdated) {
-          globalStateService.setMarkets(
+          globalStateService.setMarketData(
             message.markets,
-            Object.keys(message.markets),
+            message.marketFees,
           );
 
           appContext.logger.debug('log.messages.marketsUpdated');
 
-          appEvents.emit('marketsUpdated', message.markets);
+          appEvents.emit('marketsUpdated', message.markets, message.marketFees);
           return;
         }
 

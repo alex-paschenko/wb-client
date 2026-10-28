@@ -2,7 +2,7 @@ import { SERVER_EVENT } from '../constants/events.js';
 import {
   strategyStateDao,
   type StrategyStateRow,
-} from '../dao/strategy-state.js';
+} from '../db/dao/strategy-state.js';
 import { eventBus } from './event-bus.js';
 import { ReliablePersistenceQueue } from './reliable-persistence-queue.js';
 

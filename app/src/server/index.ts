@@ -4,13 +4,12 @@ import type { Server } from 'node:http';
 
 import { createApp } from './app.js';
 import { startScheduler } from './scheduler/index.js';
-import { syncMarketFees } from './services/sync-market-fees.js';
+import { syncMarketData } from './services/sync-market-data.js';
 import { initWsServer } from './frontend/index.js';
 import { temporaryUserId } from '../shared/constants/users.js';
 import {
   invalidateAndRefreshUserBalance
 } from './services/sync-user-balance.js';
-import { marketsService } from './services/markets.js';
 import { whitebitWsService } from './services/whitebit-ws.js';
 import { storageAggregationService } from './services/storage-aggregation.js';
 import {
@@ -93,7 +92,7 @@ const shutdown = async (signal: string): Promise<void> => {
 const start = async (): Promise<void> => {
   serverGlobalStateService.start();
 
-  await marketsService.refreshMarkets();
+  await syncMarketData();
 
   /*
    * start() synchronously registers the registry listener
@@ -123,14 +122,16 @@ const start = async (): Promise<void> => {
     initWsServer(server!);
     frontendWsService.start();
     invalidateAndRefreshUserBalance(temporaryUserId);
-    void syncMarketFees();
     startScheduler();
 
     console.log(`API listening on http://0.0.0.0:${port}`);
   });
 };
 
-void start();
+void start().catch((error: unknown) => {
+  console.error('Server startup failed', error);
+  process.exit(1);
+});
 
 process.on('SIGINT', () => { void shutdown('SIGINT'); });
 

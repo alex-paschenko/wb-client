@@ -1,7 +1,7 @@
 // app/src/server/constants/events.ts
 
 export const SERVER_EVENT = {
-  marketsInfoUpdated: 'markets info updated',
+  marketDataUpdated: 'market data updated',
 
   marketRemoved: 'market removed',
 
@@ -25,7 +25,7 @@ export const SERVER_EVENT = {
   runStrategiesRequest: 'run strategies request',
   strategiesCompleted: 'strategies completed',
 
-  orderReceived: 'order received',
+  orderRequestResult: 'order request result',
   createOrderRequestAndSubscribe: 'create order request and subscribe',
   orderUpdated: 'order updated',
   orderCancelRequest: 'order cancel request',

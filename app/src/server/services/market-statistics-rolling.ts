@@ -10,7 +10,7 @@ import { SERVER_EVENT } from '../constants/events.js';
 import {
   marketStatisticsRollingDao,
   type MarketStatisticsRollingRow,
-} from '../dao/market-statistics-rolling.js';
+} from '../db/dao/market-statistics-rolling.js';
 import type {
   MarketRollingTickReceivedEvent,
 } from '../types/events.js';

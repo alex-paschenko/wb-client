@@ -12,7 +12,7 @@ import {
   ARCHIVE_REPACK_BATCH_SIZE,
   ARCHIVE_REPACK_PAGE_SIZE,
 } from '../../constants/persistence.js';
-import { storageDao, type StorageArchiveRow } from '../../dao/storage.js';
+import { storageDao, type StorageArchiveRow } from '../../db/dao/storage.js';
 import { runJob } from '../../services/run-job.js';
 
 let isRunning = false;

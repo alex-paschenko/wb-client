@@ -118,7 +118,7 @@ export class FrontendWsService {
     );
 
     eventBus.on(
-      SERVER_EVENT.marketsInfoUpdated,
+      SERVER_EVENT.marketDataUpdated,
       () => { this.broadcastMarketsUpdated(); },
     );
 
@@ -576,6 +576,7 @@ export class FrontendWsService {
     getWsServer().sendJson(socket, {
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.marketsUpdated,
       markets: globalStateService.getMarkets(),
+      marketFees: globalStateService.getMarketFees(),
     });
   }
 
@@ -583,6 +584,7 @@ export class FrontendWsService {
     const message = {
       type: FRONTEND_WS_CONTROL_MESSAGE_TYPES.marketsUpdated,
       markets: globalStateService.getMarkets(),
+      marketFees: globalStateService.getMarketFees(),
     } satisfies ServerWsJsonMessage;
 
     for (const [socket, state] of this.clients) {

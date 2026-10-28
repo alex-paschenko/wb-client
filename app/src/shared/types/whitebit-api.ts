@@ -1,28 +1,30 @@
-import type { Market } from './market.js';
+import type { MarketType } from './market.js';
 
 /********
  * REST *
  ********/
 
 
-export type WhitebitMarket = Omit<Market, 'isActive' | 'createdAt' | 'updatedAt'>;
-
-export const whitebitMarketKeys = [
-  'name',
-  'stock',
-  'money',
-  'stockPrec',
-  'moneyPrec',
-  'feePrec',
-  'makerFee',
-  'takerFee',
-  'minAmount',
-  'minTotal',
-  'tradesEnabled',
-  'type',
-  'maxTotal',
-  'isCollateral',
-] as const;
+export interface WhitebitMarket {
+  name: string;
+  stock: string;
+  money: string;
+  stockPrec: string;
+  moneyPrec: string;
+  feePrec: string;
+  makerFee: string;
+  takerFee: string;
+  minAmount: string;
+  minTotal: string;
+  maxTotal: string;
+  tradesEnabled: boolean;
+  isCollateral: boolean;
+  isTradFiFutures: boolean;
+  type: MarketType;
+  delistedAt: number | null;
+  tickSize: string;
+  stepSize: string;
+}
 
 /************
  * Websoket *

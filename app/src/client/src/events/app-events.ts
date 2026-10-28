@@ -8,7 +8,7 @@ import type {
 } from '../../../shared/types/frontend-ws';
 import type { MarketRollingStatistics } from
   '../../../shared/types/market-statistics-rolling';
-import type { MarketsByName } from '../../../shared/types/market';
+import type { MarketsByName, MarketFeesByName } from '../../../shared/types/market';
 import type { EntityDesriptor } from '../../../shared/types/storage-entities';
 import type { PredecodedBinary } from
   '../../../shared/utilities/codecs/entire-binary-codec';
@@ -42,7 +42,7 @@ type AppEventMap = EventMapBase & {
 
   settingsChanged: [ settings: FrontendSettings ];
 
-  marketsUpdated: [ markets: MarketsByName ];
+  marketsUpdated: [ markets: MarketsByName, marketFees: MarketFeesByName ];
 
   changeMarketStatisticsSubscription: [
     action: FrontendWsSubscriptionAction,

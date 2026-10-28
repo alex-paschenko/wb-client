@@ -11,12 +11,18 @@ export interface WhitebitTradingBalance {
   };
 }
 
-export interface WhitebitAllMarketFeesResponse {
-  error: unknown;
-  taker: string;
+export interface WhitebitFeePair {
   maker: string;
-  futures_taker?: string;
-  futures_maker?: string;
+  taker: string;
+}
+
+export interface WhitebitAllMarketFeesResponse extends WhitebitFeePair {
+  error: string | null;
+  futures_maker: string;
+  futures_taker: string;
+  custom_fee: Record<string, WhitebitFeePair>;
+  rpi_maker_fee_premium?: string | null;
+  futures_rpi_maker_fee_premium?: string | null;
 }
 
 export class WhitebitPrivateClient {

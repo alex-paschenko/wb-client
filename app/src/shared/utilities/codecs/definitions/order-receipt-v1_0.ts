@@ -12,10 +12,11 @@ import type {
 } from '../../../types/order-receipt.js';
 import { singleValueCodecDefinition } from './codec-definition-helpers.js';
 
-// Byte 0: presence bits (order, error). An order has ten float64 values,
+// Byte 0: order present, error present, error null, updated, finalized.
+// Both error flags clear means undefined. An order has ten float64 values,
 // six length-prefixed UTF-8 strings and one byte of boolean flags.
 // An error is one byte isWBError followed by one signed int32 code (LE).
-// This v1.0 layout is finalized before any receipts are persisted.
+// The v1.0 format has no previously persisted compatibility constraints.
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
@@ -201,7 +202,12 @@ export const orderReceipt_V1_0 =
     },
     write: (offset, view, value) => {
       const writer = new Writer(offset, view);
-      writer.byte((value.order ? 1 : 0) | (value.error ? 2 : 0));
+      writer.byte(
+        (value.order ? 1 : 0) | (value.error ? 2 : 0) |
+        (value.error === null ? 4 : 0) |
+        (value.isOrderUpdated ? 8 : 0) |
+        (value.isFinalized ? 16 : 0),
+      );
       if (value.order) {
         for (const field of numberFields) {
           writer.float64(value.order[field]);
@@ -231,12 +237,13 @@ export const orderReceipt_V1_0 =
       const reader = new Reader(offset, view);
 
       const presence = reader.byte();
-      if (presence & ~3) {
+      if ((presence & ~0x1f) || ((presence & 2) && (presence & 4))) {
         throw new TypeError('Invalid order receipt presence');
       }
 
       const order = presence & 1 ? readOrder(reader) : null;
-      let error: OrderError | null = null;
+      let error: OrderError | null | undefined =
+        presence & 4 ? null : undefined;
 
       if (presence & 2) {
         const source = reader.byte();
@@ -245,6 +252,13 @@ export const orderReceipt_V1_0 =
         }
         error = { isWBError: source === 1, code: reader.int32() };
       }
-      return { value: { order, error }, nextOffset: reader.offset };
+      return {
+        value: {
+          order, error,
+          isOrderUpdated: !!(presence & 8),
+          isFinalized: !!(presence & 16),
+        },
+        nextOffset: reader.offset,
+      };
     },
   });

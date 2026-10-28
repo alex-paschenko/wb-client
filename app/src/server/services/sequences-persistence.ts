@@ -1,7 +1,7 @@
 // app/src/server/services/sequences-persistence.ts
 
 import { pause } from '../../shared/utilities/awaiters.js';
-import { sequencesDao } from '../dao/sequences.js';
+import { sequencesDao } from '../db/dao/sequences.js';
 
 class SequencesPersistence {
   public async getNextOrderId(): Promise<number> {
@@ -17,7 +17,7 @@ class SequencesPersistence {
         }
       }
     }
-    
+
     return NaN;
   }
 }

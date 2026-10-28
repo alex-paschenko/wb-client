@@ -1,6 +1,6 @@
 // app/src/server/services/frontend-settings.ts
 
-import { frontendSettingsDao } from '../dao/frontend-settings.js';
+import { frontendSettingsDao } from '../db/dao/frontend-settings.js';
 import { AppError } from '../errors/app-error.js';
 import { isTheme } from '../../shared/constants/themes.js';
 import { isLanguageCode } from '../../shared/i18n/languages.js';

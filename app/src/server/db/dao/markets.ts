@@ -1,12 +1,10 @@
 // app/src/server/dao/markets.ts
 
-import type { Sql } from '../db/client';
 
-import { q } from '../db/client.js';
-import type { SelectParams } from '../types/db.js';
-import type { Market, MarketsByName } from '../../shared/types/market.js';
-import { buildUpsertSet, dbRow } from '../utilities/db-helpers.js';
-import type { WhitebitMarket } from '../../shared/types/whitebit-api.js';
+import { q, type Sql } from '../client.js';
+import type { SelectParams } from '../../types/db.js';
+import type { Market, MarketsByName } from '../../../shared/types/market.js';
+import { buildUpsertSet, dbRow } from '../../utilities/db-helpers.js';
 
 export class MarketsDao {
   public constructor(
@@ -14,6 +12,8 @@ export class MarketsDao {
   ) {}
 
   private marketsSelect(params?: SelectParams) {
+    const q = this.q;
+
     return q<{ market: Market }[]>`
       select
         json_build_object(
@@ -31,7 +31,11 @@ export class MarketsDao {
           'isActive', m.is_active,
           'type', m.type,
           'maxTotal', m.max_total,
-          'isCollateral', m.is_collateral
+          'isCollateral', m.is_collateral,
+          'isTradFiFutures', m.is_trad_fi_futures,
+          'tickSize', m.tick_size,
+          'stepSize', m.step_size,
+          'delistedAt', m.delisted_at
         ) as market
       from ${params?.from ?? q`markets`} as m
       ${params?.where ? q`where ${params.where}` : q``}
@@ -53,7 +57,7 @@ export class MarketsDao {
         jsonb_object_agg(
           market->>'name',
           market
-        ) as marketsByName
+        ) as "marketsByName"
         from markets
     `;
 
@@ -68,6 +72,7 @@ export class MarketsDao {
 
     return result?.market ?? null;
   }
+
   public async getAliveByName(
     names: string[],
   ): Promise<Market[]> {
@@ -78,13 +83,13 @@ export class MarketsDao {
     const q = this.q;
 
     const rows = await this.marketsSelect({
-      where: q`m.name = any(${names}) and m.is_active = true`,
+      where: q`m.name = any(${names}) and m.is_active and m.trades_enabled`,
     });
 
     return rows.map((row) => row.market);
   }
 
-  public async refreshAll(input: WhitebitMarket[]): Promise<void> {
+  public async refreshAll(input: Market[]): Promise<void> {
     const q = this.q;
 
     if (input.length === 0) {
@@ -94,17 +99,15 @@ export class MarketsDao {
     }
 
     return q.begin(async (trx) => {
-      const insertData = input.map((market) =>
-        dbRow({
-          ...market,
-          maxTotal: market.maxTotal ?? null,
-          isCollateral: market.isCollateral ?? null,
-        }),
-      );
+      const insertData = input.map((market) => dbRow({
+        ...market,
+        isActive: true,
+      }));
 
       const updateColumns = Object.keys(insertData[0]).filter(
         (column) =>
           column !== 'name' &&
+          column !== 'is_active' &&
           column !== 'created_at' &&
           column !== 'updated_at',
       );

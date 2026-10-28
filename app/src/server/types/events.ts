@@ -8,7 +8,7 @@ import type {
 import type { SERVER_EVENT } from '../constants/events.js';
 import type { Order, OrderError } from '../../shared/types/order-receipt.js';
 import type { MarketTick } from '../../shared/types/ticks.js';
-import type { MarketsByName } from '../../shared/types/market.js';
+import type { MarketsByName, MarketFeesByName } from '../../shared/types/market.js';
 import type {
   ExtendedStoragePersistenceSnapshot,
   StorageAccessors,
@@ -29,8 +29,9 @@ import type {
 
 export type ServerEventName = typeof SERVER_EVENT[keyof typeof SERVER_EVENT];
 
-export interface MarketsInfoUpdatedEvent {
+export interface MarketDataUpdatedEvent {
   markets: MarketsByName;
+  marketFees: MarketFeesByName;
   marketNames: string[];
 }
 
@@ -112,23 +113,22 @@ export type CreateOrderRequestAndSubscribeEvent = (
   | { orderType: null; orderRequest: null }
 ) & {
   subscription: string[] | null;
-  paperTrading: boolean;
+  isPaperTrading: boolean;
 };
 
 export interface OrderUpdatedEvent {
   order: Order;
   eventId: 1 | 2 | 3;
-  paperTrading: boolean;
+  isPaperTrading: boolean;
 }
 
 export type OrderCancelEvent = OrderCancel;
 
-export interface OrderReceivedEvent {
+export interface OrderRequestResultEvent {
   marketName: string;
   client_order_id: number;
-  order: Order | null;
   error: OrderError | null;
-  paperTrading: boolean;
+  isPaperTrading: boolean;
 }
 
 export interface OrderPersistenceRequestEvent {
@@ -137,9 +137,11 @@ export interface OrderPersistenceRequestEvent {
   client_order_id: number;
   strategyName: string;
   orderKind: OrderKind;
-  paperTrading: boolean;
+  isPaperTrading: boolean;
   order: Order | null;
-  error: OrderError | null;
+  isFinalized: boolean;
+  isOrderUpdated: boolean;
+  error: OrderError | null | undefined;
 }
 
 export type DepthPersistenceRequestEvent = DepthPersistence;
@@ -149,7 +151,7 @@ export interface StrategyStatePersistenceRequestEvent {
 }
 
 export interface ServerEventMap {
-  [SERVER_EVENT.marketsInfoUpdated]: MarketsInfoUpdatedEvent;
+  [SERVER_EVENT.marketDataUpdated]: MarketDataUpdatedEvent;
 
   [SERVER_EVENT.marketRemoved]: MarketRemovedEvent;
 
@@ -173,7 +175,7 @@ export interface ServerEventMap {
   [SERVER_EVENT.runStrategiesRequest]: RunStrategiesRequestEvent;
   [SERVER_EVENT.strategiesCompleted]: StrategiesCompletedEvent;
 
-  [SERVER_EVENT.orderReceived]: OrderReceivedEvent;
+  [SERVER_EVENT.orderRequestResult]: OrderRequestResultEvent;
   [SERVER_EVENT.createOrderRequestAndSubscribe]:
     CreateOrderRequestAndSubscribeEvent;
   [SERVER_EVENT.orderUpdated]: OrderUpdatedEvent;

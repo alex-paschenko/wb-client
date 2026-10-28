@@ -23,7 +23,7 @@ export type OrderLimitPreRequest = Omit<OrderLimitRequest, 'client_order_id'>;
 export interface OrderCancel {
   market: string;
   client_order_id: number;
-  paperTrading: boolean;
+  isPaperTrading: boolean;
 }
 
 
@@ -43,21 +43,23 @@ export interface OrderAndStrategy {
   client_order_id: number;
   order: Order | null;
   isFinalized: boolean;
-  error: OrderError | null;
-  paperTrading: boolean;
+  isOrderUpdated: boolean;
+  error: OrderError | null | undefined;
+  isPaperTrading: boolean;
   strategy: Strategy;
   orderKind: OrderKind;
 }
 
 export interface OrderApi {
   createOrder: (
-    strategy: Strategy,
+    strategy: Strategy<any>,
     request: OrderCreatePreRequest,
     orderKind: OrderKind,
+    isPaperTrading: boolean,
   ) => void;
   cancelOrder: (market: string, client_order_id: number) => void;
   removeAllOrdersFromCache: (
-    strategy: Strategy,
+    strategy: Strategy<any>,
     market: string,
   ) => void;
 }

@@ -10,7 +10,7 @@ import type {
 } from '../../shared/types/storage.js';
 import { SERVER_EVENT } from '../constants/events.js';
 import { SNAPSHOT_BATCH_SIZE } from '../constants/persistence.js';
-import { storageDao } from '../dao/storage.js';
+import { storageDao } from '../db/dao/storage.js';
 import { eventBus } from './event-bus.js';
 import type { StorageSnapshotedEvent } from '../types/events.js';
 
@@ -169,14 +169,46 @@ export class StoragePersistenceService {
     return storageDao.getAliveMarketNames();
   }
 
-  public async deleteAlives(marketName: string): Promise<void> {
-    return storageDao.deleteAlives(marketName);
-  }
-
   public async getAliveForRestore(
     marketNames: string[],
   ): Promise<StoragePersistenceSnapshot[]> {
-    return storageDao.getAliveForRestore(marketNames);
+    const cached = new Map<string, StoragePersistenceSnapshot>();
+    const uncached: string[] = [];
+
+    for (const marketName of marketNames) {
+      const pending = this.pendingActive.get(marketName);
+
+      if (pending) {
+        cached.set(marketName, pending.snapshot);
+      } else {
+        uncached.push(marketName);
+      }
+    }
+
+    const fromDatabase = uncached.length > 0
+      ? await storageDao.getAliveForRestore(uncached)
+      : [];
+    const byMarket = new Map(
+      fromDatabase.map((snapshot) => [snapshot.marketName, snapshot]),
+    );
+
+    for (const [marketName, snapshot] of cached) {
+      byMarket.set(marketName, snapshot);
+    }
+
+    // Snapshots queued during the database read take precedence as well.
+    for (const marketName of marketNames) {
+      const pending = this.pendingActive.get(marketName);
+
+      if (pending) {
+        byMarket.set(marketName, pending.snapshot);
+      }
+    }
+
+    return marketNames.flatMap((marketName) => {
+      const snapshot = byMarket.get(marketName);
+      return snapshot ? [snapshot] : [];
+    });
   }
 
   public async getLastArchiveEndedAt(

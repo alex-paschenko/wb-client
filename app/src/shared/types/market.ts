@@ -1,25 +1,35 @@
+// app/src/shared/types/market.ts
 
-export type MarketType =
-  | 'spot'
-  | 'futures'
-  | 'tradfiFutures';
+export type MarketType = 'spot' | 'futures' | 'tradfiFutures';
 
 export interface Market {
   name: string;
   stock: string;
   money: string;
-  stockPrec: string;
-  moneyPrec: string;
-  feePrec: string;
-  makerFee: string;
-  takerFee: string;
-  minAmount: string;
-  minTotal: string;
+  stockPrec: number;
+  moneyPrec: number;
+  feePrec: number;
+  makerFee: number;
+  takerFee: number;
+  minAmount: number;
+  minTotal: number;
+  maxTotal: number;
   tradesEnabled: boolean;
   isActive: boolean;
+  isCollateral: boolean;
+  isTradFiFutures: boolean;
   type: MarketType;
-  maxTotal?: string;
-  isCollateral?: boolean;
+  tickSize: number | null;
+  stepSize: number | null;
+  delistedAt: number | null;
 }
 
 export type MarketsByName = Record<string, Market>;
+
+export interface MarketFee {
+  makerFeeRatio: number;
+  takerFeeRatio: number;
+  rpiMakerFeePremiumRatio: number | null;
+}
+
+export type MarketFeesByName = Record<string, MarketFee>;

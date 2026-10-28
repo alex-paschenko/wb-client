@@ -1,4 +1,6 @@
-import { apiLogsDao } from '../dao/api-logs.js';
+// app/src/server/services/api-logs.ts
+
+import { apiLogsDao } from '../db/dao/api-logs.js';
 
 export class ApiLogsService {
   public async logExternalApiCall(input: {

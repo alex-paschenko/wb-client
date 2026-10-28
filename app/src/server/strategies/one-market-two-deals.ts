@@ -6,12 +6,16 @@ import type {
   Strategy,
   StrategyDirection,
   StrategyStates,
+  StrategyRests,
   StrategyRunParams,
   StrategyStorage,
 } from '../types/strategies.js';
 import { REVERT_ORDER_ERROR } from '../constants/order-error-codes.js';
 import { BaseStrategy } from './base-strategy.js';
 import { OrderErrorCode } from '../../shared/types/order-receipt.js';
+import { IndicatorValue } from '../../shared/types/data-types.js';
+import { globalStateService } from '../../shared/services/global-state.js';
+import { MarketFee } from '../../shared/types/market.js';
 
 const FATAL_ERRORS: Set<OrderErrorCode> = new Set([
   REVERT_ORDER_ERROR['trading in the market is not allowed'],
@@ -36,15 +40,28 @@ interface ManageOrdersParams {
     storage: StrategyStorage[];
 }
 
+interface ContinueSecondDealParams {
+    orderApi: OrderApi,
+    dealMoney: number,
+    dealStock: number,
+    marketName: string,
+}
+
+type ManageOrdersRetType =
+  | 'awaiting'
+  | 'order created'
+  | 'without new order'
+  | 'fatal error';
+
 export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategyState> {
+  private isPaperTrading = true;
+
   private params: OneMarketTwoDealsParams;
 
   private direction: Map<string, StrategyDirection> = new Map();
 
-  private dealAmount: Map<string, number> = new Map();
-
   public constructor(params: OneMarketTwoDealsParams) {
-    const name = 'm1d2:' + Object.values(params).join('-');
+    const name = 'stock1m2d:' + Object.values(params).join('-');
     super(name);
 
     this.params = params;
@@ -64,12 +81,19 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
 
     switch(state) {
       case 'idle': {
+        if (!this.isMarketRestricted(marketName, 'spot')) {
+          return { state, action: 'stop', kind: 'bare' };
+        }
+
         if (
           expectedCombined !== null &&
           (expectedCombined > this.params.longCandidateTreshold ||
             expectedCombined < this.params.shortCandidateTreshold)
         ) {
-          this.direction.set(marketName, expectedCombined > 0 ? 'long' : 'short');
+          this.direction.set(
+            marketName,
+            expectedCombined > 0 ? 'long' : 'short',
+          );
 
           const subscribed = depthApi.orderBookDepthSubscription({
             subscription: { marketName, action: 'subscribe' },
@@ -78,103 +102,317 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           });
 
           if (subscribed) {
-            return { state: 'candidate', action: 'continue' };
+            return { state: 'candidate', action: 'continue', kind: 'bare' };
           }
         }
 
-        return { state, action: 'stop' };
+        return { state, action: 'stop', kind: 'bare' };
       }
 
       case 'candidate': {
-        const dealDirection = this.getDealDirection(marketName);
+        const result = this.checkOpenDealTresholds(expectedCombined, marketName);
 
-        if (
-          expectedCombined === null ||
-          dealDirection === 'long' && expectedCombined < this.params.longReturnToIdleTreshold ||
-          dealDirection === 'short' && expectedCombined > this.params.shortReturnToIdleTreshold
-        ) {
-          return { state: 'unsubscribe and switch to idle', action: 'continue' };
-        }
-
-        if (
-          dealDirection === 'long' && expectedCombined >= this.params.longOpenDealTreshold ||
-          dealDirection === 'short' && expectedCombined <= this.params.shortOpenDealTreshold
-        ) {
-          return { state: 'awaiting for order book depth data', action: 'stop' };
-        }
-
-        return { state, action: 'stop' };
-      }
-
-      case 'awaiting for order book depth data':
-        if (depthHistory && depthHistory.length > 0) {
-          const dealDirection = this.getDealDirection(marketName);
-
-          this.manageOrdersToOpenDeal(
-            { orderApi, marketName, orders, dealDirection, storage },
-          );
-
-          return { state: 'awaiting for first main order creation', action: 'continue' };
-        }
-
-        return { state, action: 'stop' };
-
-      case 'awaiting for first main order creation': {
-        const mainEntry = orders.find((o) => o.orderKind === 'main');
-
-        if (!mainEntry || !mainEntry.isFinalized) {
-          return { state, action: 'stop' };
-        }
-
-        if (mainEntry.error) {
-          orderApi.removeAllOrdersFromCache(
-            this as Strategy<string>, marketName,
-          );
+        if (result === 'cancel') {
           return {
             state: 'unsubscribe and switch to idle',
             action: 'continue',
+            kind: 'bare',
           };
         }
 
-        if (!mainEntry.order || mainEntry.order.deal_stock <= 0) {
-          // A finalized order may have no actual execution.
-          orderApi.removeAllOrdersFromCache(
-            this as Strategy<string>, marketName,
-          );
-          return { state: 'unsubscribe and switch to idle', action: 'continue' };
+        return {
+          state: 'awaiting for order book depth data',
+          action: 'stop',
+          kind: 'bare',
+        };
+      }
+
+      case 'awaiting for order book depth data':
+        const result = this.checkOpenDealTresholds(expectedCombined, marketName);
+
+        if (result === 'cancel') {
+          return {
+            state: 'unsubscribe and switch to idle',
+            action: 'continue',
+            kind: 'bare',
+          };
         }
 
-        return { state: 'holding', action: 'continue' };
+        if (result === 'start deal' && depthHistory && depthHistory.length > 0) {
+          const isLong = this.isDirectionLong(marketName);
+
+          if (orders.length > 0) {
+            throw new Error(`Uncompleted old orders found.`);
+          }
+
+          // TODO: replace it after switch to real trading.
+          const amount = isLong ? 1000 : 1000 / lastStorage.price;
+
+          const newRests = isLong
+            ? { money: amount, stock: 0 }
+            : { money: 0, stock: amount };
+
+          this.rests.set(marketName, newRests);
+
+          orderApi.createOrder(
+            this as Strategy<string>,
+            {
+              orderType: 'Market',
+              orderRequest: {
+                marketName,
+                side: isLong ? 'buy' : 'sell',
+                amount,
+              },
+            },
+            'main',
+            this.isPaperTrading,
+          );
+
+          return {
+            state: 'awaiting for first main order creation',
+            action: 'stop',
+            kind: 'rests',
+            ...newRests,
+          };
+        }
+
+        return { state, action: 'stop', kind: 'bare' };
+
+      case 'awaiting for first main order creation': {
+        const isLong = this.isDirectionLong(marketName);
+
+        const mainEntry = orders.find((o) => o.orderKind === 'main');
+        if (!this.isOrderCommandCompleted(mainEntry)) {
+          return {
+            state,
+            action: 'stop',
+            kind: 'rests',
+            ...this.getRests(marketName),
+          };
+        }
+
+        // If we receive an error when creating an order,
+        // it means the order will not be created.
+        if (mainEntry.error) {
+          orderApi.removeAllOrdersFromCache(this, marketName);
+
+          const errorCode = mainEntry.error.code;
+
+          return FATAL_ERRORS.has(errorCode)
+            ? {
+                state: 'unsubscribe and switch to idle',
+                action: 'continue',
+                kind: 'error',
+                errorCode,
+              }
+            : {
+                state: 'candidate',
+                action: 'stop',
+                kind: 'error',
+                errorCode,
+              };
+
+        }
+
+        if (!mainEntry.isOrderUpdated || !mainEntry.isFinalized) {
+          return {
+            state,
+            action: 'stop',
+            kind: 'rests',
+            ...this.getRests(marketName),
+          };
+        }
+
+        orderApi.removeAllOrdersFromCache(this, marketName);
+
+        if (!mainEntry.order) {
+          console.error(`Did not received neither order nor error`);
+
+          return {
+            state: 'unsubscribe and switch to idle',
+            action: 'stop',
+            kind: 'error',
+            errorCode:
+              REVERT_ORDER_ERROR['did not received neither order nor error'],
+          };
+        }
+
+        const fee = this.getTakerFee(marketName);
+
+        const rests = this.getRests(marketName);
+        const newRests = isLong
+          ? {
+              money: rests.money - mainEntry.order.deal_money,
+              stock: rests.stock + mainEntry.order.deal_stock * fee,
+            }
+          : {
+              stock: rests.stock - mainEntry.order.deal_stock,
+              money: rests.money + mainEntry.order.deal_money * fee,
+            };
+
+        this.rests.set(marketName, newRests);
+
+        // A finalized order may have no actual execution.
+        if (mainEntry.order.deal_stock <= 0) {
+          return {
+            state: 'unsubscribe and switch to idle',
+            action: 'continue',
+            kind: 'rests',
+            ...newRests,
+          };
+        }
+
+        return {
+          state: 'holding',
+          action: 'continue',
+          kind: 'rests',
+          ...newRests,
+        };
       }
 
       case 'holding': {
-        const dealDirection = this.getDealDirection(marketName);
+        const isLong = this.isDirectionLong(marketName);
+        const rests = this.getRests(marketName);
 
         if (
           expectedCombined === null ||
-          dealDirection === 'long' && expectedCombined <= this.params.longCloseDealTreshold ||
-          dealDirection === 'short' && expectedCombined >= this.params.shortCloseDealTreshold
+          isLong && expectedCombined <= this.params.longCloseDealTreshold ||
+          !isLong && expectedCombined >= this.params.shortCloseDealTreshold
         ) {
-          const result = this.manageOrdersToCloseDeal(
-            { orderApi, marketName, orders, dealDirection, storage },
+          const amount = isLong ? rests.stock : rests.money;
+          if (amount <= 0) {
+            return {
+              state: 'unsubscribe and switch to idle',
+              action: 'continue',
+              kind: 'error',
+              errorCode: REVERT_ORDER_ERROR['unexpected zero rest'],
+            }
+          }
+
+          orderApi.createOrder(
+            this,
+            {
+              orderType: 'Market',
+              orderRequest: {
+                marketName,
+                side: isLong ? 'sell' : 'buy',
+                amount,
+              },
+            },
+            'main',
+            this.isPaperTrading,
           );
 
-          return result === 'order created'
-            ? { state: 'awaiting for second main order creation', action: 'stop' }
-            : { state: 'unsubscribe and switch to idle', action: 'continue' };
+          return {
+            state: 'awaiting for second main order creation',
+            action: 'stop',
+            kind: 'rests',
+            ...rests,
+          };
         }
 
-        return { state, action: 'stop' };
+        return { state, action: 'stop', kind: 'rests', ...rests };
       }
 
       case 'awaiting for second main order creation': {
-        const dealDirection = this.getDealDirection(marketName);
+        const isLong = this.isDirectionLong(marketName);
 
-        return this.manageAdditionalOrdersToCloseDeal(
-          { orderApi, marketName, orders, dealDirection, storage },
-        ) === 'deal closed'
-          ? { state: 'unsubscribe and switch to idle', action: 'continue' }
-          : { state, action: 'stop' };
+        const mainEntry = orders.find((o) => o.orderKind === 'main');
+        if (!this.isOrderCommandCompleted(mainEntry)) {
+          return {
+            state,
+            action: 'stop',
+            kind: 'rests',
+            ...this.getRests(marketName),
+          };
+        }
+
+        // If we receive an error when creating an order,
+        // it means the order will not be created.
+        if (mainEntry.error) {
+          orderApi.removeAllOrdersFromCache(this, marketName);
+
+          const errorCode = mainEntry.error.code;
+
+          return FATAL_ERRORS.has(errorCode)
+            ? {
+                state: 'unsubscribe and switch to idle',
+                action: 'continue',
+                kind: 'error',
+                errorCode,
+              }
+            : {
+                state: 'holding',
+                action: 'stop',
+                kind: 'error',
+                errorCode,
+              };
+
+        }
+
+        if (!mainEntry.isOrderUpdated || !mainEntry.isFinalized) {
+          return {
+            state,
+            action: 'stop',
+            kind: 'rests',
+            ...this.getRests(marketName),
+          };
+        }
+
+        orderApi.removeAllOrdersFromCache(this, marketName);
+
+        const order = mainEntry.order;
+        if (!order) {
+          console.error(`Did not received neither order nor error`);
+
+          return {
+            state: 'holding',
+            action: 'stop',
+            kind: 'error',
+            errorCode:
+              REVERT_ORDER_ERROR['did not received neither order nor error'],
+          };
+        }
+
+        const fee = this.getTakerFee(marketName);
+
+        const rests = this.getRests(marketName);
+        const newRests: StrategyRests = {
+          money: isLong
+            ? rests.money + order.deal_money * fee
+            : rests.money - order.deal_money,
+          stock: isLong
+            ? rests.stock - order.deal_stock
+            : rests.stock + order.deal_stock * fee,
+        };
+
+        this.rests.set(marketName, newRests);
+        const amount = isLong ? newRests.stock : newRests.money;
+
+        if (amount <=0) {
+          return {
+            state:'unsubscribe and switch to idle',
+            action: 'continue',
+            kind: 'rests',
+            ...newRests,
+          }
+        }
+
+        orderApi.createOrder(
+          this as Strategy<string>,
+          {
+            orderType: 'Market',
+            orderRequest: {
+              marketName,
+              side: isLong ? 'sell' : 'buy',
+              amount,
+            },
+          },
+          'main',
+          this.isPaperTrading,
+        );
+
+        return { state, action: 'stop', kind: 'rests', ...newRests }
       }
 
       case 'unsubscribe and switch to idle': {
@@ -186,7 +424,7 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
 
         this.direction.delete(marketName);
 
-        return { state: 'idle', action: 'stop' };
+        return { state: 'idle', action: 'stop', kind: 'bare' };
       }
 
       default:
@@ -194,138 +432,46 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
     }
   }
 
-  private manageOrdersToOpenDeal({
-    orderApi,
-    marketName,
-    orders,
-    dealDirection,
-    storage,
-  }: ManageOrdersParams): void {
-    // TODO: replace it after switch to real trading.
-    const amount = dealDirection === 'long' ? 1000 : 1000 / storage.at(-1)!.price;
+  private checkOpenDealTresholds(
+    expected: IndicatorValue,
+    marketName: string,
+  ): 'cancel' | 'start deal' | 'between tresholds' {
+    const isLong = this.isDirectionLong(marketName);
 
-    if (orders.length > 0) {
-      throw new Error(`Uncompleted old orders found.`);
+    if (
+      expected === null ||
+      isLong && expected < this.params.longReturnToIdleTreshold ||
+      !isLong && expected > this.params.shortReturnToIdleTreshold
+    ) {
+      return 'cancel';
     }
 
-    orderApi.createOrder(
-      this as Strategy<string>,
-      {
-        orderType: 'Market',
-        orderRequest: {
-          marketName, side: dealDirection === 'long' ? 'buy' : 'sell', amount,
-        },
-      },
-      'main',
-    );
+    if (
+      isLong && expected >= this.params.longOpenDealTreshold ||
+      !isLong && expected <= this.params.shortOpenDealTreshold
+    ) {
+      return 'start deal';
+    }
+
+    return 'between tresholds';
   }
 
-  private manageOrdersToCloseDeal({
-    orderApi,
-    marketName,
-    orders,
-    dealDirection,
-  }: ManageOrdersParams): 'order created' | 'without new order' {
-    const { order } = this.getMainOrderEntry(orders);
-
-    orderApi.removeAllOrdersFromCache(this as Strategy<string>, marketName);
-
-    if (order) {
-      // TODO: For real orders, we'll need also to compare our balance
-      // with Market.minAmount and replace this amount calculation.
-      const amount = dealDirection == 'long'
-        ? order.deal_stock
-        : order.deal_money
-
-      if (amount > 0) {
-        this.dealAmount.set(marketName, amount);
-
-        orderApi.createOrder(
-          this as Strategy<string>,
-          {
-            orderType: 'Market',
-            orderRequest: {
-              marketName,
-              side: dealDirection === 'long' ? 'sell' : 'buy',
-              amount,
-            },
-          },
-          'main',
-        );
-
-        return 'order created';
-      }
-    }
-
-    return 'without new order';
-  }
-
-    private manageAdditionalOrdersToCloseDeal({
-    orderApi,
-    marketName,
-    orders,
-    dealDirection,
-  }: ManageOrdersParams): 'deal closed' | 'has rest' | 'fatal error' {
-    const mainEntry = orders.find((o) => o.orderKind === 'main');
-    if (!mainEntry) {
-      return 'has rest';
-    }
-
-    if (mainEntry.isFinalized && mainEntry.order || mainEntry.error) {
-      if (mainEntry.error && FATAL_ERRORS.has(mainEntry.error.code)) {}
-
-      const prevAmount = this.dealAmount.get(marketName);
-      if (!prevAmount) {
-        throw new Error(`Prev. amount not found.`);
-      }
-
-      const amount = prevAmount - (
-        dealDirection === 'long'
-        ? mainEntry.order?.deal_stock ?? 0
-        : mainEntry.order?.deal_money ?? 0
-      );
-
-      orderApi.removeAllOrdersFromCache(this as Strategy<string>, marketName);
-
-      if (amount > 0) {
-        this.dealAmount.set(marketName, amount);
-
-        orderApi.createOrder(
-          this as Strategy<string>,
-          {
-            orderType: 'Market',
-            orderRequest: {
-              marketName,
-              side: dealDirection === 'long' ? 'sell' : 'buy',
-              amount,
-            },
-          },
-          'main',
-        );
-
-        return 'has rest';
-      }
-    }
-
-    return 'has rest';
-  }
-
-  private getMainOrderEntry(orders: OrderAndStrategy[]): OrderAndStrategy {
-    const mainOrderEntry = orders.find((o) => o.orderKind === 'main');
-    if (!mainOrderEntry) {
-      throw new Error(`Main order entry not found.`);
-    }
-
-    return mainOrderEntry;
-  }
-
-  getDealDirection(marketName: string): StrategyDirection {
+  protected isDirectionLong(marketName: string): boolean {
     const dealDirection = this.direction.get(marketName);
 
     if (!dealDirection) {
       throw new Error(`Missing strategy direction.`);
     }
 
-    return dealDirection;
+    return dealDirection === 'long';
+  }
+
+  getTakerFee(marketName: string): number {
+    const fees = globalStateService.getFeeByMarketName(marketName);
+    if (fees === null) {
+      throw new Error(`Missing fees for "${marketName}" market.`);
+    }
+
+    return 1 - fees.takerFeeRatio;
   }
 }

@@ -1,12 +1,12 @@
 // app/src/server/dao/storage.ts
 
-import { q, type Sql } from '../db/client.js';
+import { q, type Sql } from '../client.js';
 import type {
   ActiveStoragePersistenceSnapshot,
   ArchiveStoragePersistenceSnapshot,
   StoragePersistenceSnapshot,
-} from '../../shared/types/storage.js';
-import { ARCHIVE_REPACK_BATCH_SIZE } from '../constants/persistence.js';
+} from '../../../shared/types/storage.js';
+import { ARCHIVE_REPACK_BATCH_SIZE } from '../../constants/persistence.js';
 
 export interface StorageArchiveRow extends StoragePersistenceSnapshot {
   numOfItems: number;
@@ -77,13 +77,6 @@ export class StorageDao {
     `;
 
     return rows.map((row) => row.marketName);
-  }
-
-  public async deleteAlives(marketName: string): Promise<void> {
-    await this.q`
-      delete from storage_alive
-      where market_name = ${marketName}
-    `;
   }
 
   public async getLastArchiveEndedAt(

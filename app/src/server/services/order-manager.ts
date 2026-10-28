@@ -1,14 +1,13 @@
 // app/src/server/services/order-manager.ts
 
-import { OrderError, OrderErrorCode } from '../../shared/types/order-receipt.js';
+import type { OrderError } from '../../shared/types/order-receipt.js';
 import { SERVER_EVENT } from '../constants/events.js';
 import { REVERT_ORDER_ERROR } from '../constants/order-error-codes.js';
-import type { OrderReceivedEvent, OrderUpdatedEvent } from '../types/events.js';
 import type {
-  OrderAndStrategy,
-  OrderApi,
-  OrderKind,
-  OrderCreatePreRequest,
+  OrderRequestResultEvent, OrderUpdatedEvent,
+} from '../types/events.js';
+import type {
+  OrderAndStrategy, OrderApi, OrderKind, OrderCreatePreRequest,
 } from '../types/orders.js';
 import type { Strategy } from '../types/strategies.js';
 import { isFinalOrderState } from '../utilities/is-final-order-state.js';
@@ -23,6 +22,7 @@ export class OrderManager {
   private readonly ordersByMarkets =
     new Map<string, Map<number, OrderAndStrategy>>();
 
+  // Only real orders require an exchange subscription.
   private readonly subscribedMarkets = new Set<string>();
 
   private readonly receivedAtByMarkets = new Map<string, number>();
@@ -34,8 +34,8 @@ export class OrderManager {
   private readonly stopOrderListeners: Array<() => void> = [];
 
   public readonly api: OrderApi = {
-    createOrder: (strategy, request, kind) => {
-      this.track(this.createOrder(strategy, request, kind));
+    createOrder: (strategy, request, kind, isPaperTrading = true) => {
+      this.track(this.createOrder(strategy, request, kind, isPaperTrading));
     },
 
     cancelOrder: (market, id) => this.cancelOrder(market, id),
@@ -44,20 +44,16 @@ export class OrderManager {
       this.removeAllOrdersFromCache(strategy, market),
   };
 
-  public constructor(
-    private readonly paperTrading = true,
-  ) {}
-
   public start(): void {
     if (this.stopOrderListeners.length > 0) return;
 
     this.stopOrderListeners.push(eventBus.on(
-      SERVER_EVENT.orderReceived,
-      (event) => this.handleOrderReceived(event),
+      SERVER_EVENT.orderRequestResult,
+      event => this.handleOrderRequestResult(event),
     ));
     this.stopOrderListeners.push(eventBus.on(
       SERVER_EVENT.orderUpdated,
-      (event) => this.handleOrderUpdated(event),
+      event => this.handleOrderUpdated(event),
     ));
   }
 
@@ -103,9 +99,10 @@ export class OrderManager {
   }
 
   private async createOrder(
-    strategy: Strategy,
+    strategy: Strategy<any>,
     request: OrderCreatePreRequest,
     orderKind: OrderKind,
+    isPaperTrading: boolean,
   ): Promise<void> {
     let client_order_id: number;
     try {
@@ -114,6 +111,7 @@ export class OrderManager {
       console.error('Order ID allocation failed unexpectedly', error);
       client_order_id = NaN;
     }
+
     const marketName = request.orderRequest.marketName;
     let orders = this.ordersByMarkets.get(marketName);
     if (!orders) {
@@ -129,29 +127,30 @@ export class OrderManager {
       client_order_id: key,
       strategy,
       orderKind,
-      paperTrading: this.paperTrading,
+      isPaperTrading,
       order: null,
-      error: null,
+      error: undefined,
+      isOrderUpdated: false,
       isFinalized: false,
     };
 
     orders.set(key, entry);
+    this.recordReceipt(marketName, entry);
 
     if (key < 0) {
-      entry.isFinalized = true;
-      this.recordReceipt(marketName, entry, null, {
+      entry.error = {
         code: REVERT_ORDER_ERROR['cannot allocate a WhiteBIT client order ID'],
         isWBError: false,
-      });
-      for (const listener of this.listeners) listener(marketName, strategy);
+      };
+      this.recordReceipt(marketName, entry);
+      this.notify(marketName, entry);
       return;
     }
 
-    const subscription = this.subscribedMarkets.has(marketName)
-      ? null
-      : this.addSubscribedMarket(marketName);
+    const subscription = isPaperTrading || this.subscribedMarkets.has(marketName)
+      ? null : this.addSubscribedMarket(marketName);
 
-    // No await between registration, subscription update and event dispatch.
+    // The entry exists before the event is dispatched to either executor.
     const command = request.orderType === 'Limit' ? {
       orderType: 'Limit' as const,
       orderRequest: { ...request.orderRequest, client_order_id: key },
@@ -160,7 +159,7 @@ export class OrderManager {
       orderRequest: { ...request.orderRequest, client_order_id: key },
     };
     eventBus.emit(SERVER_EVENT.createOrderRequestAndSubscribe, {
-      ...command, subscription, paperTrading: this.paperTrading,
+      ...command, subscription, isPaperTrading,
     });
   }
 
@@ -168,115 +167,101 @@ export class OrderManager {
     const entry = this.ordersByMarkets.get(market)?.get(client_order_id);
 
     if (!entry || !entry.order || entry.isFinalized) {
-      throw new Error('Cannot cancel an absent or failed order');
+      throw new Error('Cannot cancel an absent or finalized order');
     }
+
+    if (entry.error === undefined) {
+      throw new Error('Cannot cancel before the previous command completes');
+    }
+
+    entry.error = undefined;
+    entry.isOrderUpdated = false;
+    this.recordReceipt(market, entry);
     eventBus.emit(SERVER_EVENT.orderCancelRequest, {
-      market, client_order_id, paperTrading: entry.paperTrading,
+      market, client_order_id, isPaperTrading: entry.isPaperTrading,
     });
   }
 
-  private removeAllOrdersFromCache(
-    strategy: Strategy,
-    market: string,
-  ): void {
+  private removeAllOrdersFromCache(strategy: Strategy, market: string): void {
     const orders = this.ordersByMarkets.get(market);
-    if (!orders) return;
-    const owned = [...orders].filter(([, entry]) =>
-      entry.strategy === strategy);
-    if (owned.some(([, entry]) => !entry.isFinalized)) {
-      throw new Error('Cannot remove orders before they finish');
+    if (!orders) {
+      return;
+    }
+
+    const owned = [...orders].filter(([, entry]) => entry.strategy === strategy);
+    if (owned.some(([, entry]) => !this.canRemove(entry))) {
+      throw new Error('Cannot remove unresolved orders');
     }
 
     for (const [id] of owned) {
       orders.delete(id);
     }
 
-    if (orders.size === 0) this.ordersByMarkets.delete(market);
+    if (orders.size === 0) {
+      this.ordersByMarkets.delete(market);
+    }
+
+    this.removeSubscribedMarketIfIdle(market);
   }
 
-  private handleOrderReceived(event: OrderReceivedEvent): void {
-    const { marketName, client_order_id, order, error, paperTrading } = event;
-    const entry = this.ordersByMarkets.get(marketName)?.get(client_order_id);
-
-    if (!entry) {
-      throw new Error('Unmatched order receipt ' + client_order_id);
-    }
-
-    if (entry.paperTrading !== paperTrading) {
-      throw new Error('Order receipt trading mode mismatch');
-    }
-
-    if (
-      order &&
-      (order.client_order_id !== client_order_id || order.market !== marketName)
-    ) {
-      throw new Error('Order receipt identity mismatch');
-    }
-
-    // Responses to a create/cancel call can arrive after subscription updates.
-    if (entry.isFinalized) {
-      return;
-    }
-
-    if (order && entry.order && entry.order.mtime >= order.mtime) {
-      return;
-    }
-
-    // Errors on cancellation must not terminate an existing live order.
-    const isFinalized = order
-      ? isFinalOrderState(order)
-      : !entry.order && error !== null && !this.isUnknownOutcome(error);
-
-    this.acceptReceipt(
-      marketName,
-      entry,
-      order,
-      error,
-      isFinalized,
+  private canRemove(entry: OrderAndStrategy): boolean {
+    return entry.error !== undefined && (
+      entry.isFinalized || (entry.order === null && entry.error !== null)
     );
   }
 
+  private handleOrderRequestResult(event: OrderRequestResultEvent): void {
+    const { marketName, client_order_id, error, isPaperTrading } = event;
+    const entry = this.ordersByMarkets.get(marketName)?.get(client_order_id);
+    if (!entry || entry.isPaperTrading !== isPaperTrading) {
+      throw new Error('Unmatched order command result ' + client_order_id);
+    }
+
+    // Reconciliation is not implemented yet: an unknown result must not
+    // masquerade as a rejection. Keep waiting until it is resolved.
+    if (
+      error &&
+      !error.isWBError &&
+      error.code === REVERT_ORDER_ERROR['order outcome unknown']
+    ) {
+      return;
+    }
+
+    if (entry.error !== undefined) {
+      return;
+    }
+
+    entry.error = error === null ? null : { ...error };
+    this.recordReceipt(marketName, entry);
+    this.removeSubscribedMarketIfIdle(marketName);
+    this.notify(marketName, entry);
+  }
+
   private handleOrderUpdated(event: OrderUpdatedEvent): void {
-    const { order, eventId, paperTrading } = event;
+    const { order, eventId, isPaperTrading } = event;
     const marketName = order.market;
     const entry = this.ordersByMarkets.get(marketName)
       ?.get(order.client_order_id);
 
-    // Account subscriptions also include orders belonging to other clients.
-    if (!entry || entry.paperTrading !== paperTrading) {
-      return;
-    }
+    // Real account updates may refer to orders from another application.
+    if (!entry || entry.isPaperTrading !== isPaperTrading) return;
+    if (entry.isFinalized) return;
+    if (entry.order && entry.order.mtime > order.mtime) return;
+    if (entry.order && entry.order.mtime === order.mtime &&
+      eventId !== 3 && !isFinalOrderState(order)) return;
 
-    if (entry.isFinalized) {
-      return;
-    }
-
-    if (entry.order && entry.order.mtime >= order.mtime) {
-      return;
-    }
-
-    this.acceptReceipt(marketName, entry, order, null, eventId === 3);
+    entry.order = order;
+    entry.isOrderUpdated = true;
+    // A partially filled Market order still awaits its finish event.
+    entry.isFinalized = eventId === 3 || (
+      order.status !== 'PARTIALLY_FILLED' && isFinalOrderState(order)
+    );
+    this.recordReceipt(marketName, entry);
+    if (entry.isFinalized) this.removeSubscribedMarketIfIdle(marketName);
+    this.notify(marketName, entry);
   }
 
-  private isUnknownOutcome(error: OrderError): boolean {
-    return !error.isWBError &&
-      error.code === REVERT_ORDER_ERROR['order outcome unknown'];
-  }
-
-  private acceptReceipt(
-    marketName: string,
-    entry: OrderAndStrategy,
-    order: OrderAndStrategy['order'],
-    error: { code: OrderErrorCode, isWBError: boolean } | null,
-    isFinalized: boolean,
-  ): void {
-    this.recordReceipt(marketName, entry, order, error);
-
-    if (isFinalized) {
-      entry.isFinalized = true;
-      this.removeSubscribedMarketIfIdle(marketName);
-    }
-
+  private notify(marketName: string, entry: OrderAndStrategy): void {
     for (const listener of this.listeners) {
       listener(marketName, entry.strategy);
     }
@@ -290,52 +275,32 @@ export class OrderManager {
   private removeSubscribedMarketIfIdle(marketName: string): void {
     if (!this.subscribedMarkets.has(marketName)) return;
     const orders = this.ordersByMarkets.get(marketName);
-    if ([...(orders?.values() ?? [])].some(entry => !entry.isFinalized)) {
-      return;
-    }
+    if ([...(orders?.values() ?? [])].some(entry =>
+      !entry.isPaperTrading && !this.canRemove(entry))) return;
 
     this.subscribedMarkets.delete(marketName);
     eventBus.emit(SERVER_EVENT.createOrderRequestAndSubscribe, {
       orderType: null,
       orderRequest: null,
       subscription: [...this.subscribedMarkets],
-      paperTrading: this.paperTrading,
+      isPaperTrading: false,
     });
   }
 
-  private recordReceipt(
-    marketName: string,
-    entry: OrderAndStrategy,
-    order: OrderAndStrategy['order'],
-    error: { code: OrderErrorCode, isWBError: boolean } | null,
-  ): void {
-    const receivedAt = this.receivedAtByMarkets.get(marketName);
-
-    if (receivedAt === undefined) {
-      throw new Error('Missing tick time for order ' + marketName);
-    }
-
-    const nextOrder = order ?? entry.order;
-    const nextError: OrderError | null = error === null
-      ? null
-      : {
-          code: error.code,
-          isWBError: error.isWBError,
-        };
-
+  private recordReceipt(marketName: string, entry: OrderAndStrategy): void {
+    const receivedAt = this.receivedAtByMarkets.get(marketName) ?? Date.now();
     eventBus.emit(SERVER_EVENT.orderPersistenceRequest, {
       marketName,
       receivedAt,
       client_order_id: entry.client_order_id,
       strategyName: entry.strategy.name,
       orderKind: entry.orderKind,
-      paperTrading: entry.paperTrading,
-      order: nextOrder,
-      error: nextError,
+      isPaperTrading: entry.isPaperTrading,
+      order: entry.order,
+      error: entry.error,
+      isOrderUpdated: entry.isOrderUpdated,
+      isFinalized: entry.isFinalized,
     });
-
-    entry.order = nextOrder;
-    entry.error = nextError;
   }
 }
 

@@ -3,6 +3,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SERVER_EVENT } from '../constants/events.js';
+import { REVERT_ORDER_ERROR, REVERT_WB_ORDER_ERROR } from
+  '../constants/order-error-codes.js';
 import { eventBus } from '../services/event-bus.js';
 import { OrderManager } from '../services/order-manager.js';
 import { sequencesPersistence } from '../services/sequences-persistence.js';
@@ -19,113 +21,191 @@ const example: Order = {
   reduce_only: false,
 };
 
-test('manager subscribes once per active market and discards stale updates',
+const strategy = { name: 'isolated', run() {} } as Strategy;
+
+function result(id: number, error: { code: number; isWBError: boolean } | null,
+  isPaperTrading = true): void {
+  eventBus.emit(SERVER_EVENT.orderRequestResult, {
+    marketName: 'BTC_USD', client_order_id: id, isPaperTrading, error,
+  });
+}
+
+function update(id: number, status: Order['status'], mtime: number,
+  eventId: 1 | 2 | 3, isPaperTrading = true): void {
+  eventBus.emit(SERVER_EVENT.orderUpdated, {
+    isPaperTrading, eventId,
+    order: { ...example, client_order_id: id, status, mtime },
+  });
+}
+
+test('command reply never modifies an order, including after final update',
   async () => {
     const manager = new OrderManager();
-    const strategy = { name: 'isolated', run() {} } as Strategy;
-    const before = sequencesPersistence.getNextOrderId;
-    let next = 0;
-    sequencesPersistence.getNextOrderId = async () => ++next;
-    const commands: Array<{ subscription: string[] | null }> = [];
-    const off = eventBus.on(
-      SERVER_EVENT.createOrderRequestAndSubscribe,
-      e => { commands.push({ subscription: e.subscription }); },
-    );
+    const oldSequence = sequencesPersistence.getNextOrderId;
+    sequencesPersistence.getNextOrderId = async () => 101;
     manager.setReceivedAt('BTC_USD', 123);
     manager.start();
     try {
-      const create = () => manager.api.createOrder(strategy, {
-        orderType: 'Limit',
-        orderRequest: {
+      manager.api.createOrder(strategy, {
+        orderType: 'Limit', orderRequest: {
           marketName: 'BTC_USD', side: 'buy', amount: 2, price: 100,
         },
-      }, 'main');
-      create();
+      }, 'main', true);
       await manager.waitForPendingRequests();
-      create();
-      await manager.waitForPendingRequests();
-      assert.deepEqual(commands.map(c => c.subscription), [
-        ['BTC_USD'], null,
-      ]);
-      const deliver = (id: number, status: Order['status'], mtime: number,
-        eventId: 1 | 2 | 3) => {
-        eventBus.emit(SERVER_EVENT.orderUpdated, {
-          paperTrading: true, eventId,
-          order: { ...example, client_order_id: id, status, mtime },
-        });
-      };
-      deliver(1, 'OPEN', 10, 1);
-      deliver(2, 'OPEN', 10, 1);
-      deliver(1, 'PARTIALLY_FILLED', 11, 2);
-      deliver(1, 'CANCELED', 12, 3);
-      assert.equal(commands.length, 2);
-      eventBus.emit(SERVER_EVENT.orderReceived, {
-        marketName: 'BTC_USD', client_order_id: 1, paperTrading: true,
-        order: { ...example, mtime: 2 }, error: null,
-      });
-      assert.equal(manager.getOrdersForStrategy('BTC_USD', strategy)
-        .find(o => o.client_order_id === 1)?.order?.status, 'CANCELED');
-      deliver(2, 'FILLED', 12, 3);
-      assert.deepEqual(commands.at(-1)?.subscription, []);
-      assert.equal(manager.getOrdersForStrategy('BTC_USD', strategy)
-        .every(o => o.isFinalized), true);
+      const entry = manager.getOrdersForStrategy('BTC_USD', strategy)[0];
+      assert.equal(entry.error, undefined);
+      assert.equal(entry.isOrderUpdated, false);
+      update(101, 'OPEN', 10, 1);
+      assert.equal(entry.isOrderUpdated, true);
+      assert.equal(entry.error, undefined);
+      update(101, 'CANCELED', 10, 3);
+      assert.equal(entry.isFinalized, true);
+      assert.equal(entry.order?.status, 'CANCELED');
+      result(101, null);
+      assert.equal(entry.error, null);
+      assert.equal(entry.order?.status, 'CANCELED');
       manager.api.removeAllOrdersFromCache(strategy, 'BTC_USD');
     } finally {
       manager.stop();
-      off();
-      sequencesPersistence.getNextOrderId = before;
+      sequencesPersistence.getNextOrderId = oldSequence;
     }
   });
 
-test('manager preserves error source and only internal unknown is pending',
+test('cancellation resets only command and update flags, not order',
   async () => {
-    const { REVERT_ORDER_ERROR, REVERT_WB_ORDER_ERROR } = await import(
-      '../constants/order-error-codes.js'
-    );
-    const manager = new OrderManager(false);
-    const strategy = { name: 'errors', run() {} } as Strategy;
-    const before = sequencesPersistence.getNextOrderId;
-    sequencesPersistence.getNextOrderId = async () => 123;
-    manager.setReceivedAt('BTC_USD', 42);
+    const manager = new OrderManager();
+    const oldSequence = sequencesPersistence.getNextOrderId;
+    sequencesPersistence.getNextOrderId = async () => 102;
+    manager.setReceivedAt('BTC_USD', 123);
     manager.start();
     try {
       manager.api.createOrder(strategy, {
-        orderType: 'Market',
-        orderRequest: {
-          marketName: 'BTC_USD', side: 'buy', amount: 1000,
+        orderType: 'Limit', orderRequest: {
+          marketName: 'BTC_USD', side: 'buy', amount: 2, price: 100,
         },
-      }, 'main');
+      }, 'main', true);
       await manager.waitForPendingRequests();
+      result(102, null);
+      update(102, 'OPEN', 10, 1);
       const entry = manager.getOrdersForStrategy('BTC_USD', strategy)[0];
-      eventBus.emit(SERVER_EVENT.orderReceived, {
-        marketName: 'BTC_USD', client_order_id: 123,
-        paperTrading: false, order: null,
-        error: {
-          code: REVERT_ORDER_ERROR['order outcome unknown'],
-          isWBError: false,
-        },
-      });
-      assert.deepEqual(entry.error, {
-        code: REVERT_ORDER_ERROR['order outcome unknown'],
-        isWBError: false,
+      manager.api.cancelOrder('BTC_USD', 102);
+      assert.equal(entry.error, undefined);
+      assert.equal(entry.isOrderUpdated, false);
+      assert.equal(entry.order?.status, 'OPEN');
+      assert.equal(entry.isFinalized, false);
+      assert.throws(() => manager.api.cancelOrder('BTC_USD', 102));
+      result(102, {
+        code: REVERT_WB_ORDER_ERROR['order not found'], isWBError: true,
       });
       assert.equal(entry.isFinalized, false);
-      eventBus.emit(SERVER_EVENT.orderReceived, {
-        marketName: 'BTC_USD', client_order_id: 123,
-        paperTrading: false, order: null,
-        error: {
-          code: REVERT_WB_ORDER_ERROR['balance not enough'],
-          isWBError: true,
+      assert.equal(entry.order?.status, 'OPEN');
+      update(102, 'CANCELED', 11, 3);
+      assert.equal(entry.isFinalized, true);
+      assert.equal(entry.isOrderUpdated, true);
+      assert.ok(entry.error);
+      manager.api.removeAllOrdersFromCache(strategy, 'BTC_USD');
+    } finally {
+      manager.stop();
+      sequencesPersistence.getNextOrderId = oldSequence;
+    }
+  });
+
+test('rejected create can be removed without fictional final order',
+  async () => {
+    const manager = new OrderManager();
+    const oldSequence = sequencesPersistence.getNextOrderId;
+    sequencesPersistence.getNextOrderId = async () => 103;
+    manager.setReceivedAt('BTC_USD', 123);
+    manager.start();
+    try {
+      manager.api.createOrder(strategy, {
+        orderType: 'Market', orderRequest: {
+          marketName: 'BTC_USD', side: 'buy', amount: 200,
         },
-      });
-      assert.deepEqual(entry.error, {
-        code: REVERT_WB_ORDER_ERROR['balance not enough'],
-        isWBError: true,
-      });
+      }, 'main', true);
+      await manager.waitForPendingRequests();
+      result(103, { code: REVERT_WB_ORDER_ERROR['balance not enough'],
+        isWBError: true });
+      const entry = manager.getOrdersForStrategy('BTC_USD', strategy)[0];
+      assert.equal(entry.isFinalized, false);
+      assert.equal(entry.order, null);
+      assert.equal(entry.isOrderUpdated, false);
+      manager.api.removeAllOrdersFromCache(strategy, 'BTC_USD');
+    } finally {
+      manager.stop();
+      sequencesPersistence.getNextOrderId = oldSequence;
+    }
+  });
+
+test('unknown result keeps undefined until real response or reconciliation',
+  async () => {
+    const manager = new OrderManager();
+    const oldSequence = sequencesPersistence.getNextOrderId;
+    sequencesPersistence.getNextOrderId = async () => 104;
+    manager.setReceivedAt('BTC_USD', 123);
+    manager.start();
+    try {
+      manager.api.createOrder(strategy, {
+        orderType: 'Market', orderRequest: {
+          marketName: 'BTC_USD', side: 'buy', amount: 200,
+        },
+      }, 'main', false);
+      await manager.waitForPendingRequests();
+      result(104, { code: REVERT_ORDER_ERROR['order outcome unknown'],
+        isWBError: false }, false);
+      const entry = manager.getOrdersForStrategy('BTC_USD', strategy)[0];
+      assert.equal(entry.error, undefined);
+      assert.throws(() => manager.api.removeAllOrdersFromCache(strategy,
+        'BTC_USD'));
+      result(104, null, false);
+      update(104, 'FILLED', 10, 3, false);
       assert.equal(entry.isFinalized, true);
       manager.api.removeAllOrdersFromCache(strategy, 'BTC_USD');
     } finally {
       manager.stop();
-      sequencesPersistence.getNextOrderId = before;
+      sequencesPersistence.getNextOrderId = oldSequence;
+    }
+  });
+
+test('paper and real orders share a market but real subscription is separate',
+  async () => {
+    const manager = new OrderManager();
+    const oldSequence = sequencesPersistence.getNextOrderId;
+    let next = 200;
+    sequencesPersistence.getNextOrderId = async () => ++next;
+    const commands: Array<{ isPaperTrading: boolean;
+      subscription: string[] | null }> = [];
+    const off = eventBus.on(SERVER_EVENT.createOrderRequestAndSubscribe,
+      event => { commands.push(event); });
+    manager.setReceivedAt('BTC_USD', 123);
+    manager.start();
+    try {
+      const create = (isPaperTrading: boolean) => manager.api.createOrder(
+        strategy, { orderType: 'Limit', orderRequest: {
+          marketName: 'BTC_USD', side: 'buy', amount: 2, price: 100,
+        } }, 'main', isPaperTrading,
+      );
+      create(true);
+      await manager.waitForPendingRequests();
+      create(false);
+      await manager.waitForPendingRequests();
+      assert.deepEqual(commands.slice(0, 2).map(c =>
+        [c.isPaperTrading, c.subscription]), [
+        [true, null], [false, ['BTC_USD']],
+      ]);
+      result(201, null, true);
+      update(201, 'FILLED', 10, 3, true);
+      assert.equal(manager.getOrdersForStrategy('BTC_USD', strategy)
+        .find(e => e.client_order_id === 201)?.isPaperTrading, true);
+      assert.equal(commands.length, 2);
+      result(202, null, false);
+      update(202, 'FILLED', 10, 3, false);
+      assert.deepEqual(commands.at(-1)?.subscription, []);
+      assert.equal(commands.at(-1)?.isPaperTrading, false);
+      manager.api.removeAllOrdersFromCache(strategy, 'BTC_USD');
+    } finally {
+      off();
+      manager.stop();
+      sequencesPersistence.getNextOrderId = oldSequence;
     }
   });

@@ -20,8 +20,10 @@ export class ServerGlobalStateService {
     }
 
     this.unsubscribeMarkets = eventBus.on(
-      SERVER_EVENT.marketsInfoUpdated,
-      (event) => globalStateService.setMarkets(event.markets, event.marketNames),
+      SERVER_EVENT.marketDataUpdated,
+      (event) => globalStateService.setMarketData(
+        event.markets, event.marketFees, event.marketNames,
+      ),
     );
 
     this.unsubscribeStorageEntities = eventBus.on(

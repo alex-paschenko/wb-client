@@ -4,7 +4,7 @@ import { SERVER_EVENT } from '../constants/events.js';
 import {
   orderReceiptsDao,
   type OrderReceiptRow,
-} from '../dao/order-receipts.js';
+} from '../db/dao/order-receipts.js';
 import { encodeEntireBinary } from
   '../../shared/utilities/codecs/entire-binary-codec.js';
 import { eventBus } from './event-bus.js';
@@ -32,7 +32,7 @@ export class OrderPersistence {
           strategyName: event.strategyName,
           clientOrderId: event.client_order_id,
           orderKind: event.orderKind,
-          paperTrading: event.paperTrading,
+          paperTrading: event.isPaperTrading,
           data: encodeEntireBinary({
             codecName: 'order receipt v1.0',
             binaryKind: 'snapshot',
@@ -40,6 +40,8 @@ export class OrderPersistence {
             data: {
               order: event.order,
               error: event.error,
+              isOrderUpdated: event.isOrderUpdated,
+              isFinalized: event.isFinalized,
             },
           }),
         });
@@ -50,7 +52,7 @@ export class OrderPersistence {
   public async stop(): Promise<void> {
     this.unsubscribe?.();
     this.unsubscribe = null;
-    
+
     await this.queue.stop();
   }
 }

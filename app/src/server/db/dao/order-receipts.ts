@@ -1,6 +1,6 @@
 // app/src/server/dao/order-receipts.ts
 
-import { q, type Sql } from '../db/client.js';
+import { q, type Sql } from '../client.js';
 
 export interface OrderReceiptRow {
   receivedAt: number;

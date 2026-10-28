@@ -49,5 +49,7 @@ export interface OrderError {
 
 export interface OrderReceiptBody {
   order: Order | null;
-  error: OrderError | null;
+  error: OrderError | null | undefined;
+  isOrderUpdated: boolean;
+  isFinalized: boolean;
 }

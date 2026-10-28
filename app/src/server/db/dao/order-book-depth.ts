@@ -1,7 +1,7 @@
 // app/src/server/dao/order-book-depth.ts
 
-import { q, type Sql } from '../db/client.js';
-import type { DepthPersistence } from '../types/persistence.js';
+import { q, type Sql } from '../client.js';
+import type { DepthPersistence } from '../../types/persistence.js';
 
 export interface DepthRow extends DepthPersistence {
   depthSequence: number;

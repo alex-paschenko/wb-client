@@ -48,7 +48,7 @@ test('WS order queue acknowledges subscriptions before placing orders', () => {
   const sends: Array<{ method: string; params: unknown[] }> = [];
   const received: unknown[] = [];
   const updated: unknown[] = [];
-  const offReceipt = eventBus.on(SERVER_EVENT.orderReceived, e => {
+  const offReceipt = eventBus.on(SERVER_EVENT.orderRequestResult, e => {
     received.push(e);
   });
   const offUpdate = eventBus.on(SERVER_EVENT.orderUpdated, e => {
@@ -77,7 +77,7 @@ test('WS order queue acknowledges subscriptions before placing orders', () => {
   };
   try {
     const event = {
-      paperTrading: false,
+      isPaperTrading: false,
       orderType: 'Market' as const,
       orderRequest: {
         marketName: 'BTC_USD', side: 'sell' as const,
@@ -94,18 +94,33 @@ test('WS order queue acknowledges subscriptions before placing orders', () => {
     assert.equal(sends.length, 1);
     local.handleWSMessage({ id: 1, error: null, result: { status: 'success' } });
     assert.deepEqual(sends.map(v => v.method), [
-      'ordersPending_subscribe', 'order_market_place',
+      'ordersPending_subscribe', 'ordersExecuted_subscribe',
     ]);
-    local.handleWSMessage({ id: 2, error: null, result: wireOrder });
-    assert.equal(received.length, 1);
-    assert.equal(sends.length, 3);
+    assert.deepEqual(sends[1].params, [['BTC_USD'], 0]);
+    local.handleWSMessage({ id: 2, error: null,
+      result: { status: 'success' } });
     assert.equal(sends[2].method, 'order_market_place');
+    local.handleWSMessage({ id: 3, error: null, result: wireOrder });
+    assert.equal(received.length, 1);
+    assert.deepEqual(received[0], {
+      marketName: 'BTC_USD', client_order_id: 9,
+      isPaperTrading: false, error: null,
+    });
+    assert.equal(updated.length, 0);
+    assert.equal(sends.length, 4);
+    assert.equal(sends[3].method, 'order_market_place');
     local.handleWSMessage({
       method: 'ordersPending_update',
       params: [3, { ...wireOrder, mtime: 1236 }],
     });
     assert.equal(updated.length, 1);
-    local.handleWSMessage({ id: 3, error: {
+    local.handleWSMessage({
+      method: 'ordersExecuted_update',
+      params: [{ ...wireOrder, status: 'FILLED', mtime: 1237 }],
+    });
+    assert.equal(updated.length, 2);
+    assert.equal((updated[1] as { eventId: number }).eventId, 3);
+    local.handleWSMessage({ id: 4, error: {
       code: REVERT_WB_ORDER_ERROR['balance not enough'],
       message: 'balance not enough',
     }, result: null });
@@ -127,7 +142,7 @@ test('failed subscription prevents placement; timed-out placement is unknown',
     let nextId = 0;
     const methods: string[] = [];
     const errors: Array<{ code: number; isWBError: boolean }> = [];
-    const off = eventBus.on(SERVER_EVENT.orderReceived, event => {
+    const off = eventBus.on(SERVER_EVENT.orderRequestResult, event => {
       if (event.error) errors.push(event.error);
     });
     const local = service as unknown as {
@@ -148,7 +163,7 @@ test('failed subscription prevents placement; timed-out placement is unknown',
       sendRequest: method => { methods.push(method); return ++nextId; },
     };
     const event = {
-      orderType: 'Market' as const, paperTrading: false,
+      orderType: 'Market' as const, isPaperTrading: false,
       subscription: ['BTC_USD'],
       orderRequest: {
         marketName: 'BTC_USD', side: 'sell' as const,
@@ -181,7 +196,9 @@ test('failed subscription prevents placement; timed-out placement is unknown',
       next.enqueueOrder({ kind: 'create', event });
       next.handleWSMessage({ id: 2, error: null,
         result: { status: 'success' } });
-      next.handleOrderRequestTimeout(3);
+      next.handleWSMessage({ id: 3, error: null,
+        result: { status: 'success' } });
+      next.handleOrderRequestTimeout(4);
       assert.deepEqual(errors.at(-1), {
         code: REVERT_ORDER_ERROR['order outcome unknown'],
         isWBError: false,

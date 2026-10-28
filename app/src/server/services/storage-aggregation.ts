@@ -22,7 +22,6 @@ import { Freezing } from '../utilities/freezing.js';
 import { eventBus } from './event-bus.js';
 import { storagePersistenceService } from './storage-persistence.js';
 import { CANDLE_NAME } from '../../shared/constants/storage-entities.js';
-import { SNAPSHOT_BATCH_SIZE } from '../constants/persistence.js';
 import {
   type DecodedEntireBinary,
   decodeEntireBinary,
@@ -59,6 +58,8 @@ export class StorageAggregationService {
 
   private snapshotWorkerTimer: ReturnType<typeof setInterval> | null = null;
 
+  private unsubscribeMarkets: (() => void) | null = null;
+
   public constructor() {
     this.freezingByMarket = new Freezing(
       (marketName: string) => { this.flushTickBuffer(marketName); },
@@ -84,7 +85,52 @@ export class StorageAggregationService {
     await globalStateService.waitForStorageEntities();
     await globalStateService.waitForMarkets();
 
-    await this.prepareStoragesFromDatabase();
+
+    const marketNames = globalStateService.getMarketNames() ?? [];
+
+    console.log('Market statistics storage restore started', {
+      markets: marketNames.length,
+    });
+
+    let processed = 0;
+    let reportedDecile = 0;
+
+    for (const marketName of marketNames) {
+      this.freezingByMarket.coolAndIce(marketName);
+
+      try {
+        await this.getOrCreateStorage(marketName);
+      } finally {
+        this.freezingByMarket.warmAndMeltIce(marketName);
+      }
+
+      processed++;
+
+      const currentDecile = Math.min(
+        10,
+        Math.floor(processed * 10 / marketNames.length),
+      );
+
+      for (let value = reportedDecile + 1; value <= currentDecile; value++) {
+        console.log(`processed: ${value}/10`);
+      }
+
+      reportedDecile = currentDecile;
+    }
+
+    console.log('Market statistics storage restore finished', {
+      storages: this.storagesByMarket.size,
+    });
+
+    this.unsubscribeMarkets = globalStateService.subscribeMarkets(
+      (_markets, updatedMarketNames) => {
+        if (updatedMarketNames !== null) {
+          void this.handleMarketNamesChanged().catch((error: unknown) => {
+            console.error('Failed to handle market list update', error);
+          });
+        }
+      },
+    );
 
     eventBus.on(
       SERVER_EVENT.marketTickReceived,
@@ -102,6 +148,10 @@ export class StorageAggregationService {
       let size = 0;
 
       for (const [currentMarketName, storage] of storages.entries()) {
+        if (storage.levelBoundaries[0] >= storage.size) {
+          continue;
+        }
+
         const candles = storage.getAccessors()['candles'][CANDLE_NAME]  as LazyArray<MarketCandle>;
         const currentL0Timestamp = candles.get(storage.levelBoundaries[0], 'receivedAt');
 
@@ -148,7 +198,15 @@ export class StorageAggregationService {
     }, 30_000);
   }
 
-  async stop() {}
+  async stop() {
+    this.unsubscribeMarkets?.();
+    this.unsubscribeMarkets = null;
+
+    if (this.snapshotWorkerTimer) {
+      clearInterval(this.snapshotWorkerTimer);
+      this.snapshotWorkerTimer = null;
+    }
+  }
 
   private handleTickReceived(
     event: MarketTickReceivedEvent,
@@ -171,7 +229,7 @@ export class StorageAggregationService {
     marketName: string,
     tick: MarketTick,
   ): Promise<void> {
-    const storage = this.getOrCreateStorage(marketName);
+    const storage = await this.getOrCreateStorage(marketName);
 
     if (storage.endedAt === tick.receivedAt) {
       console.warn(
@@ -310,88 +368,100 @@ export class StorageAggregationService {
     return aggregated;
   }
 
-  private async prepareStoragesFromDatabase(): Promise<void> {
-    const databaseMarketNames =
-      await storagePersistenceService.getAliveMarketNames();
-
+  private async handleMarketNamesChanged(): Promise<void> {
     const marketNames = globalStateService.getMarketNames() ?? [];
+    const activeMarkets = new Set(marketNames);
 
-    console.log(
-      'Market statistics storage restore started',
-      {
-        snapshots: databaseMarketNames.length,
-        markets: marketNames.length,
-      },
-    );
+    for (const [marketName, storage] of this.storagesByMarket) {
+      if (activeMarkets.has(marketName)) {
+        continue;
+      }
 
-    const totalSnapshots = databaseMarketNames.length;
+      this.freezingByMarket.cool(marketName);
 
-    let processed = 0;
-    let reportedDecile = 0;
-
-    while (databaseMarketNames.length > 0) {
-      const marketNamesBatch =
-        databaseMarketNames.splice(0, SNAPSHOT_BATCH_SIZE);
-
-      const snapshots =
-        await storagePersistenceService.getAliveForRestore(marketNamesBatch);
-
-      for (const snapshot of snapshots) {
-        const marketName = snapshot.marketName;
+      try {
+        await waitFor(
+          (resolve: (_: void) => void) => {
+            if (!this.freezingByMarket.isIcy(marketName)) {
+              resolve();
+            }
+          },
+          3,
+        );
 
         this.freezingByMarket.coolAndIce(marketName);
 
         try {
-          const storage = this.getOrCreateStorage(marketName);
+          if (globalStateService.hasMarket(marketName)) {
+            continue;
+          }
 
-          const predecodedSnapshot = decodeEntireBinary(snapshot.data);
-
-          this.validatePredecodedSnapshot(predecodedSnapshot, marketName);
-
-          storage.applySnapshot({
-            codecName: predecodedSnapshot.codecName,
-            data: predecodedSnapshot.data,
-          });
-
-          this.snapshotScheduledAt.set(
-            marketName,
-            Date.now() + Math.random() * STARTUP_SNAPSHOT_JITTER,
-          );
+          await this.emitFinalMarketSnapshots(marketName, storage);
+          this.removeMarketStorage(marketName);
         } finally {
           this.freezingByMarket.warmAndMeltIce(marketName);
         }
-      }
-
-      processed += marketNamesBatch.length;
-
-      if (totalSnapshots > 0) {
-        const currentDecile = Math.min(
-          10,
-          Math.floor(processed * 10 / totalSnapshots),
-        );
-
-        if (currentDecile > reportedDecile) {
-          for (
-            let value = reportedDecile + 1;
-            value <= currentDecile;
-            value++
-          ) {
-            console.log(`processed: ${value}/10`);
-          }
-
-          reportedDecile = currentDecile;
-        }
+      } finally {
+        this.freezingByMarket.warm(marketName);
       }
     }
 
     for (const marketName of marketNames) {
-      this.getOrCreateStorage(marketName);
+      if (this.storagesByMarket.has(marketName)) {
+        continue;
+      }
+
+      this.freezingByMarket.coolAndIce(marketName);
+
+      try {
+        await this.getOrCreateStorage(marketName);
+      } finally {
+        this.freezingByMarket.warmAndMeltIce(marketName);
+      }
+    }
+  }
+
+  private async emitFinalMarketSnapshots(
+    marketName: string,
+    storage: Storage,
+  ): Promise<void> {
+    const storageEndedAt = storage.endedAt;
+
+    if (storageEndedAt === null) {
+      return;
     }
 
-    console.log(
-      'Market statistics storage restore finished',
-      { storages: this.storagesByMarket.size },
+    let lastEndedAt = this.lastEndedAtByMarket.get(marketName);
+
+    if (lastEndedAt === undefined) {
+      lastEndedAt = await storagePersistenceService.getLastArchiveEndedAt(
+        marketName,
+      );
+      this.lastEndedAtByMarket.set(marketName, lastEndedAt);
+    }
+
+    if (storageEndedAt <= lastEndedAt) {
+      return;
+    }
+
+    const candles = this.getCandlesAccessor(storage);
+    const archiveStartIndex = this.findFirstEndedAfter(candles, lastEndedAt);
+
+    if (archiveStartIndex >= storage.size) {
+      return;
+    }
+
+    const snapshots = storage.getPersistenceSnapshot(
+      'both snapshots',
+      archiveStartIndex,
+      candles.get(archiveStartIndex, 'startedAt'),
     );
+
+    if (snapshots.length === 0) {
+      return;
+    }
+
+    eventBus.emit(SERVER_EVENT.storageSnapshoted, { snapshots });
   }
 
   private trimMaxLevel(
@@ -484,20 +554,20 @@ export class StorageAggregationService {
     event: StorageFullSyncRequestEvent,
   ): Promise<void> {
     const { marketName, eventId } = event;
-    const storage = this.getOrCreateStorage(marketName);
-
-    await waitFor(
-      (resolver: (_: void) => void) => {
-        if (!this.freezingByMarket.isIcy(marketName)) {
-          resolver();
-        }
-      },
-      3,
-    );
 
     this.freezingByMarket.cool(marketName);
 
     try {
+      await waitFor(
+        (resolver: (_: void) => void) => {
+          if (!this.freezingByMarket.isIcy(marketName)) {
+            resolver();
+          }
+        },
+        3,
+      );
+
+      const storage = await this.getOrCreateStorage(marketName);
       const data = storage.getBinarySnapshot();
 
       eventBus.emit(
@@ -662,9 +732,9 @@ export class StorageAggregationService {
     };
   }
 
-  private getOrCreateStorage(
+  private async getOrCreateStorage(
     marketName: string,
-  ): Storage {
+  ): Promise<Storage> {
     const existing = this.storagesByMarket.get(marketName);
 
     if (existing) {
@@ -675,7 +745,32 @@ export class StorageAggregationService {
 
     this.storagesByMarket.set(marketName, storage);
 
-    return storage;
+    try {
+      const snapshot = (await storagePersistenceService.getAliveForRestore(
+        [marketName],
+      ))[0];
+
+      if (snapshot) {
+        const predecodedSnapshot = decodeEntireBinary(snapshot.data);
+        this.validatePredecodedSnapshot(predecodedSnapshot, marketName);
+
+        storage.applySnapshot({
+          codecName: predecodedSnapshot.codecName,
+          data: predecodedSnapshot.data,
+        });
+      }
+
+      this.snapshotScheduledAt.set(
+        marketName,
+        Date.now() + Math.random() * STARTUP_SNAPSHOT_JITTER,
+      );
+
+      return storage;
+    } catch (error) {
+      this.storagesByMarket.delete(marketName);
+      this.snapshotScheduledAt.delete(marketName);
+      throw error;
+    }
   }
 
   private removeMarketStorage(
@@ -709,7 +804,7 @@ export class StorageAggregationService {
       return;
     }
 
-    const tick = this.getTickBuffer(marketName).shift();
+    const tick = this.tickBuffersByMarket.get(marketName)?.shift();
 
     if (!tick) {
       return;
@@ -835,15 +930,10 @@ export class StorageAggregationService {
           this.freezingByMarket.warm(marketName);
         }
 
-        if (isAliveMarket) {
-          this.snapshotScheduledAt.set(
-            marketName,
-            now + this.getNextSnapshotInterval(),
-          );
-        } else {
-          void storagePersistenceService.deleteAlives(marketName);
-          this.removeMarketStorage(marketName);
-        }
+        this.snapshotScheduledAt.set(
+          marketName,
+          now + this.getNextSnapshotInterval(),
+        );
       }
     } finally {
       this.snapshotWorkerBusy = false;

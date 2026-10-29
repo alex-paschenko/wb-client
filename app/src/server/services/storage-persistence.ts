@@ -9,14 +9,10 @@ import type {
   StoragePersistenceSnapshot,
 } from '../../shared/types/storage.js';
 import { SERVER_EVENT } from '../constants/events.js';
-import { SNAPSHOT_BATCH_SIZE } from '../constants/persistence.js';
+import { SNAPSHOT_BATCH_SIZE, isCpuProfiling } from '../constants/persistence.js';
 import { storageDao } from '../db/dao/storage.js';
 import { eventBus } from './event-bus.js';
 import type { StorageSnapshotedEvent } from '../types/events.js';
-
-const isCpuProfiling = process.execArgv.some(
-  (arg) => arg.startsWith('--cpu-prof'),
-);
 
 const MIN_PENDING_AGE = 250;
 const BACKLOG_BYPASS_AGE_SNAPSHOTS = 100;

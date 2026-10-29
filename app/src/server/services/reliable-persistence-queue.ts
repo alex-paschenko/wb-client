@@ -1,6 +1,7 @@
 // app/src/server/services/reliable-persistence-queue.ts
 
 import { pause } from '../../shared/utilities/awaiters';
+import { isCpuProfiling } from '../constants/persistence.js';
 
 const BATCH_SIZE = 100;
 const MAX_ATTEMPTS = 8;
@@ -90,7 +91,11 @@ export class ReliablePersistenceQueue<T> {
 
     const task = (async () => {
       try {
-        await this.write(batch);
+        if (isCpuProfiling) {
+          await pause(10);
+        } else {
+          await this.write(batch);
+        }
         this.pending.splice(0, batch.length);
         this.failures = 0;
       } catch (error) {

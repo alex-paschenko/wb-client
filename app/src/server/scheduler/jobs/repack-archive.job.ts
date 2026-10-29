@@ -14,6 +14,7 @@ import {
   ARCHIVE_REPACK_PAGE_SIZE,
   RESEARCH_REPACK_BATCH_SIZE,
   RESEARCH_REPACK_PAGE_SIZE,
+  isCpuProfiling,
 } from '../../constants/persistence.js';
 import { storageDao, type StorageArchiveRow } from '../../db/dao/storage.js';
 import { researchStorageDao, type ResearchStorageRow } from '../../db/dao/research-storage.js';
@@ -272,6 +273,8 @@ export const repackResearch = async (): Promise<RepackStats> => {
 };
 
 export const startRepackArchiveJob = (): void => {
+  if (isCpuProfiling) return;
+
   cron.schedule('0 3 * * *', async () => {
     if (isRunning) {
       console.warn('Archive repack skipped: previous run is active');

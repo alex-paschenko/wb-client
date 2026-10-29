@@ -1,5 +1,9 @@
 // app/src/server/constants/persistence.ts
 
+export const isCpuProfiling = process.execArgv.some(
+  (arg) => arg.startsWith('--cpu-prof'),
+);
+
 export const SNAPSHOT_BATCH_SIZE = 5;
 
 export const ARCHIVE_REPACK_BATCH_SIZE = 100_000;

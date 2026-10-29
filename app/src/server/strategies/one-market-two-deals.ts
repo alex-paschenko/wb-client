@@ -122,7 +122,11 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           }
 
           // TODO: replace the fixed USDT budget after switch to real trading.
-          const market = globalStateService.getMarkets()[marketName];
+          const market = globalStateService.getMarket(marketName);
+          if (!market) {
+            throw new Error(`Market not found: "${marketName}"`);
+          }
+          
           const usdtAmount = 1000;
           const rawAmount = isLong
             ? market.money === 'USDT' ? usdtAmount : usdtAmount * lastStorage.price

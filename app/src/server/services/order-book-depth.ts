@@ -16,7 +16,7 @@ import { encodeEntireBinary } from
   '../../shared/utilities/codecs/entire-binary-codec.js';
 import { eventBus } from './event-bus.js';
 
-const MAX_SUBSCRIPTIONS = 10;
+const MAX_SUBSCRIPTIONS = 64;
 const DEPTH_LIMIT = 20;
 const UNSUBSCRIBE_DELAY = MINUTE;
 const RETAIN_DURATION = MINUTE;

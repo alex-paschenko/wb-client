@@ -66,16 +66,24 @@ export class WhitebitWSClient {
   }
 
   public reconnect(): void {
-    if (this.socket) {
-      this.clearPingTimers();
-      this.socket.removeAllListeners();
-      this.socket.terminate();
-      this.socket = null;
+    if (!this.shouldReconnect || this.reconnectTimer !== null) {
+      return;
     }
 
-    if (this.shouldReconnect) {
-      this.scheduleReconnect();
+    // An old subscription timeout must not abort a new connection attempt.
+    if (this.socket?.readyState === WebSocket.CONNECTING) {
+      return;
     }
+
+    this.clearPingTimers();
+
+    if (this.socket) {
+      const socket = this.socket;
+      this.socket = null;
+      this.disposeSocket(socket, true);
+    }
+
+    this.scheduleReconnect();
   }
 
   disconnect(): void {
@@ -88,9 +96,9 @@ export class WhitebitWSClient {
       return;
     }
 
-    this.socket.removeAllListeners();
-    this.socket.close();
+    const socket = this.socket;
     this.socket = null;
+    this.disposeSocket(socket, false);
   }
 
   getNextRequestId(): number {
@@ -134,6 +142,10 @@ export class WhitebitWSClient {
     this.socket = socket;
 
     socket.on('open', () => {
+      if (this.socket !== socket) {
+        return;
+      }
+
       this.startPing();
 
       if (this.isReconnect) {
@@ -146,10 +158,18 @@ export class WhitebitWSClient {
     });
 
     socket.on('message', (data) => {
+      if (this.socket !== socket) {
+        return;
+      }
+
       this.handleRawMessage(data);
     });
 
     socket.on('error', (error) => {
+      if (this.socket !== socket) {
+        return;
+      }
+
       this.handlers.onError?.(
         error instanceof Error
           ? error
@@ -158,14 +178,13 @@ export class WhitebitWSClient {
     });
 
     socket.on('close', (code, reasonBuffer) => {
-      const reason = reasonBuffer.toString();
-
-      this.clearPingTimers();
-
-      if (this.socket === socket) {
-        this.socket = null;
+      if (this.socket !== socket) {
+        return;
       }
 
+      const reason = reasonBuffer.toString();
+      this.clearPingTimers();
+      this.socket = null;
       this.handlers.onClose?.(code, reason);
 
       if (this.shouldReconnect) {
@@ -226,26 +245,29 @@ export class WhitebitWSClient {
   }
 
   private reconnectBecausePongTimedOut(): void {
-    this.clearPingTimers();
+    this.reconnect();
+  }
 
-    if (this.socket) {
-      this.socket.removeAllListeners();
-      this.socket.terminate();
-      this.socket = null;
-    }
-
-    if (this.shouldReconnect) {
-      this.scheduleReconnect();
+  private disposeSocket(socket: WebSocket, force: boolean): void {
+    socket.removeAllListeners();
+    // Closing a CONNECTING socket emits an asynchronous error in ws.
+    // Keep an error listener on abandoned sockets to avoid an unhandled event.
+    socket.on('error', () => {});
+    if (force) {
+      socket.terminate();
+    } else {
+      socket.close();
     }
   }
 
-  private scheduleReconnect(): void {
-    this.clearReconnectTimer();
+private scheduleReconnect(): void {
+  if (!this.shouldReconnect || this.reconnectTimer !== null) return;
 
-    this.reconnectTimer = setTimeout(() => {
-      this.openSocket();
-    }, this.reconnectDelayMs);
-  }
+  this.reconnectTimer = setTimeout(() => {
+    this.reconnectTimer = null;
+    if (this.shouldReconnect && !this.socket) this.openSocket();
+  }, this.reconnectDelayMs);
+}
 
   private isPong(message: WhitebitWSMessage): boolean {
     return (

@@ -8,7 +8,7 @@ import type {
 import { SERVER_EVENT } from '../constants/events.js';
 import { REVERT_ORDER_ERROR } from '../constants/order-error-codes.js';
 import type {
-  CreateOrderRequestAndSubscribeEvent, 
+  CreateOrderRequestAndSubscribeEvent,
   MarketDataUpdatedEvent,
   OrderBookDepthSubscriptionEvent,
 } from '../types/events.js';
@@ -356,7 +356,7 @@ export class WhitebitWsService {
 
     const client_order_id = item.kind === 'cancel'
       ? item.event.client_order_id : item.event.orderRequest!.client_order_id;
-      
+
     eventBus.emit(SERVER_EVENT.orderRequestResult, {
       marketName,
       client_order_id,
@@ -547,6 +547,26 @@ export class WhitebitWsService {
       status: existing.status,
     });
 
+    this.reconnectSocket();
+  }
+
+  private resetSubscriptionRequests(): void {
+    for (const state of this.subscribes.values()) {
+      this.clearSubscriptionTimeout(state);
+      state.status = 'waiting socket';
+      state.requestId = 0;
+    }
+
+    for (const state of this.depthSubscriptions.values()) {
+      this.clearDepthTimeout(state);
+      state.status = 'waiting socket';
+      state.requestId = 0;
+      state.lastUpdateId = null;
+    }
+  }
+
+  private reconnectSocket(): void {
+    this.resetSubscriptionRequests();
     this.wsClient.reconnect();
   }
 
@@ -618,7 +638,7 @@ export class WhitebitWsService {
         }
 
         console.error('WhiteBIT depth subscription timed out', { marketName, requestId });
-        this.wsClient.reconnect();
+        this.reconnectSocket();
       },
       WS_REQUEST_TIMEOUT,
     );
@@ -717,7 +737,7 @@ export class WhitebitWsService {
           marketName, status: state.status, message,
         });
 
-        this.wsClient.reconnect();
+        this.reconnectSocket();
       } else if (state.status === 'subscribing') {
         state.status = 'active';
         if (!state.desired) {
@@ -758,7 +778,7 @@ export class WhitebitWsService {
         message,
       });
 
-      this.wsClient.reconnect();
+      this.reconnectSocket();
       return true;
     }
 
@@ -917,7 +937,7 @@ export class WhitebitWsService {
           requestId,
         });
 
-        this.wsClient.reconnect();
+        this.reconnectSocket();
       },
       WS_REQUEST_TIMEOUT,
     );
@@ -1048,6 +1068,8 @@ export class WhitebitWsService {
       code,
       reason,
     });
+
+     this.resetSubscriptionRequests();
 
     if (this.pendingOrderRequest) {
       this.abortOrderQueue(INTERNAL_ORDER_ERRORS.outcomeUnknown,

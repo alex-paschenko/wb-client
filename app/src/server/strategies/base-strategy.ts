@@ -74,7 +74,7 @@ export abstract class BaseStrategy<T extends string>
       return 0;
     }
 
-    const market = globalStateService.getMarkets()[marketName];
+    const market = globalStateService.getMarket(marketName);
     if (!market) {
       throw new Error(`Market "${marketName}" not found.`);
     }
@@ -114,7 +114,7 @@ export abstract class BaseStrategy<T extends string>
     marketType: MarketType | null = null,
     currencies: string[] = [],
   ): boolean {
-    const market = globalStateService.getMarkets()[marketName];
+    const market = globalStateService.getMarket(marketName);
     if (!market) {
       throw new Error(`Market "${marketName}" not found.`);
     }

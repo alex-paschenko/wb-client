@@ -4,7 +4,12 @@ import {
   STORAGE_ENTITY_KINDS,
   type StorageEntityKind,
 } from '../constants/storage-entities.js';
-import type { MarketsByName, MarketFeesByName, MarketFee } from '../types/market.js';
+import type {
+  MarketsByName,
+  MarketFeesByName,
+  MarketFee,
+  Market,
+} from '../types/market.js';
 import type {
   EntityDescriptors,
   EntityDesriptor,
@@ -279,6 +284,15 @@ export class GlobalStateService {
     return this.marketNames
       ? [...this.marketNames]
       : null;
+  }
+
+  public getMarket(marketName: string): Market | null {
+  if (!this.marketsByName) {
+    throw new Error('Markets are not initialized');
+  }
+
+  const market = this.marketsByName[marketName];
+    return market ? { ...market } : null;
   }
 
   public hasMarket(

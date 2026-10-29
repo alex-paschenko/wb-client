@@ -43,6 +43,7 @@ export interface DepthPersistence {
   marketName: string;
   data: Uint8Array;
   startReceivedAt: number;
+  receivedAt: number;
 }
 
 export type StrategyStateChangePersistence = StrategyStateChange<string> & {

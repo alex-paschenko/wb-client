@@ -1,15 +1,5 @@
 // app/src/server/constants/strategies.ts
 
-import { revert } from '../../shared/utilities/object.js';
-
-export const strategyChangeType = {
-  0: 'bare',
-  1: 'error',
-  2: 'rests',
-} as const;
-
-export const revertStrategyChangeType = revert(strategyChangeType);
-
 export const strategyIdleState = 'idle';
 
 export const oneMarketTwoDealsStrategyState = [

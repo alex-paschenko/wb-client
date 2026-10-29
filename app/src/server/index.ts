@@ -20,6 +20,7 @@ import { entityManager } from './services/entity-manager.js';
 import { serverGlobalStateService } from './services/global-state.js';
 import { storagePersistenceService } from './services/storage-persistence.js';
 import { depthPersistence } from './services/depth-persistence.js';
+import { researchPersistence } from './services/research-persistence.js';
 import { orderPersistence } from './services/order-persistence.js';
 import {
   strategyStatePersistence,
@@ -57,6 +58,7 @@ const shutdown = async (signal: string): Promise<void> => {
       storagePersistenceService.stop(),
       marketStatisticsRollingService.stop(),
       depthPersistence.stop(),
+      researchPersistence.stop(),
       orderPersistence.stop(),
       strategyStatePersistence.stop(),
     ]);
@@ -100,6 +102,7 @@ const start = async (): Promise<void> => {
    */
   storagePersistenceService.start();
   depthPersistence.start();
+  researchPersistence.start();
   orderPersistence.start();
   strategyStatePersistence.start();
 

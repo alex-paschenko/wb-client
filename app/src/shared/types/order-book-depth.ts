@@ -8,3 +8,8 @@ export interface OrderBookDepth {
   asks: OrderBookDepthBet[];
   bids: OrderBookDepthBet[];
 }
+
+export interface OrderBookDepthHistoryItem extends OrderBookDepth {
+  receivedAt: number;
+  arrivedAt: number;
+}

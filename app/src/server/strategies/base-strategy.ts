@@ -26,21 +26,21 @@ export abstract class BaseStrategy<T extends string>
 
     if (params.stateChanges.length === 0) {
       params.stateChanges.push({
-        kind: 'bare',
         receivedAt,
         state: strategyIdleState,
       });
     }
 
-    let currentStatus: StrategyStates<T>;
+    let currentStatusWithAction: StrategyStates<T>;
 
     do {
-      const prevStatus = params.stateChanges.at(-1);
-
-      currentStatus = this.exec(params);
+      const { receivedAt, ...prevStatus } =
+        params.stateChanges[params.stateChanges.length - 1];
+      currentStatusWithAction = this.exec(params);
+      const { action, ...currentStatus } = currentStatusWithAction;
 
       if (
-        currentStatus.action === 'continue' &&
+        action === 'continue' &&
         currentStatus.state === prevStatus?.state
       ) {
         throw new Error(
@@ -48,13 +48,13 @@ export abstract class BaseStrategy<T extends string>
         );
       }
 
-      if (!isDeepStrictEqual(prevStatus, currentStatus)) {
+      if (!isDeepStrictEqual(currentStatus, prevStatus)) {
         params.stateChanges.push({
           ...currentStatus,
           receivedAt,
         });
       }
-    } while (currentStatus.action !== 'stop');
+    } while (currentStatusWithAction.action !== 'stop');
   }
 
   public get name(): string {
@@ -65,9 +65,54 @@ export abstract class BaseStrategy<T extends string>
     params: StrategyRunParams<T>,
   ): StrategyStates<T>;
 
+  protected normalizedAmount(
+    amount: number,
+    marketName: string,
+    currency: 'stock' | 'money',
+  ): number {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return 0;
+    }
+
+    const market = globalStateService.getMarkets()[marketName];
+    if (!market) {
+      throw new Error(`Market "${marketName}" not found.`);
+    }
+
+    const precision = currency === 'stock'
+      ? market.stockPrec
+      : market.moneyPrec;
+
+    const stepSize = currency === 'stock'
+      ? market.stepSize ?? 10 ** -precision
+      : 10 ** -precision;
+
+    if (!Number.isFinite(stepSize) || stepSize <= 0) {
+      throw new Error(`Invalid stepSize for market "${marketName}".`);
+    }
+
+    const limitedAmount = currency === 'money' && market.maxTotal > 0
+      ? Math.min(amount, market.maxTotal)
+      : amount;
+
+    const ratio = limitedAmount / stepSize;
+    const normalized = Math.floor(
+      ratio * (1 + 2 * Number.EPSILON)
+    ) * stepSize;
+
+    const result = Number(normalized.toFixed(Math.max(0, precision)));
+
+    if (currency === 'stock') {
+      return result >= market.minAmount ? result : 0;
+    }
+
+    return result >= market.minTotal ? result : 0;
+  }
+
   protected isMarketRestricted(
     marketName: string,
-    marketType?: MarketType,
+    marketType: MarketType | null = null,
+    currencies: string[] = [],
   ): boolean {
     const market = globalStateService.getMarkets()[marketName];
     if (!market) {
@@ -77,7 +122,8 @@ export abstract class BaseStrategy<T extends string>
     return !(
       market.isActive &&
       market.tradesEnabled &&
-      (!marketType || market.type === marketType)
+      (!marketType || market.type === marketType) &&
+      currencies.some((c) => c === market.stock || c === market.money)
     );
   }
 

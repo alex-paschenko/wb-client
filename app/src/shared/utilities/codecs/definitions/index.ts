@@ -23,6 +23,7 @@ import { marketForecast_V1_0 } from './market-forecast-v1_0.js';
 import { marketForecast_V2_0 } from './market-forecast-v2_0.js';
 import { ticks_V1_0 } from './ticks-v1_0.js';
 import { depthHistory_V1_0 } from './depth-history-v1_0.js';
+import { researchTicks_V1_0 } from './research-ticks-v1_0.js';
 import { orderReceipt_V1_0 } from './order-receipt-v1_0.js';
 
 export const CODEC_DEFINITIONS = {
@@ -54,6 +55,7 @@ export const CODEC_DEFINITIONS = {
   'snapshot v1.0': snapshot_V1_0,
 
   'ticks v1.0': ticks_V1_0,
+  'research ticks v1.0': researchTicks_V1_0,
 
   'order book depth history v1.0': depthHistory_V1_0,
   'order receipt v1.0': orderReceipt_V1_0,

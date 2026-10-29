@@ -11,6 +11,7 @@ export const SERVER_EVENT = {
   marketTickReceived: 'market tick received',
 
   storageSnapshoted: 'storage snapshoted',
+  researchPersistenceRequest: 'research persistence request',
   storageDeltaCreated: 'storage delta created',
   storageFullSyncRequest: 'storage full sync request',
   storageFullSyncResults: 'storage full sync results',

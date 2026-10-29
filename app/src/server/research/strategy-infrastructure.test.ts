@@ -5,7 +5,7 @@ import { globalStateService } from '../../shared/services/global-state.js';
 import { test } from 'node:test';
 import { SERVER_EVENT } from '../constants/events.js';
 import { REVERT_ORDER_ERROR, REVERT_WB_ORDER_ERROR } from '../constants/order-error-codes.js';
-import { MARKET_FORECAST_NAME } from '../../shared/constants/storage-entities.js';
+import { CANDLE_NAME, MARKET_FORECAST_NAME } from '../../shared/constants/storage-entities.js';
 import {
   orderReceiptsDao,
   type OrderReceiptRow,
@@ -60,6 +60,7 @@ const order: Order = {
 
 test('research binaries use registered, versioned payloads in entire binary', () => {
   const history = [{
+    receivedAt: 1200, arrivedAt: 1250,
     timestamp: 123.5, event_time: 124.25,
     asks: [[101, 3] as [number, number]],
     bids: [[99, 5] as [number, number]],
@@ -206,9 +207,14 @@ test('depth history preserves old books and rejects the eleventh market', () => 
       }, 'M0',
     ]);
     assert.equal(service.getHistory('M0')?.length, 1);
-    assert.deepEqual(decodeDepthHistory(saves[0]).map(
-      (snapshot) => snapshot.bids[0][1],
-    ), [2, 3]);
+    const savedBinary = decodeEntireBinary(saves[0]);
+    assert.equal(savedBinary.codecName, 'order book depth history v1.0');
+    if (savedBinary.codecName !== 'order book depth history v1.0') {
+      throw new TypeError('Unexpected persisted depth codec');
+    }
+    const stored = decodeCodec(savedBinary.codecName, savedBinary.data);
+    assert.deepEqual(stored.map((snapshot) => snapshot.bids[0][1]), [2, 3]);
+    assert.deepEqual(stored.map((snapshot) => snapshot.receivedAt), [1000, 1000]);
   } finally {
     service.stop();
     off();
@@ -384,8 +390,8 @@ test('paper market order exhausts available bids and finishes partially', () => 
 
 test('strategy cannot continue forever without changing state', () => {
   class InvalidStrategy extends BaseStrategy<'candidate'> {
-    protected exec(): { state: 'idle'; action: 'continue', kind: 'bare' } {
-      return { state: 'idle', action: 'continue', kind: 'bare' };
+    protected exec(): { state: 'idle'; action: 'continue' } {
+      return { state: 'idle', action: 'continue' };
     }
   }
   const strategy = new InvalidStrategy('invalid');
@@ -416,8 +422,13 @@ test('strategy failures complete the waiting tick with an error', () => {
       marketName: 'BTC_USDT', size: 1, endedAt: 123,
       accessors: {
         indicators: {
-          [MARKET_FORECAST_NAME]: { get: () => null },
+          [MARKET_FORECAST_NAME]: { get: () => ({
+            expectedResidual1m3Ema: null,
+            expectedResidual1m4Ema: null,
+            expectedResidual1mCombined: null,
+          }) },
         },
+        candles: { [CANDLE_NAME]: { get: () => ({ price: 1 }) } },
       } as never,
     });
     assert.match((results[0].error as Error).message, /strategy failed/);
@@ -444,8 +455,13 @@ test('depth updates run only the strategies subscribed to the market', () => {
       marketName: 'BTC_USDT', size: 1, endedAt: 123,
       accessors: {
         indicators: {
-          [MARKET_FORECAST_NAME]: { get: () => null },
+          [MARKET_FORECAST_NAME]: { get: () => ({
+            expectedResidual1m3Ema: null,
+            expectedResidual1m4Ema: null,
+            expectedResidual1mCombined: null,
+          }) },
         },
+        candles: { [CANDLE_NAME]: { get: () => ({ price: 1 }) } },
       } as never,
     });
     assert.deepEqual([firstRuns, secondRuns], [1, 1]);
@@ -580,4 +596,63 @@ test('final update wins against stale or duplicate creation response', async () 
     manager.stop();
     sequencesPersistence.getNextOrderId = oldSequence;
   }
+});
+
+test('depth cleanup retains the most recent book for subsequent deltas', () => {
+  const service = new OrderBookDepthService();
+  const strategy = { name: 'depth-cleanup', run() {} } as Strategy;
+  const saved: Uint8Array[] = [];
+  const off = eventBus.on(SERVER_EVENT.depthPersistenceRequest,
+    ({ data }) => { saved.push(data); });
+  service.start();
+  try {
+    service.api.orderBookDepthSubscription({
+      strategy, receivedAt: 1234,
+      subscription: { marketName: 'DEPTH_TEST', action: 'subscribe' },
+    });
+    const update = (full: boolean, timestamp: number,
+      bids: [string, string][], asks: [string, string][]) => {
+      const body = { timestamp, event_time: timestamp, update_id: timestamp,
+        bids, asks };
+      if (full) {
+        eventBus.emit(SERVER_EVENT.orderBookDepthUpdate,
+          [true, body, 'DEPTH_TEST']);
+      } else {
+        eventBus.emit(SERVER_EVENT.orderBookDepthUpdate,
+          [false, { ...body, past_update_id: timestamp - 1 }, 'DEPTH_TEST']);
+      }
+    };
+    update(true, 1, [['99', '3']], [['101', '5']]);
+    update(false, 2, [['99', '4']], []);
+
+    const internal = service as unknown as {
+      depthHistoryByMarkets: Map<string, { arrivedAts: number[] }>;
+      saveOldHistory(): void;
+    };
+    const history = internal.depthHistoryByMarkets.get('DEPTH_TEST')!;
+    history.arrivedAts.fill(Date.now() - 120_000);
+    internal.saveOldHistory();
+    assert.equal(service.getHistory('DEPTH_TEST')?.length, 1);
+    assert.equal(saved.length, 1);
+    assert.deepEqual(decodeDepthHistory(saved[0]).map(item => item.timestamp), [1]);
+    assert.deepEqual(service.getHistory('DEPTH_TEST')?.[0].bids, [[99, 4]]);
+
+    internal.saveOldHistory();
+    assert.equal(saved.length, 1, 'the last book must not be flushed prematurely');
+    update(false, 3, [['98', '2']], [['101', '0'], ['102', '1']]);
+    assert.deepEqual(service.getHistory('DEPTH_TEST')?.at(-1)?.bids,
+      [[99, 4], [98, 2]]);
+    assert.deepEqual(service.getHistory('DEPTH_TEST')?.at(-1)?.asks,
+      [[102, 1]]);
+
+    history.arrivedAts.fill(Date.now() - 120_000);
+    internal.saveOldHistory();
+    assert.equal(saved.length, 2);
+    assert.equal(service.getHistory('DEPTH_TEST')?.length, 1);
+  } finally {
+    service.stop();
+    off();
+  }
+  assert.equal(saved.length, 3, 'final flush must save the retained last book');
+  assert.deepEqual(decodeDepthHistory(saved[2]).map(item => item.timestamp), [3]);
 });

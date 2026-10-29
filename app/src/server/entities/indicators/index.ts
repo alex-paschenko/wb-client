@@ -6,7 +6,7 @@ import { ContinuousEmaIndicator } from './continuous-ema.js';
 import { EmaIndicator } from './ema.js';
 import { MarketForecastIndicator } from './market-forecast.js';
 import { MarketPriceEmaIndicator } from './market-price-ema.js';
-import { MarketPhaseIndicator } from './market-phase.js';
+// import { MarketPhaseIndicator } from './market-phase.js';
 
 const emaPeriods = [20, 50, 90, 200];
 
@@ -17,7 +17,7 @@ const filterTaus = [
   3 * MINUTES,
 ];
 
-const phaseResponseTime = 30 * SECONDS;
+// const phaseResponseTime = 30 * SECONDS;
 
 export const indicators = [
   ...emaPeriods.map((period) => new EmaIndicator({ period })),
@@ -30,10 +30,10 @@ export const indicators = [
     sensitivity: 1,
   })),
 
-  new MarketPhaseIndicator({
-    responseTime: phaseResponseTime,
-    surpriseTau: 5 * MINUTES,
-  }),
+  // new MarketPhaseIndicator({
+  //   responseTime: phaseResponseTime,
+  //   surpriseTau: 5 * MINUTES,
+  // }),
 
   ...[7, 15, 30, 60].map((seconds) =>
     new MarketPriceEmaIndicator(seconds * SECONDS, 'log-price')),

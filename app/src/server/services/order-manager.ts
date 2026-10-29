@@ -104,6 +104,9 @@ export class OrderManager {
     orderKind: OrderKind,
     isPaperTrading: boolean,
   ): Promise<void> {
+    const marketName = request.orderRequest.marketName;
+    // Capture the decision tick before waiting for the DB sequence.
+    const decisionReceivedAt = this.getReceivedAt(marketName);
     let client_order_id: number;
     try {
       client_order_id = await sequencesPersistence.getNextOrderId();
@@ -112,7 +115,6 @@ export class OrderManager {
       client_order_id = NaN;
     }
 
-    const marketName = request.orderRequest.marketName;
     let orders = this.ordersByMarkets.get(marketName);
     if (!orders) {
       orders = new Map();
@@ -135,7 +137,7 @@ export class OrderManager {
     };
 
     orders.set(key, entry);
-    this.recordReceipt(marketName, entry);
+    this.recordReceipt(marketName, entry, decisionReceivedAt);
 
     if (key < 0) {
       entry.error = {
@@ -287,8 +289,19 @@ export class OrderManager {
     });
   }
 
-  private recordReceipt(marketName: string, entry: OrderAndStrategy): void {
-    const receivedAt = this.receivedAtByMarkets.get(marketName) ?? Date.now();
+  private getReceivedAt(marketName: string): number {
+    const receivedAt = this.receivedAtByMarkets.get(marketName);
+    if (receivedAt === undefined) {
+      throw new Error(`Missing processed tick receivedAt for ${marketName}`);
+    }
+    return receivedAt;
+  }
+
+  private recordReceipt(
+    marketName: string,
+    entry: OrderAndStrategy,
+    receivedAt = this.getReceivedAt(marketName),
+  ): void {
     eventBus.emit(SERVER_EVENT.orderPersistenceRequest, {
       marketName,
       receivedAt,

@@ -11,8 +11,8 @@ export type RawOrderBookDepthBet = [price: string, amount: string];
 export interface RawOrderBookDepthFullBody {
   timestamp: number;
   event_time: number;
-  asks: RawOrderBookDepthBet[];
-  bids: RawOrderBookDepthBet[];
+  asks?: RawOrderBookDepthBet[] | null;
+  bids?: RawOrderBookDepthBet[] | null;
   update_id: number;
 }
 

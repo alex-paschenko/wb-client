@@ -9,7 +9,6 @@ export const INTERNAL_ORDER_ERROR = {
   1002020: 'order not sent',
   1002030: 'real orders disabled',
   1003000: 'did not received neither order nor error',
-  1003010: 'unexpected zero rest',
 } as const;
 
 export const WB_ORDER_ERROR = {

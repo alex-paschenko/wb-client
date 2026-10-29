@@ -37,14 +37,24 @@ export class EventBusService {
       return;
     }
 
+    let hasSynchronousError = false;
+    let firstSynchronousError: unknown;
     for (const handler of handlers) {
-      void Promise.resolve(handler(payload)).catch((error: unknown) => {
-        console.error('Event handler failed', {
-          eventName,
-          error,
+      try {
+        void Promise.resolve(handler(payload)).catch((error: unknown) => {
+          console.error('Event handler failed', { eventName, error });
         });
-      });
+      } catch (error) {
+        console.error('Event handler failed', { eventName, error });
+        if (!hasSynchronousError) {
+          firstSynchronousError = error;
+          hasSynchronousError = true;
+        }
+      }
     }
+    // Do not swallow synchronous errors: callers waiting for a corresponding
+    // completion event must be able to fail instead of waiting forever.
+    if (hasSynchronousError) throw firstSynchronousError;
   }
 
   private getOrCreateHandlers<TEventName extends keyof ServerEventMap>(

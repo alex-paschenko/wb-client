@@ -1,6 +1,7 @@
 // app/src/server/services/order-book-depth.ts
 
 import { MINUTE } from '../../shared/constants/time.js';
+import type { OrderBookDepthHistoryItem } from '../../shared/types/order-book-depth.js';
 import { SERVER_EVENT } from '../constants/events.js';
 import type {
   DepthApi,
@@ -55,7 +56,7 @@ export class OrderBookDepthService {
       SERVER_EVENT.orderBookDepthUpdate,
       (update) => this.applyDepthUpdate(update),
     );
-    
+
     this.saveTimer = setInterval(() => this.saveOldHistory(), SAVE_INTERVAL);
   }
 
@@ -217,10 +218,10 @@ export class OrderBookDepthService {
   }
 
   private toSide(
-    raw: RawOrderBookDepthBet[],
+    raw: RawOrderBookDepthBet[] | null | undefined,
     side: 'ask' | 'bid',
   ): OrderBookDepthBet[] {
-    return raw.map(
+    return (raw ?? []).map(
       ([price, amount]): OrderBookDepthBet =>
         [Number(price), Number(amount)],
     )
@@ -230,12 +231,12 @@ export class OrderBookDepthService {
 
   private applySide(
     previous: OrderBookDepthBet[],
-    changes: RawOrderBookDepthBet[],
+    changes: RawOrderBookDepthBet[] | null | undefined,
     side: 'ask' | 'bid',
   ): OrderBookDepthBet[] {
     const next = previous.map(([price, amount]): OrderBookDepthBet =>
       [price, amount]);
-    for (const [rawPrice, rawAmount] of changes) {
+    for (const [rawPrice, rawAmount] of changes ?? []) {
       const price = Number(rawPrice);
       const amount = Number(rawAmount);
       const index = next.findIndex(([level]) => level === price);
@@ -259,8 +260,10 @@ export class OrderBookDepthService {
       const count = history.arrivedAts.findIndex((at) => at > cutoff);
       const oldCount = count < 0 ? history.arrivedAts.length : count;
 
-      if (oldCount > 0) {
-        this.saveHistory(marketName, history, oldCount);
+      // Keep the latest book as the base for subsequent delta updates.
+      const countToSave = Math.min(oldCount, history.orderBookDepthHistory.length - 1);
+      if (countToSave > 0) {
+        this.saveHistory(marketName, history, countToSave);
       }
     }
   }
@@ -278,7 +281,13 @@ export class OrderBookDepthService {
       codecName: 'order book depth history v1.0',
       binaryKind: 'snapshot',
       parameters: null,
-      data: history.orderBookDepthHistory.slice(0, count),
+      data: history.orderBookDepthHistory.slice(0, count).map(
+        (depth, index): OrderBookDepthHistoryItem => ({
+          ...depth,
+          receivedAt: history.receivedAts[index],
+          arrivedAt: history.arrivedAts[index],
+        }),
+      ),
     });
 
     eventBus.emit(
@@ -286,6 +295,7 @@ export class OrderBookDepthService {
       {
         marketName,
         startReceivedAt: history.receivedAts[0],
+        receivedAt: history.receivedAts[count - 1],
         data,
       },
     );

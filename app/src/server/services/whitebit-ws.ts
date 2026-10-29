@@ -816,8 +816,17 @@ export class WhitebitWsService {
       return;
     }
 
-    const { update_id: updateId, past_update_id: pastUpdateId } =
-      body as Record<string, unknown>;
+    const depthBody = body as Record<string, unknown>;
+    const { update_id: updateId, past_update_id: pastUpdateId } = depthBody;
+
+    // Either side may be omitted when it has not changed. Invalid side data
+    // must not reach the book processor or advance the sequence baseline.
+    if ((depthBody.asks != null && !Array.isArray(depthBody.asks)) ||
+      (depthBody.bids != null && !Array.isArray(depthBody.bids))) {
+      console.warn('Invalid WhiteBIT depth sides', { marketName: params[2] });
+      this.requestDepthUnsubscribe(params[2], state);
+      return;
+    }
 
     if (!Number.isSafeInteger(updateId) || (updateId as number) < 0) {
       this.requestDepthUnsubscribe(params[2], state);

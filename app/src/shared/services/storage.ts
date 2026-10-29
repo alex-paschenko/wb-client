@@ -35,6 +35,7 @@ import { EntityDesriptor } from '../types/storage-entities.js';
 import { CANDLE_NAME } from '../constants/storage-entities.js';
 import type { MarketCandle } from '../types/data-types.js';
 import type { MarketTick } from '../types/ticks.js';
+import type { ResearchTick, ResearchSnapshot } from '../types/research-storage.js';
 
 const SNAPSHOT_CODEC = 'snapshot v1.0' as const;
 const SNAPSHOT_BINARY_KIND = 'snapshot' satisfies BinaryKind;
@@ -44,6 +45,10 @@ const DELTA_BINARY_KIND = 'delta' satisfies BinaryKind;
 
 export class Storage {
   private readonly chunkSets: StorageChunkSet[] = [];
+
+  private researchRecording = false;
+  private readonly researchTicks: ResearchTick[] = [];
+  private researchFlushRequested = false;
 
   /**
    * Exclusive flat end for each chunkSet.
@@ -100,6 +105,62 @@ export class Storage {
 
   public get endedAt(): number | null {
     return this.chunkSets.at(-1)?.endedAt ?? null;
+  }
+
+  public get isResearchRecording(): boolean {
+    return this.researchRecording;
+  }
+
+  public get researchBufferLength(): number {
+    return this.researchTicks.length;
+  }
+
+  public get hasResearchFlushRequest(): boolean {
+    return this.researchFlushRequested;
+  }
+
+  public setResearchRecording(active: boolean): void {
+    this.researchRecording = active;
+    if (!active && this.researchTicks.length > 0) {
+      this.researchFlushRequested = true;
+    }
+  }
+
+  public appendResearchTick(tick: ResearchTick): void {
+    if (!this.researchRecording) return;
+    const previous = this.researchTicks.at(-1);
+    if (previous && tick.receivedAt <= previous.receivedAt) {
+      if (tick.receivedAt === previous.receivedAt) return;
+      throw new Error(`Non-monotonic research tick for ${this.marketName}`);
+    }
+    this.researchTicks.push(tick);
+  }
+
+  // Encode first; only remove the buffered items after successful encoding.
+  public getResearchSnapshot(maxItems = this.researchTicks.length): ResearchSnapshot | null {
+    const count = Math.min(maxItems, this.researchTicks.length);
+    if (count <= 0) {
+      this.researchFlushRequested = false;
+      return null;
+    }
+    const ticks = this.researchTicks.slice(0, count);
+    const result: ResearchSnapshot = {
+      marketName: this.marketName,
+      startedAt: ticks[0].receivedAt,
+      endedAt: ticks.at(-1)!.receivedAt,
+      numOfItems: ticks.length,
+      data: encodeEntireBinary({
+        codecName: 'research ticks v1.0',
+        binaryKind: SNAPSHOT_BINARY_KIND,
+        parameters: { marketName: this.marketName, modelVersion: 'forecast-v6' },
+        data: ticks,
+      }),
+    };
+    this.researchTicks.splice(0, count);
+    if (this.researchTicks.length === 0) {
+      this.researchFlushRequested = false;
+    }
+    return result;
   }
 
   public clearTransitoryChanges(): void {

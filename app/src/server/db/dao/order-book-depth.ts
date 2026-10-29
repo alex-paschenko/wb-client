@@ -17,10 +17,11 @@ export class OrderBookDepthDao {
         rows.map((row) => ({
           market_name: row.marketName,
           start_received_at: row.startReceivedAt,
+          received_at: row.receivedAt,
           depth_sequence: row.depthSequence,
           data: row.data,
         })),
-        'market_name', 'start_received_at', 'depth_sequence', 'data',
+        'market_name', 'start_received_at', 'received_at', 'depth_sequence', 'data',
       )}
       ON CONFLICT (start_received_at, depth_sequence) DO NOTHING
     `;

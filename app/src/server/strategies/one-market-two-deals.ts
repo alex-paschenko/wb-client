@@ -8,18 +8,18 @@ import type {
   StrategyStates,
   StrategyRests,
   StrategyRunParams,
-  StrategyStorage,
 } from '../types/strategies.js';
 import { REVERT_ORDER_ERROR } from '../constants/order-error-codes.js';
 import { BaseStrategy } from './base-strategy.js';
 import { OrderErrorCode } from '../../shared/types/order-receipt.js';
 import { IndicatorValue } from '../../shared/types/data-types.js';
 import { globalStateService } from '../../shared/services/global-state.js';
-import { MarketFee } from '../../shared/types/market.js';
 
 const FATAL_ERRORS: Set<OrderErrorCode> = new Set([
   REVERT_ORDER_ERROR['trading in the market is not allowed'],
 ]);
+
+let numOfCycles = 0;
 
 interface OneMarketTwoDealsParams {
   longCandidateTreshold: number;
@@ -31,27 +31,6 @@ interface OneMarketTwoDealsParams {
   longCloseDealTreshold: number;
   shortCloseDealTreshold: number;
 }
-
-interface ManageOrdersParams {
-    orderApi: OrderApi,
-    marketName: string,
-    dealDirection: StrategyDirection,
-    orders: OrderAndStrategy[],
-    storage: StrategyStorage[];
-}
-
-interface ContinueSecondDealParams {
-    orderApi: OrderApi,
-    dealMoney: number,
-    dealStock: number,
-    marketName: string,
-}
-
-type ManageOrdersRetType =
-  | 'awaiting'
-  | 'order created'
-  | 'without new order'
-  | 'fatal error';
 
 export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategyState> {
   private isPaperTrading = true;
@@ -81,8 +60,8 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
 
     switch(state) {
       case 'idle': {
-        if (!this.isMarketRestricted(marketName, 'spot')) {
-          return { state, action: 'stop', kind: 'bare' };
+        if (this.isMarketRestricted(marketName, 'spot', ['USDT'])) {
+          return { state, action: 'stop' };
         }
 
         if (
@@ -102,11 +81,11 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           });
 
           if (subscribed) {
-            return { state: 'candidate', action: 'continue', kind: 'bare' };
+            return { state: 'candidate', action: 'continue' };
           }
         }
 
-        return { state, action: 'stop', kind: 'bare' };
+        return { state, action: 'stop' };
       }
 
       case 'candidate': {
@@ -116,14 +95,12 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           return {
             state: 'unsubscribe and switch to idle',
             action: 'continue',
-            kind: 'bare',
           };
         }
 
         return {
           state: 'awaiting for order book depth data',
           action: 'stop',
-          kind: 'bare',
         };
       }
 
@@ -134,7 +111,6 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           return {
             state: 'unsubscribe and switch to idle',
             action: 'continue',
-            kind: 'bare',
           };
         }
 
@@ -145,8 +121,22 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
             throw new Error(`Uncompleted old orders found.`);
           }
 
-          // TODO: replace it after switch to real trading.
-          const amount = isLong ? 1000 : 1000 / lastStorage.price;
+          // TODO: replace the fixed USDT budget after switch to real trading.
+          const market = globalStateService.getMarkets()[marketName];
+          const usdtAmount = 1000;
+          const rawAmount = isLong
+            ? market.money === 'USDT' ? usdtAmount : usdtAmount * lastStorage.price
+            : market.stock === 'USDT' ? usdtAmount : usdtAmount / lastStorage.price;
+
+          const amount = this.normalizedAmount(
+            rawAmount,
+            marketName,
+            isLong ? 'money' : 'stock',
+          );
+
+          if (amount === 0) {
+            return { state: 'unsubscribe and switch to idle', action: 'stop' };
+          }
 
           const newRests = isLong
             ? { money: amount, stock: 0 }
@@ -171,12 +161,11 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           return {
             state: 'awaiting for first main order creation',
             action: 'stop',
-            kind: 'rests',
             ...newRests,
           };
         }
 
-        return { state, action: 'stop', kind: 'bare' };
+        return { state, action: 'stop' };
 
       case 'awaiting for first main order creation': {
         const isLong = this.isDirectionLong(marketName);
@@ -186,7 +175,6 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           return {
             state,
             action: 'stop',
-            kind: 'rests',
             ...this.getRests(marketName),
           };
         }
@@ -202,13 +190,11 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
             ? {
                 state: 'unsubscribe and switch to idle',
                 action: 'continue',
-                kind: 'error',
                 errorCode,
               }
             : {
                 state: 'candidate',
                 action: 'stop',
-                kind: 'error',
                 errorCode,
               };
 
@@ -218,7 +204,6 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           return {
             state,
             action: 'stop',
-            kind: 'rests',
             ...this.getRests(marketName),
           };
         }
@@ -231,7 +216,6 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           return {
             state: 'unsubscribe and switch to idle',
             action: 'stop',
-            kind: 'error',
             errorCode:
               REVERT_ORDER_ERROR['did not received neither order nor error'],
           };
@@ -257,7 +241,6 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           return {
             state: 'unsubscribe and switch to idle',
             action: 'continue',
-            kind: 'rests',
             ...newRests,
           };
         }
@@ -265,7 +248,6 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
         return {
           state: 'holding',
           action: 'continue',
-          kind: 'rests',
           ...newRests,
         };
       }
@@ -279,13 +261,17 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           isLong && expectedCombined <= this.params.longCloseDealTreshold ||
           !isLong && expectedCombined >= this.params.shortCloseDealTreshold
         ) {
-          const amount = isLong ? rests.stock : rests.money;
+          const rawAmount = isLong ? rests.stock : rests.money;
+          const amount = this.normalizedAmount(
+            rawAmount,
+            marketName,
+            isLong ? 'stock' : 'money',
+          );
+
           if (amount <= 0) {
             return {
               state: 'unsubscribe and switch to idle',
               action: 'continue',
-              kind: 'error',
-              errorCode: REVERT_ORDER_ERROR['unexpected zero rest'],
             }
           }
 
@@ -306,12 +292,11 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           return {
             state: 'awaiting for second main order creation',
             action: 'stop',
-            kind: 'rests',
             ...rests,
           };
         }
 
-        return { state, action: 'stop', kind: 'rests', ...rests };
+        return { state, action: 'stop', ...rests };
       }
 
       case 'awaiting for second main order creation': {
@@ -322,7 +307,6 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           return {
             state,
             action: 'stop',
-            kind: 'rests',
             ...this.getRests(marketName),
           };
         }
@@ -338,13 +322,11 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
             ? {
                 state: 'unsubscribe and switch to idle',
                 action: 'continue',
-                kind: 'error',
                 errorCode,
               }
             : {
                 state: 'holding',
                 action: 'stop',
-                kind: 'error',
                 errorCode,
               };
 
@@ -354,7 +336,6 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           return {
             state,
             action: 'stop',
-            kind: 'rests',
             ...this.getRests(marketName),
           };
         }
@@ -368,7 +349,6 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           return {
             state: 'holding',
             action: 'stop',
-            kind: 'error',
             errorCode:
               REVERT_ORDER_ERROR['did not received neither order nor error'],
           };
@@ -377,25 +357,38 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
         const fee = this.getTakerFee(marketName);
 
         const rests = this.getRests(marketName);
-        const newRests: StrategyRests = {
-          money: isLong
-            ? rests.money + order.deal_money * fee
-            : rests.money - order.deal_money,
-          stock: isLong
-            ? rests.stock - order.deal_stock
-            : rests.stock + order.deal_stock * fee,
-        };
+
+        const newRests: StrategyRests = isLong
+          ? {
+              money: rests.money + order.deal_money * fee,
+              stock: rests.stock - order.deal_stock,
+            }
+          : {
+              money: rests.money - order.deal_money,
+              stock: rests.stock + order.deal_stock * fee,
+            };
 
         this.rests.set(marketName, newRests);
-        const amount = isLong ? newRests.stock : newRests.money;
 
-        if (amount <=0) {
+        const rawAmount = isLong ? newRests.stock : newRests.money;
+        const amount = this.normalizedAmount(
+          rawAmount,
+          marketName,
+          isLong ? 'stock' : 'money',
+        );
+
+        if (amount <= 0) {
+          // TODO: For testing purpose only!
+          console.log(
+            `DEAL #${++numOfCycles}: ${marketName} [${isLong ? 'long' : 'short'}] `,
+            newRests,
+          );
+
           return {
-            state:'unsubscribe and switch to idle',
+            state: 'unsubscribe and switch to idle',
             action: 'continue',
-            kind: 'rests',
             ...newRests,
-          }
+          };
         }
 
         orderApi.createOrder(
@@ -412,7 +405,7 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
           this.isPaperTrading,
         );
 
-        return { state, action: 'stop', kind: 'rests', ...newRests }
+        return { state, action: 'stop', ...newRests }
       }
 
       case 'unsubscribe and switch to idle': {
@@ -424,7 +417,7 @@ export class OneMarketTwoDeals extends BaseStrategy<OneMarketTwoDealsStrategySta
 
         this.direction.delete(marketName);
 
-        return { state: 'idle', action: 'stop', kind: 'bare' };
+        return { state: 'idle', action: 'stop' };
       }
 
       default:

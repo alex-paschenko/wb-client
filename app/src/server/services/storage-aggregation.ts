@@ -6,7 +6,8 @@ import { storageConfig } from '../../shared/services/storage-config.js';
 import { globalStateService } from '../../shared/services/global-state.js';
 import { Storage } from '../../shared/services/storage.js';
 import type { StorageItemValues } from '../../shared/types/storage.js';
-import type { MarketCandle } from '../../shared/types/data-types.js';
+import type { ResearchTick } from '../../shared/types/research-storage.js';
+import type { MarketCandle, MarketForecastValue, IndicatorValue } from '../../shared/types/data-types.js';
 import type { LazyArray } from '../../shared/utilities/lazy-array.js';
 import { Awaiters, waitFor } from '../../shared/utilities/awaiters.js';
 import { SERVER_EVENT } from '../constants/events.js';
@@ -21,7 +22,9 @@ import { getMiddleTimestamp } from '../utilities/time.js';
 import { Freezing } from '../utilities/freezing.js';
 import { eventBus } from './event-bus.js';
 import { storagePersistenceService } from './storage-persistence.js';
-import { CANDLE_NAME } from '../../shared/constants/storage-entities.js';
+import { CANDLE_NAME, MARKET_FORECAST_NAME } from '../../shared/constants/storage-entities.js';
+import { marketPriceEmaName } from '../entities/indicators/market-price-ema.js';
+import { RESEARCH_BUFFER_SIZE } from '../constants/persistence.js';
 import {
   type DecodedEntireBinary,
   decodeEntireBinary,
@@ -31,6 +34,8 @@ import { SECOND, SECONDS } from '../../shared/constants/time.js';
 
 const SNAPSHOT_WORKER_INTERVAL = 1 * SECOND;
 const STARTUP_SNAPSHOT_JITTER = 16 * SECONDS;
+
+const isStrategiesEnabled = true;
 
 interface LevelRange {
   start: number;
@@ -53,6 +58,15 @@ export class StorageAggregationService {
   private readonly lastEndedAtByMarket = new Map<string, number>();
 
   private snapshotWorkerBusy = false;
+  private snapshotWorkerTask: Promise<void> | null = null;
+
+  private researchWorkerTimer: ReturnType<typeof setInterval> | null = null;
+  private diagnosticTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly researchActiveMarkets = new Set<string>();
+  private readonly eventUnsubscribers: Array<() => void> = [];
+  private readonly pendingTickTasks = new Set<Promise<void>>();
+  private readonly pendingMarketTasks = new Set<Promise<void>>();
+  private isStopping = false;
 
   private readonly snapshotScheduledAt = new Map<string, number>();
 
@@ -67,20 +81,34 @@ export class StorageAggregationService {
   }
 
   public async start(): Promise<void> {
-    eventBus.on(
+    this.isStopping = false;
+    this.eventUnsubscribers.push(eventBus.on(
       SERVER_EVENT.entitiesRecalculated,
       (event) => { this.handleEntitiesRecalculated(event); },
-    );
+    ));
 
-    eventBus.on(
+    this.eventUnsubscribers.push(eventBus.on(
       SERVER_EVENT.strategiesCompleted,
       (event) => { this.handleStrategiesCompleted(event); },
-    );
+    ));
 
-    eventBus.on(
+    this.eventUnsubscribers.push(eventBus.on(
       SERVER_EVENT.storageFullSyncRequest,
       (event) => { void this.handleFullSyncRequest(event); }
-    );
+    ));
+
+    this.eventUnsubscribers.push(eventBus.on(
+      SERVER_EVENT.orderBookDepthSubscription,
+      ({ marketName, action }) => {
+        if (action === 'subscribe') {
+          this.researchActiveMarkets.add(marketName);
+          this.storagesByMarket.get(marketName)?.setResearchRecording(true);
+        } else {
+          this.researchActiveMarkets.delete(marketName);
+          this.storagesByMarket.get(marketName)?.setResearchRecording(false);
+        }
+      },
+    ));
 
     await globalStateService.waitForStorageEntities();
     await globalStateService.waitForMarkets();
@@ -125,24 +153,29 @@ export class StorageAggregationService {
     this.unsubscribeMarkets = globalStateService.subscribeMarkets(
       (_markets, updatedMarketNames) => {
         if (updatedMarketNames !== null) {
-          void this.handleMarketNamesChanged().catch((error: unknown) => {
+          const task = this.handleMarketNamesChanged().catch((error: unknown) => {
             console.error('Failed to handle market list update', error);
           });
+          this.trackTask(task, this.pendingMarketTasks);
         }
       },
     );
 
-    eventBus.on(
+    this.eventUnsubscribers.push(eventBus.on(
       SERVER_EVENT.marketTickReceived,
       (event) => { this.handleTickReceived(event); },
-    );
+    ));
 
     this.startSnapshotWorker();
+    this.researchWorkerTimer = setInterval(
+      () => this.researchWorkerTick(),
+      SNAPSHOT_WORKER_INTERVAL,
+    );
 
     // TODO For testing purpose only!
     const storages = this.storagesByMarket;
 
-    setInterval(() => {
+    this.diagnosticTimer = setInterval(() => {
       let marketName = '---';
       let startL0Timestamp = 0;
       let size = 0;
@@ -198,19 +231,56 @@ export class StorageAggregationService {
     }, 30_000);
   }
 
-  async stop() {
+  public async stop(): Promise<void> {
+    this.isStopping = true;
     this.unsubscribeMarkets?.();
     this.unsubscribeMarkets = null;
-
+    // Keep recalculation completion listeners until in-flight ticks finish.
+    // handleTickReceived() already refuses new work while stopping.
     if (this.snapshotWorkerTimer) {
       clearInterval(this.snapshotWorkerTimer);
       this.snapshotWorkerTimer = null;
     }
+    if (this.researchWorkerTimer) {
+      clearInterval(this.researchWorkerTimer);
+      this.researchWorkerTimer = null;
+    }
+    if (this.diagnosticTimer) {
+      clearInterval(this.diagnosticTimer);
+      this.diagnosticTimer = null;
+    }
+
+    // We deliberately discard unprocessed incoming ticks on shutdown.
+    // Completed processTick tasks are allowed to finish before the final flush.
+    this.tickBuffersByMarket.clear();
+    while (this.pendingMarketTasks.size > 0 || this.pendingTickTasks.size > 0) {
+      await Promise.all([...this.pendingMarketTasks, ...this.pendingTickTasks]);
+    }
+    if (this.snapshotWorkerTask) await this.snapshotWorkerTask;
+
+    for (const [marketName, storage] of this.storagesByMarket) {
+      this.freezingByMarket.cool(marketName);
+      try {
+        await this.emitFinalMarketSnapshots(marketName, storage);
+        storage.setResearchRecording(false);
+        this.flushResearchSnapshot(storage);
+      } finally {
+        this.freezingByMarket.warm(marketName);
+      }
+    }
+    this.researchActiveMarkets.clear();
+    for (const unsubscribe of this.eventUnsubscribers.splice(0)) unsubscribe();
+  }
+
+  private trackTask(task: Promise<void>, tasks: Set<Promise<void>>): void {
+    tasks.add(task);
+    void task.finally(() => tasks.delete(task));
   }
 
   private handleTickReceived(
     event: MarketTickReceivedEvent,
   ): void {
+    if (this.isStopping) return;
     const buffer = this.getTickBuffer(event.marketName);
 
     if (this.freezingByMarket.isCold(event.marketName) || buffer.length > 0) {
@@ -220,9 +290,12 @@ export class StorageAggregationService {
 
     this.freezingByMarket.coolAndIce(event.marketName);
 
-    void this.processTick(event.marketName, event.tick).finally(
-      () => { this.freezingByMarket.warmAndMeltIce(event.marketName); }
-    );
+    const task = this.processTick(event.marketName, event.tick)
+      .catch((error: unknown) => {
+        console.error('Failed to process market tick', event.marketName, error);
+      })
+      .finally(() => this.freezingByMarket.warmAndMeltIce(event.marketName));
+    this.trackTask(task, this.pendingTickTasks);
   }
 
   private async processTick(
@@ -281,29 +354,36 @@ export class StorageAggregationService {
       return;
     }
 
-    // const completed = this.strategiesCompletedAwaiters.wait(marketName);
+    if (isStrategiesEnabled) {
+      const completed = this.strategiesCompletedAwaiters.wait(marketName);
 
-    // eventBus.emit(SERVER_EVENT.runStrategiesRequest, {
-    //   marketName,
-    //   accessors: storage.getAccessors(),
-    //   size,
-    //   endedAt,
-    // });
+      eventBus.emit(SERVER_EVENT.runStrategiesRequest, {
+        marketName,
+        accessors: storage.getAccessors(),
+        size,
+        endedAt,
+      });
 
-    // const result = await completed;
+      const result = await completed;
 
-    // if (
-    //   result.size !== size
-    //   || result.endedAt !== endedAt
-    //   || storage.size !== size
-    //   || storage.endedAt !== endedAt
-    // ) {
-    //   throw new Error('Storage changed during strategy execution');
-    // }
+      if (
+        result.size !== size
+        || result.endedAt !== endedAt
+        || storage.size !== size
+        || storage.endedAt !== endedAt
+      ) {
+        throw new Error('Storage changed during strategy execution');
+      }
 
-    // if (result.error !== undefined) {
-    //   throw result.error;
-    // }
+      if (result.error !== undefined) {
+        throw result.error;
+      }
+    }
+
+    // Read the finalized indicator values before clearAccessors().
+    if (storage.isResearchRecording) {
+      storage.appendResearchTick(this.getResearchTick(storage, tick.receivedAt));
+    }
 
     storage.clearAccessors();
 
@@ -369,6 +449,7 @@ export class StorageAggregationService {
   }
 
   private async handleMarketNamesChanged(): Promise<void> {
+    if (this.isStopping) return;
     const marketNames = globalStateService.getMarketNames() ?? [];
     const activeMarkets = new Set(marketNames);
 
@@ -397,6 +478,8 @@ export class StorageAggregationService {
           }
 
           await this.emitFinalMarketSnapshots(marketName, storage);
+          storage.setResearchRecording(false);
+          this.flushResearchSnapshot(storage);
           this.removeMarketStorage(marketName);
         } finally {
           this.freezingByMarket.warmAndMeltIce(marketName);
@@ -742,6 +825,7 @@ export class StorageAggregationService {
     }
 
     const storage = new Storage(marketName);
+    storage.setResearchRecording(this.researchActiveMarkets.has(marketName));
 
     this.storagesByMarket.set(marketName, storage);
 
@@ -780,6 +864,7 @@ export class StorageAggregationService {
     this.tickBuffersByMarket.delete(marketName);
     this.snapshotScheduledAt.delete(marketName);
     this.lastEndedAtByMarket.delete(marketName);
+    this.researchActiveMarkets.delete(marketName);
 
     eventBus.emit(SERVER_EVENT.marketRemoved, { marketName });
   }
@@ -800,7 +885,7 @@ export class StorageAggregationService {
   private flushTickBuffer(
     marketName: string,
   ): void {
-    if (this.freezingByMarket.isCold(marketName)) {
+    if (this.isStopping || this.freezingByMarket.isCold(marketName)) {
       return;
     }
 
@@ -812,12 +897,62 @@ export class StorageAggregationService {
 
     this.freezingByMarket.coolAndIce(marketName);
 
-    void this.processTick(marketName, tick)
-      .finally(
-        () => {
-          this.freezingByMarket.warmAndMeltIce(marketName);
-        }
-      );
+    const task = this.processTick(marketName, tick)
+      .catch((error: unknown) => {
+        console.error('Failed to process buffered tick', marketName, error);
+      })
+      .finally(() => this.freezingByMarket.warmAndMeltIce(marketName));
+    this.trackTask(task, this.pendingTickTasks);
+  }
+
+  private getResearchTick(storage: Storage, receivedAt: number): ResearchTick {
+    const last = storage.size - 1;
+    const accessors = storage.getAccessors();
+    const candle = (accessors.candles[CANDLE_NAME] as LazyArray<MarketCandle>).get(last);
+    if (candle.receivedAt !== receivedAt) {
+      throw new Error(`Research tick time mismatch: ${receivedAt} / ${candle.receivedAt}`);
+    }
+    const indicator = (name: string): number | null => {
+      const value = (accessors.indicators[name] as LazyArray<IndicatorValue>).get(last);
+      return value !== null && Number.isFinite(value) ? value : null;
+    };
+    const forecast = (accessors.indicators[MARKET_FORECAST_NAME] as
+      LazyArray<MarketForecastValue>).get(last);
+    return {
+      receivedAt,
+      price: candle.price,
+      emaPrice7: indicator(marketPriceEmaName('price', 7 * SECONDS)),
+      emaLog7: indicator(marketPriceEmaName('log-price', 7 * SECONDS)),
+      emaLog15: indicator(marketPriceEmaName('log-price', 15 * SECONDS)),
+      emaLog30: indicator(marketPriceEmaName('log-price', 30 * SECONDS)),
+      emaLog60: indicator(marketPriceEmaName('log-price', 60 * SECONDS)),
+      forecast3: forecast.expectedResidual1m3Ema,
+      forecast4: forecast.expectedResidual1m4Ema,
+      forecastCombined: forecast.expectedResidual1mCombined,
+    };
+  }
+
+  private flushResearchSnapshot(storage: Storage): void {
+    while (storage.researchBufferLength > 0) {
+      const snapshot = storage.getResearchSnapshot(RESEARCH_BUFFER_SIZE);
+      if (snapshot) {
+        eventBus.emit(SERVER_EVENT.researchPersistenceRequest, snapshot);
+      }
+    }
+  }
+
+  private researchWorkerTick(): void {
+    for (const [marketName, storage] of this.storagesByMarket) {
+      if (storage.researchBufferLength < RESEARCH_BUFFER_SIZE &&
+        !storage.hasResearchFlushRequest) continue;
+      if (this.freezingByMarket.isIcy(marketName)) continue;
+      this.freezingByMarket.cool(marketName);
+      try {
+        this.flushResearchSnapshot(storage);
+      } finally {
+        this.freezingByMarket.warm(marketName);
+      }
+    }
   }
 
   private startSnapshotWorker(): void {
@@ -825,10 +960,17 @@ export class StorageAggregationService {
       return;
     }
 
-    this.snapshotWorkerTimer = setInterval(
-      () => { void this.snapshotWorkerTick(); },
-      SNAPSHOT_WORKER_INTERVAL,
-    );
+    this.snapshotWorkerTimer = setInterval(() => {
+      if (this.snapshotWorkerTask) return;
+      const task = this.snapshotWorkerTick()
+        .catch((error: unknown) => {
+          console.error('Snapshot worker failed', error);
+        })
+        .finally(() => {
+          if (this.snapshotWorkerTask === task) this.snapshotWorkerTask = null;
+        });
+      this.snapshotWorkerTask = task;
+    }, SNAPSHOT_WORKER_INTERVAL);
   }
 
   private async snapshotWorkerTick(): Promise<void> {

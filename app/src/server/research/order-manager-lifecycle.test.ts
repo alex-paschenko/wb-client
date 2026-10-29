@@ -209,3 +209,35 @@ test('paper and real orders share a market but real subscription is separate',
       sequencesPersistence.getNextOrderId = oldSequence;
     }
   });
+
+test('first order receipt retains decision tick across asynchronous ID allocation',
+  async () => {
+    const manager = new OrderManager();
+    const oldSequence = sequencesPersistence.getNextOrderId;
+    let release!: (id: number) => void;
+    sequencesPersistence.getNextOrderId = () => new Promise<number>((resolve) => {
+      release = resolve;
+    });
+    const receivedAts: number[] = [];
+    const off = eventBus.on(SERVER_EVENT.orderPersistenceRequest,
+      (event) => { receivedAts.push(event.receivedAt); });
+    manager.setReceivedAt('BTC_USD', 100);
+    manager.start();
+    try {
+      manager.api.createOrder(strategy, {
+        orderType: 'Market', orderRequest: {
+          marketName: 'BTC_USD', side: 'buy', amount: 1,
+        },
+      }, 'main', true);
+      manager.setReceivedAt('BTC_USD', 101);
+      release(200);
+      await manager.waitForPendingRequests();
+      assert.equal(receivedAts[0], 100);
+      result(200, null);
+      assert.equal(receivedAts.at(-1), 101);
+    } finally {
+      off();
+      manager.stop();
+      sequencesPersistence.getNextOrderId = oldSequence;
+    }
+  });

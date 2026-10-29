@@ -8,6 +8,7 @@ import type {
 import type { SERVER_EVENT } from '../constants/events.js';
 import type { Order, OrderError } from '../../shared/types/order-receipt.js';
 import type { MarketTick } from '../../shared/types/ticks.js';
+import type { ResearchSnapshot } from '../../shared/types/research-storage.js';
 import type { MarketsByName, MarketFeesByName } from '../../shared/types/market.js';
 import type {
   ExtendedStoragePersistenceSnapshot,
@@ -165,6 +166,7 @@ export interface ServerEventMap {
   [SERVER_EVENT.entitiesRecalculated]: EntitiesRecalculatedEvent;
 
   [SERVER_EVENT.storageSnapshoted]: StorageSnapshotedEvent;
+  [SERVER_EVENT.researchPersistenceRequest]: ResearchSnapshot;
   [SERVER_EVENT.storageDeltaCreated]:StorageDeltaCreatedEvent;
   [SERVER_EVENT.storageFullSyncRequest]: StorageFullSyncRequestEvent;
   [SERVER_EVENT.storageFullSyncResults]: StorageFullSyncResultsEvent;
